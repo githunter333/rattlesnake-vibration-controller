@@ -24,3 +24,9 @@ dist/**
 **/*.exe
 **/html/**
 **/*.mat
+**/*.npz
+**/*.nc4
+**/.DS_Store
+temp/**
+exlanatoins/**
+rattlesnake/**
