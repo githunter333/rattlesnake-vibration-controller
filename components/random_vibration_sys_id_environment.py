@@ -635,7 +635,10 @@ class RandomVibrationUI(AbstractSysIdUI):
         """Updates the function/generator selector based on the function selected"""
         if self.python_control_module is None:
             return
-        function = getattr(self.python_control_module,self.definition_widget.control_function_input.itemText(self.definition_widget.control_function_input.currentIndex()))
+        function_name = self.definition_widget.control_function_input.itemText(self.definition_widget.control_function_input.currentIndex())
+        if function_name == '':
+            return
+        function = getattr(self.python_control_module,function_name)
         if inspect.isgeneratorfunction(function):
             self.definition_widget.control_function_generator_selector.setCurrentIndex(1)
         elif inspect.isclass(function):
@@ -701,6 +704,7 @@ class RandomVibrationUI(AbstractSysIdUI):
         self.specification_warning_matrix = None
         self.specification_cpsd_matrix = None
         self.specification_frequency_lines = None
+        self.definition_widget.specification_file_name_display.setText('')
         self.definition_widget.control_channels_display.setValue(len(self.physical_control_indices))
         self.definition_widget.specification_row_selector.blockSignals(True)
         self.definition_widget.specification_column_selector.blockSignals(True)
@@ -854,6 +858,15 @@ class RandomVibrationUI(AbstractSysIdUI):
             defining the environment.
 
         """
+        if self.specification_cpsd_matrix is None:
+            QtWidgets.QMessageBox.warning(
+                self.definition_widget,'No Specification Loaded',
+                'No specification is loaded for the "{:}" environment '
+                '(checking/unchecking a control channel clears any '
+                'previously loaded specification). Load a specification '
+                'file before initializing the environment.'.format(self.environment_name))
+            raise RuntimeError(
+                'Cannot initialize "{:}" environment: no specification loaded.'.format(self.environment_name))
         self.system_id_widget.samplesPerFrameSpinBox.setMaximum(self.definition_widget.samples_per_frame_selector.value())
         self.system_id_widget.samplesPerFrameSpinBox.setValue(self.definition_widget.samples_per_frame_selector.value())
         self.system_id_widget.levelRampTimeDoubleSpinBox.setValue(self.definition_widget.ramp_time_spinbox.value())
