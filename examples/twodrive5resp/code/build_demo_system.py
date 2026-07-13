@@ -123,7 +123,9 @@ D = Co @ Minv @ Bf
 # ---------------------------------------------------------------------
 # 7. Save as .mat for Rattlesnake (and for direct use in MATLAB too)
 # ---------------------------------------------------------------------
-out_file = "demo_system.mat"
+import os
+results_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results"))
+out_file = os.path.join(results_dir, "demo_system.mat")
 savemat(out_file, {"A": A, "B": B, "C": C, "D": D})
 
 # ---------------------------------------------------------------------

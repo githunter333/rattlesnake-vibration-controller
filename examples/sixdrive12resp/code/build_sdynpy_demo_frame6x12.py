@@ -54,11 +54,12 @@ Run (from the `sdynpy` conda environment -- needs sdynpy, qtpy, pyqtgraph,
 openpyxl):
 
     conda activate sdynpy
-    cd ~/Documents/Code/python/rattlesnake-vibration-controller/examples
+    cd ~/Documents/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/code
     python build_sdynpy_demo_frame6x12.py
     python build_flat_spec_large.py
 
-Then in Rattlesnake: File -> Open Profile -> sdynpy_frame6x12_profile.xlsx.
+Outputs are written to ../results/. Then in Rattlesnake: File -> Open
+Profile -> ../results/sdynpy_frame6x12_profile.xlsx.
 """
 
 import os
@@ -220,7 +221,7 @@ n_control_channels = 8  # first 8 of the 12 response channels; adjustable in the
 # ---------------------------------------------------------------------
 system = sdpy.System(full_coordinate, mass=M, stiffness=K, damping=C_damp)
 
-output_dir = os.path.dirname(os.path.abspath(__file__))
+output_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results"))
 system_filename = os.path.join(output_dir, "sdynpy_frame6x12_system.npz")
 spreadsheet_file_name = os.path.join(output_dir, "sdynpy_frame6x12_profile.xlsx")
 spec_filename = os.path.join(output_dir, "flat_spec_frame6x12.mat")

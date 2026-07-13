@@ -19,11 +19,12 @@ pyqtgraph, openpyxl -- NOT nidaqmx; that import is lazy and only
 triggered if NI-DAQmx hardware is actually selected at runtime).
 
     conda activate sdynpy
-    cd ~/Documents/Code/python/rattlesnake-vibration-controller/examples
+    cd ~/Documents/Code/python/rattlesnake-vibration-controller/examples/twodrive5resp/code
     python build_sdynpy_demo.py
 
-Then in Rattlesnake: File -> Open Profile -> select the generated
-.xlsx. The hardware type and file path are already filled in.
+Outputs are written to ../results/. Then in Rattlesnake: File -> Open
+Profile -> select the generated .xlsx there. The hardware type and file
+path are already filled in.
 """
 
 import os
@@ -79,7 +80,7 @@ system = sdpy.System(coordinate, mass=M, stiffness=K, damping=C)
 # ---------------------------------------------------------------------
 # 4. Generate the system file + full Rattlesnake profile spreadsheet
 # ---------------------------------------------------------------------
-output_dir = os.path.dirname(os.path.abspath(__file__))
+output_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results"))
 system_filename = os.path.join(output_dir, "sdynpy_demo_system.npz")
 spreadsheet_file_name = os.path.join(output_dir, "sdynpy_demo_profile.xlsx")
 
