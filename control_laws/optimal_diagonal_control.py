@@ -44,13 +44,19 @@ Formulation for a single bin's SDP:
     Y(f) = H(f) X(f) H(f)^H
     minimize_X   || diag(Y) - y_diag_target ||^2 + reg * ||X||_F^2
     subject to   X ⪰ 0
-Convex, no manifold optimization. H can be any M x N shape.
+                 |X_ij| <= max_drive_coherence * sqrt(X_ii * X_jj)   for all i != j
+The coherence cap only applies to SDP-refined bins (this formulation's decision
+variable IS the drive CPSD). The buzz baseline is left uncapped on purpose --
+it already draws its cross terms from an independent-drive survey, so it has
+no dependent-drive problem to begin with. Both constraints are convex (the
+coherence one is |affine| <= concave, i.e. convex <= concave), no manifold
+optimization. H can be any M x N shape.
 
 Interface: class-style control law (matches buzz_control_class in
 control_laws.py).
 
 extra_parameters (string): comma-separated
-    "reg,frf_update_threshold,max_bins_per_update,error_threshold_db"
+    "reg,frf_update_threshold,max_bins_per_update,error_threshold_db,max_drive_coherence"
     reg                   - Tikhonov-style weight on ||X||_F (default 1e-6)
     frf_update_threshold  - relative Frobenius-norm change (0-1) that triggers
                              re-solving an already-refined bin (default 0.05)
@@ -60,6 +66,10 @@ extra_parameters (string): comma-separated
     error_threshold_db    - don't bother SDP-refining a bin whose buzz
                              solution is already within this much of target
                              (default 1.0 dB)
+    max_drive_coherence   - hard cap (0-1) on pairwise coherence between any
+                             two SDP-solved drive channels, so the optimizer
+                             can't converge on totally dependent drives
+                             (default 0.95; 1.0 disables the cap)
 A bare single value (no comma) is accepted too, read as `reg`.
 """
 
@@ -102,6 +112,7 @@ class optimal_diagonal_control:
         self.frf_update_threshold = 0.05
         self.max_bins_per_update = 20
         self.error_threshold_db = 1.0
+        self.max_drive_coherence = 0.95
         if extra_parameters:
             try:
                 parts = [p.strip() for p in str(extra_parameters).split(',') if p.strip() != '']
@@ -109,6 +120,7 @@ class optimal_diagonal_control:
                 if len(parts) >= 2: self.frf_update_threshold = float(parts[1])
                 if len(parts) >= 3: self.max_bins_per_update = int(float(parts[2]))
                 if len(parts) >= 4: self.error_threshold_db = float(parts[3])
+                if len(parts) >= 5: self.max_drive_coherence = float(parts[4])
             except ValueError:
                 pass  # keep defaults if the string doesn't parse
 
@@ -119,7 +131,18 @@ class optimal_diagonal_control:
         self.n_frf_updates = 0       # diagnostic: drifted-refined-bin re-solves
         self.n_sdp_refinements = 0   # diagnostic: total worst-error refinements performed
         self.n_deferred = 0          # diagnostic: bins still above threshold, awaiting SDP budget
+        self.n_solver_failures = 0   # diagnostic: SDP solves that fell back to pinv
         self._initialized = False
+        self._n_calls = 0            # diagnostic: total system_id_update()/control() calls
+
+        print(f"[optimal_diagonal_control] __init__: F={self.F} M={self.M} "
+              f"reg={self.reg:g} frf_update_threshold={self.frf_update_threshold:g} "
+              f"max_bins_per_update={self.max_bins_per_update} "
+              f"error_threshold_db={self.error_threshold_db:g} "
+              f"max_drive_coherence={self.max_drive_coherence:g} "
+              f"transfer_function={'given' if transfer_function is not None else 'None'} "
+              f"sysid_response_cpsd={'given' if sysid_response_cpsd is not None else 'None'}",
+              flush=True)
 
         if transfer_function is not None:
             self._initialize(transfer_function, sysid_response_cpsd)
@@ -173,13 +196,31 @@ class optimal_diagonal_control:
         objective = cp.Minimize(
             cp.sum_squares(diagY - y_target) + self.reg * cp.sum_squares(cp.abs(X))
         )
-        prob = cp.Problem(objective, [X >> 0])
+        constraints = [X >> 0]
+        if self.max_drive_coherence < 1.0:
+            # |X_ij| <= max_drive_coherence * sqrt(X_ii * X_jj) for every drive
+            # pair -- keeps the SDP from converging on totally dependent
+            # (coherence ~1) drive channels. X >> 0 already implies coherence
+            # <= 1 for free (Cauchy-Schwarz); this just tightens that bound.
+            for i in range(N):
+                for j in range(i + 1, N):
+                    constraints.append(
+                        cp.abs(X[i, j]) <= self.max_drive_coherence
+                        * cp.geo_mean(cp.hstack([cp.real(X[i, i]), cp.real(X[j, j])]))
+                    )
+        prob = cp.Problem(objective, constraints)
         try:
             prob.solve(solver=cp.SCS)
             Xf = X.value
-        except (cp.error.SolverError, TypeError):
+            if Xf is None:
+                print(f"[optimal_diagonal_control] SDP solve returned no value, "
+                      f"status={prob.status!r} -- falling back to pinv", flush=True)
+        except Exception as e:
+            print(f"[optimal_diagonal_control] SDP solve raised {type(e).__name__}: {e} "
+                  f"-- falling back to pinv", flush=True)
             Xf = None
         if Xf is None:
+            self.n_solver_failures += 1
             Hpinv = np.linalg.pinv(H, rcond=1e-15)
             Yspec = np.diag(y_target).astype(complex)
             Xf = Hpinv @ Yspec @ Hpinv.conj().T
@@ -189,8 +230,12 @@ class optimal_diagonal_control:
     def _initialize(self, transfer_function, sysid_response_cpsd=None):
         H_clean = np.nan_to_num(transfer_function, nan=0.0, posinf=0.0, neginf=0.0)
         self.N = H_clean.shape[2]
+        print(f"[optimal_diagonal_control] _initialize: H shape={H_clean.shape} "
+              f"(F,M,N), sysid_response_cpsd={'given' if sysid_response_cpsd is not None else 'None'}, "
+              f"H any-nan-in-input={bool(np.any(~np.isfinite(transfer_function)))}", flush=True)
         self.output_cpsd = self._buzz_solve_all(H_clean, sysid_response_cpsd)
         self.H_cache = H_clean.copy()
+        self.H_initial = H_clean.copy()  # diagnostic: fixed baseline to measure cumulative drift against
         self.sdp_refined = np.zeros(self.F, dtype=bool)
         self._initialized = True
         self._refine_batch(H_clean)  # spend the first batch of SDP budget immediately
@@ -204,21 +249,41 @@ class optimal_diagonal_control:
              predicted diagonal error (skip anything already under
              error_threshold_db -- buzz is good enough there)
         """
+        self._n_calls += 1
         H_clean = np.nan_to_num(transfer_function, nan=0.0, posinf=0.0, neginf=0.0)
+        H_changed = self.H_cache is None or not np.array_equal(H_clean, self.H_cache)
         budget = self.max_bins_per_update
 
         # --- Step 1: re-solve drifted, previously-refined bins ---
+        # Capped at half the budget so persistent (or noise-driven false-
+        # positive) drift can never fully starve step 2's new-bin coverage --
+        # without this cap, small run-to-run FRF jitter that keeps tripping
+        # frf_update_threshold on already-refined bins can claim the entire
+        # budget every call, forever, leaving n_deferred stuck.
+        drift_budget = max(1, self.max_bins_per_update // 2)
         refined_idx = np.where(self.sdp_refined)[0]
         if refined_idx.size > 0:
             sub_new = H_clean[refined_idx]
             sub_old = self.H_cache[refined_idx]
             num = np.linalg.norm((sub_new - sub_old).reshape(refined_idx.size, -1), axis=1)
             den = np.linalg.norm(sub_old.reshape(refined_idx.size, -1), axis=1) + 1e-30
-            drifted = refined_idx[(num / den) > self.frf_update_threshold]
+            since_last_ratio = num / den
+            drifted = refined_idx[since_last_ratio > self.frf_update_threshold]
+            # diagnostic: drift relative to the very first H seen, not just since
+            # this bin's last solve -- reveals whether H is oscillating around a
+            # fixed baseline (bounded) or walking away from it (runaway/unbounded)
+            sub_init = self.H_initial[refined_idx]
+            num0 = np.linalg.norm((sub_new - sub_init).reshape(refined_idx.size, -1), axis=1)
+            den0 = np.linalg.norm(sub_init.reshape(refined_idx.size, -1), axis=1) + 1e-30
+            since_init_ratio = num0 / den0
+            print(f"[optimal_diagonal_control] H drift on refined bins: "
+                  f"since_last_solve[median={np.median(since_last_ratio):.4f}, max={np.max(since_last_ratio):.4f}], "
+                  f"since_initial[median={np.median(since_init_ratio):.4f}, max={np.max(since_init_ratio):.4f}]",
+                  flush=True)
         else:
             drifted = np.array([], dtype=int)
 
-        n_fix = min(drifted.size, budget)
+        n_fix = min(drifted.size, drift_budget, budget)
         for f in drifted[:n_fix]:
             self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self.y_diag_target[f])
             self.H_cache[f] = H_clean[f]
@@ -229,6 +294,7 @@ class optimal_diagonal_control:
         # --- Step 2: worst-error not-yet-refined bins get remaining budget ---
         not_refined = np.where(~self.sdp_refined)[0]
         self.n_deferred = 0
+        n_refine = 0
         if not_refined.size > 0:
             Y = np.einsum('fmn,fnk,flk->fml',
                            H_clean[not_refined], self.output_cpsd[not_refined],
@@ -248,6 +314,31 @@ class optimal_diagonal_control:
                 self.sdp_refined[f] = True
                 self.H_cache[f] = H_clean[f]
             self.n_sdp_refinements += int(n_refine)
+
+        # Self-consistency check: what does the control law's OWN H estimate
+        # and current solution predict the achieved diagonal error to be?
+        # If this stays near 0 dB while Rattlesnake's live measured Response
+        # Error panel stays high, the gap is a model mismatch between the
+        # system-ID H used here and the true live system -- not a bug in the
+        # SDP/scheduling logic, which would be self-consistent by construction.
+        in_band = np.any(self.y_diag_target > 0, axis=1)
+        if np.any(in_band):
+            Y_all = np.einsum('fmn,fnk,flk->fml', H_clean[in_band], self.output_cpsd[in_band],
+                               H_clean[in_band].conj())
+            achieved_all = np.maximum(np.real(np.einsum('fmm->fm', Y_all)), 1e-30)
+            target_all = np.maximum(self.y_diag_target[in_band], 1e-30)
+            err_db_all = 10 * np.log10(achieved_all / target_all)
+            self_rms_per_channel = np.sqrt(np.mean(err_db_all ** 2, axis=0))
+        else:
+            self_rms_per_channel = np.zeros(self.M)
+
+        print(f"[optimal_diagonal_control] _refine_batch call #{self._n_calls}: "
+              f"H_changed_since_last={H_changed}, drifted_resolved={n_fix}, "
+              f"newly_refined={n_refine}, n_deferred={self.n_deferred}, "
+              f"cum_sdp_refinements={self.n_sdp_refinements}, cum_frf_updates={self.n_frf_updates}, "
+              f"cum_solver_failures={self.n_solver_failures}, n_refined_total={int(np.sum(self.sdp_refined))}/{self.F}, "
+              f"self_predicted_rms_db_per_channel={np.array2string(self_rms_per_channel, precision=2)}",
+              flush=True)
 
     # ------------------------------------------------------------------
     def system_id_update(self,

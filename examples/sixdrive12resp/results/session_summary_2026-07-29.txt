@@ -1,0 +1,158 @@
+Session summary -- 2026-07-29
+System: 6-drive / 12-response synthetic frame (examples/sixdrive12resp), controlling
+M=8 of the 12 response channels (nodes 7-14, tall 8x6 problem, N=6 drives).
+
+===============================================================================
+1. STANDALONE ANALYTICAL COMPARISON (buzz vs optimal_diagonal_control)
+===============================================================================
+Built a reproducible offline pipeline (no Rattlesnake GUI needed) to compare
+Rattlesnake's built-in buzz_control_class against the custom SDP-based
+control_laws/optimal_diagonal_control.py:
+
+  - compute_frf_frame6x12.py   (sdynpy env)  -> FRF H(f) for the 8x6 control set
+  - build_flat_spec_large.py   (either env)  -> flat 0.001 g^2/Hz target spec
+  - compare_buzz_vs_optimal_diagonal.py (rattlesnake env, needs cvxpy)
+
+Buzz baseline = optimal_diagonal_control's own closed-form pinv solve (with
+cross terms pulled from a clean, noise-free survey CPSD = H @ H^H).
+Optimal result = same control law run to full convergence (n_deferred == 0).
+
+Findings at original 1% damping:
+  - Diagonal tracking error: buzz RMS 5.78 dB vs optimal-diagonal 5.64 dB
+    overall -- only a modest difference in aggregate, but nodes 13/14 (farthest
+    from the drives, dominated by a real structural antiresonance null) account
+    for most of the error on BOTH methods and can't be improved by either.
+  - Drive RMS: buzz ~64.8 (RSS across 6 drives) vs optimal-diagonal ~3.5 --
+    optimal-diagonal used ~18x LESS drive energy for essentially the same
+    tracking accuracy. Root cause: buzz's pinv-based synthesis applies H+ on
+    both sides of a bilinear CPSD transform, so near-singular directions in H
+    (e.g. a -29 dB antiresonance at 116 Hz, drive node 1 -> response node 8)
+    get amplified quadratically. optimal_diagonal_control's SDP has a
+    Tikhonov term (reg=1e-6 default) that directly penalizes this.
+
+===============================================================================
+2. LIVE RATTLESNAKE RUN -- SETUP ISSUES ENCOUNTERED AND FIXED
+===============================================================================
+  - Hardware File pointed at the wrong .npz (one of this session's analysis
+    outputs, e.g. frf_frame6x12_H.npz) instead of sdynpy_frame6x12_system.npz
+    -> KeyError: 'coordinate'. Fixed by pointing at the correct system file.
+  - Sample Rate box defaulted to 2048 Hz; manually set to 5120 Hz to match
+    samples_per_frame, the spec file's 1 Hz resolution, and the precomputed FRF.
+  - Only 7 of 8 Control Channels were checked -> shape mismatch
+    (7,7) vs (8,8) between sysid_response_cpsd and the specification. Fixed by
+    checking the missing 8th channel.
+
+===============================================================================
+3. DIAGNOSTIC LOGGING ADDED TO optimal_diagonal_control.py
+===============================================================================
+Added print(..., flush=True) instrumentation (visible when Rattlesnake's
+stdout/stderr is redirected to a file, e.g. `python rattlesnake.py RANDOM >
+gui_debug.log 2>&1`):
+  - __init__: F, M, tuning params, whether transfer_function/sysid_response_cpsd given
+  - _initialize: H shape, NaN/Inf check
+  - _solve_one_bin: now catches ANY exception (was narrowly SolverError/TypeError)
+    and prints it before falling back to pinv; also flags a non-exception "no
+    value returned" case
+  - _refine_batch: per-call summary (bins drift-resolved, newly refined,
+    n_deferred, cumulative counters, whether H changed since last call) PLUS
+    a self-consistency check -- the control law's OWN predicted RMS dB error
+    per channel, using its own H and current solution
+  - H-drift magnitude (median/max), both since-last-solve and since-the-very-
+    first-H-seen, to distinguish bounded jitter from runaway drift
+
+===============================================================================
+4. REAL BUG FOUND AND FIXED: SDP-refinement scheduler starvation
+===============================================================================
+_refine_batch splits its per-call SDP budget (max_bins_per_update, default 20)
+into two tiers: (1) re-solve already-refined bins whose FRF has drifted, then
+(2) spend whatever's left on new, not-yet-refined worst-error bins. In the
+live GUI, small run-to-run jitter in the measured FRF was enough to trip the
+5% drift threshold on already-refined bins EVERY call, so tier 1 claimed the
+ENTIRE budget every time, forever -- tier 2 got zero, and n_deferred froze at
+~857/901 in-band bins indefinitely (confirmed over a 602-call, ~5 minute run
+with drive levels and response error completely static the whole time).
+
+Fix: capped tier 1 to at most half of max_bins_per_update, guaranteeing tier 2
+always gets some budget regardless of how much (real or false-positive) drift
+tier 1 sees. After the fix, a live run converged cleanly: n_deferred dropped
+steadily call over call until reaching 0 at cum_sdp_refinements=901 (all
+in-band bins), matching the analytical result almost exactly.
+
+===============================================================================
+5. CLOSED-LOOP FRF IDENTIFICATION BIAS ("Update Transfer Function During
+   Control" = Y)
+===============================================================================
+With that setting ON, self_predicted_rms_db_per_channel ballooned to 30-45 dB
+across every channel after ~17 minutes of continuous running, even though
+n_deferred stayed at 0 (looked "converged"), while Rattlesnake's live Response
+Error panel stayed a stable ~7-12 dB. H-drift diagnostics showed H was
+continuously drifting away from its initial value for the entire run, never
+settling -- a classic closed-loop identification bias: once the drive signal
+is shaped by the control law to hit a flat target, it's no longer the
+broadband/independent excitation the H1 estimator assumes, so re-estimating H
+from that shaped signal degrades the estimate over time.
+
+Fix (config, not code): turned "Update Transfer Function During Control" OFF.
+H then stayed exactly static (since_last_solve and since_initial drift both
+0.0000), and self-predicted error matched the clean analytical prediction
+almost exactly: [4.24, 1.16, 1.98, 1.39, 0.86, 0.57, 10.84, 18.25] dB vs
+analytical [4.34, 1.12, 1.93, 1.45, 0.91, 0.66, 11.18, 10.1] dB.
+
+Remaining ~1-4 dB gap between self-predicted and Rattlesnake's live-measured
+error (nodes 7-12) is attributed to ordinary system-ID estimation noise
+(finite System ID Averages / Frames in CPSD), not a bug.
+
+===============================================================================
+6. DAMPING CHANGE: 1% -> 3-5%
+===============================================================================
+Original system (build_sdynpy_demo_frame6x12.py) used Rayleigh damping
+(C = alpha*M + beta*K) tuned to zeta_target=0.01, giving modal damping ratios
+0.70%-1.19% (mean 0.89%) across the 33 flexible modes, 120-900 Hz.
+
+Per request, regenerated damping directly on the existing system file
+(mass/stiffness/geometry/channels untouched) targeting zeta_target=0.04:
+  - New alpha=51.68, beta=1.519e-5 (both simply 4x the original, since the
+    Rayleigh solve is linear in zeta_target with the same anchor modes)
+  - Resulting damping ratio range: 2.80%-4.75% (mean 3.57%)
+  - Original (1%) system file backed up as sdynpy_frame6x12_system.npz.bak_1pct
+
+===============================================================================
+7. FINAL LIVE COMPARISON AT NEW (3-5%) DAMPING
+===============================================================================
+optimal_diagonal_control:
+  Output Voltages RMS (6 drives): 7.844, 15.998, 18.973, 23.879, 52.897, 47.928
+  Response Error (dB), nodes 7-14: 5.725, 2.211, 2.474, 2.061, 1.965, 1.715,
+                                    11.862, 9.682
+
+buzz_control_class:
+  Output Voltages RMS (6 drives): 11.717, 26.036, 30.301, 37.512, 163.256,
+                                    322.546
+  Response Error (dB), nodes 7-14: 8.209, 6.942, 7.329, 7.899, 8.410, 7.785,
+                                    10.862, 7.979
+
+At the higher, more realistic damping level, optimal-diagonal still wins
+decisively on BOTH axes: noticeably lower tracking error on the well-coupled
+channels (nodes 7-12) AND roughly 4-5x lower drive RMS than buzz. Higher
+damping made the whole system easier to control for both methods (fewer
+extreme narrowband peaks/nulls to fight), at the cost of needing more drive
+energy overall to hit the same absolute target level (lower damping = lower
+Q = higher average transmission gain = less drive needed, and vice versa) --
+an expected physical trade-off, not an anomaly.
+
+===============================================================================
+FILES CHANGED / ADDED THIS SESSION
+===============================================================================
+  control_laws/optimal_diagonal_control.py
+      - scheduler fix (tier-1 budget cap) + diagnostic logging (see section 3)
+  examples/sixdrive12resp/code/compute_frf_frame6x12.py          (new)
+  examples/sixdrive12resp/code/compare_buzz_vs_optimal_diagonal.py (new)
+  examples/sixdrive12resp/results/sdynpy_frame6x12_system.npz    (damping updated)
+  examples/sixdrive12resp/results/sdynpy_frame6x12_system.npz.bak_1pct (backup)
+  examples/sixdrive12resp/results/frf_frame6x12_H.npz            (FRF, at 1% damping -- stale)
+  examples/sixdrive12resp/results/buzz_vs_optimal_diagonal_comparison.npz (stale)
+  examples/sixdrive12resp/results/buzz_vs_optimal_diagonal_*.png (plots, at 1% damping -- stale)
+  examples/sixdrive12resp/results/frf_drive1_to_resp8.png
+
+Note: the FRF/comparison data/plots above reflect the ORIGINAL 1% damping.
+Rerun compute_frf_frame6x12.py + compare_buzz_vs_optimal_diagonal.py to get
+fresh analytical numbers at the new 3-5% damping.
