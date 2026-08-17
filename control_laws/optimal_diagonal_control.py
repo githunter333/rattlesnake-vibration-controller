@@ -38,7 +38,23 @@ across a typical band). Instead:
      "Update Transfer Function During Control" is enabled) drifts past
      `frf_update_threshold` for that bin, it gets re-solved with priority
      over any remaining not-yet-refined bins -- protects already-optimized
-     bins from going stale under a moving resonance.
+     bins from going stale under a moving resonance. Capped at half of
+     `max_bins_per_update` so this can never fully starve step 2.
+
+  5. STALE-ERROR RE-TRIAGE: step 4's drift check is a proxy (has H moved a
+     lot?), not the real question (is this bin's accuracy bad now?) -- a bin
+     can drift by less than `frf_update_threshold` while still degrading
+     enough to matter, and once every bin is SDP-refined (n_deferred == 0),
+     step 2 never runs again, so step 4's proxy becomes the ONLY route back
+     to re-optimization. Without this step, such a bin is orphaned on its
+     stale solution forever, no matter how long the test runs. Step 5 closes
+     that gap: with whatever budget remains after steps 4 and 2, it
+     re-evaluates ALREADY-refined bins' predicted error against the CURRENT
+     H (not H-drift magnitude) and re-solves the worst-error ones, same
+     worst-first triage as step 2 but applied to the refined population too.
+     This only ever spends budget step 2 wasn't using, so it changes nothing
+     about a fresh start's convergence (step 2 is already using the full
+     budget on new bins there) -- it only matters once coverage is complete.
 
 Formulation for a single bin's SDP:
     Y(f) = H(f) X(f) H(f)^H
@@ -127,10 +143,21 @@ class optimal_diagonal_control:
         self.output_cpsd = None    # (F, N, N) current best drive CPSD per bin
         self.H_cache = None        # (F, M, N) FRF each bin's current solution was derived from
         self.sdp_refined = None    # (F,) bool -- True once a bin has been through the SDP
+        self.err_db_cache = None   # (F,) achieved dB error each bin had the last time it was solved --
+                                    # lets step 3 detect "got worse since I last touched this bin" instead
+                                    # of "isn't perfect" (many bins, e.g. near a structural null, can never
+                                    # get under error_threshold_db no matter how many times they're re-solved)
         self.N = None
+        self._sdp_prob = None        # cached parametrized cp.Problem, built once (see _build_sdp_problem)
+        self._sdp_X = None
+        self._sdp_W_params = None
+        self._sdp_y_param = None
+        self._sdp_shape = None       # (M, N) the cached problem was built for
         self.n_frf_updates = 0       # diagnostic: drifted-refined-bin re-solves
         self.n_sdp_refinements = 0   # diagnostic: total worst-error refinements performed
-        self.n_deferred = 0          # diagnostic: bins still above threshold, awaiting SDP budget
+        self.n_deferred = 0          # diagnostic: never-refined bins still above threshold, awaiting SDP budget
+        self.n_stale_refinements = 0 # diagnostic: already-refined bins re-solved due to stale predicted error
+        self.n_stale_deferred = 0    # diagnostic: stale already-refined bins still above threshold, awaiting budget
         self.n_solver_failures = 0   # diagnostic: SDP solves that fell back to pinv
         self._initialized = False
         self._n_calls = 0            # diagnostic: total system_id_update()/control() calls
@@ -188,13 +215,26 @@ class optimal_diagonal_control:
     # ------------------------------------------------------------------
     # SDP refinement for a single bin
     # ------------------------------------------------------------------
-    def _solve_one_bin(self, H, y_target):
-        N = H.shape[1]
+    def _build_sdp_problem(self, M, N):
+        """Build the per-bin SDP ONCE (shape is fixed for the life of a run)
+        and reuse it across every bin via cp.Parameter, instead of paying
+        DCP canonicalization on every solve. H can't be a Parameter directly
+        -- diag(H X H^H) is bilinear in H (H appears on both sides of X),
+        which isn't DPP-affine-in-parameter. Instead each response channel
+        m's diagonal term is reformulated as a linear functional of X:
+            diag(H X H^H)[m] = h_m X h_m^H = sum_kl H[m,k] conj(H[m,l]) X[k,l]
+                              = real(sum(W_m .* X)),  W_m = outer(h_m, conj(h_m))
+        so W_m (computed in plain numpy per bin, negligible cost) is what's
+        fed in as a Parameter -- now a straightforward "coefficient .* variable"
+        pattern, which DPP allows."""
         X = cp.Variable((N, N), hermitian=True)
-        Y = H @ X @ H.conj().T
-        diagY = cp.real(cp.diag(Y))
+        W_params = [cp.Parameter((N, N), complex=True) for _ in range(M)]
+        y_target_param = cp.Parameter(M)
+        diagY = cp.hstack([
+            cp.real(cp.sum(cp.multiply(W_params[m], X))) for m in range(M)
+        ])
         objective = cp.Minimize(
-            cp.sum_squares(diagY - y_target) + self.reg * cp.sum_squares(cp.abs(X))
+            cp.sum_squares(diagY - y_target_param) + self.reg * cp.sum_squares(cp.abs(X))
         )
         constraints = [X >> 0]
         if self.max_drive_coherence < 1.0:
@@ -209,12 +249,26 @@ class optimal_diagonal_control:
                         * cp.geo_mean(cp.hstack([cp.real(X[i, i]), cp.real(X[j, j])]))
                     )
         prob = cp.Problem(objective, constraints)
+        assert prob.is_dcp(dpp=True), "SDP problem is not DPP-compliant"
+        return prob, X, W_params, y_target_param
+
+    def _solve_one_bin(self, H, y_target):
+        M, N = H.shape
+        if self._sdp_prob is None or self._sdp_shape != (M, N):
+            self._sdp_prob, self._sdp_X, self._sdp_W_params, self._sdp_y_param = \
+                self._build_sdp_problem(M, N)
+            self._sdp_shape = (M, N)
+
+        for m in range(M):
+            self._sdp_W_params[m].value = np.outer(H[m, :], H[m, :].conj())
+        self._sdp_y_param.value = y_target
+
         try:
-            prob.solve(solver=cp.SCS)
-            Xf = X.value
+            self._sdp_prob.solve(solver=cp.CLARABEL, warm_start=True)
+            Xf = self._sdp_X.value
             if Xf is None:
                 print(f"[optimal_diagonal_control] SDP solve returned no value, "
-                      f"status={prob.status!r} -- falling back to pinv", flush=True)
+                      f"status={self._sdp_prob.status!r} -- falling back to pinv", flush=True)
         except Exception as e:
             print(f"[optimal_diagonal_control] SDP solve raised {type(e).__name__}: {e} "
                   f"-- falling back to pinv", flush=True)
@@ -225,6 +279,15 @@ class optimal_diagonal_control:
             Yspec = np.diag(y_target).astype(complex)
             Xf = Hpinv @ Yspec @ Hpinv.conj().T
         return Xf
+
+    def _err_db(self, H_clean, indices):
+        """Per-bin max-over-channel dB diagonal error for the given bin
+        indices, using the CURRENT output_cpsd -- shared by steps 2 and 3."""
+        Y = np.einsum('fmn,fnk,flk->fml', H_clean[indices], self.output_cpsd[indices],
+                       H_clean[indices].conj())
+        achieved = np.maximum(np.real(np.einsum('fmm->fm', Y)), 1e-30)
+        target = np.maximum(self.y_diag_target[indices], 1e-30)
+        return np.max(np.abs(10 * np.log10(achieved / target)), axis=1)
 
     # ------------------------------------------------------------------
     def _initialize(self, transfer_function, sysid_response_cpsd=None):
@@ -237,6 +300,7 @@ class optimal_diagonal_control:
         self.H_cache = H_clean.copy()
         self.H_initial = H_clean.copy()  # diagnostic: fixed baseline to measure cumulative drift against
         self.sdp_refined = np.zeros(self.F, dtype=bool)
+        self.err_db_cache = np.full(self.F, np.inf)  # unset until a bin is actually SDP-solved
         self._initialized = True
         self._refine_batch(H_clean)  # spend the first batch of SDP budget immediately
 
@@ -244,10 +308,17 @@ class optimal_diagonal_control:
         """
         Spend up to max_bins_per_update SDP solves this call:
           1) previously-refined bins whose FRF has drifted (priority --
-             protects already-optimized bins from going stale)
-          2) remaining budget on not-yet-refined bins with the largest
-             predicted diagonal error (skip anything already under
-             error_threshold_db -- buzz is good enough there)
+             protects already-optimized bins from going stale), capped at
+             half the budget
+          2) not-yet-refined bins with the largest predicted diagonal error
+             (skip anything already under error_threshold_db -- buzz is
+             good enough there)
+          3) whatever budget remains: already-refined bins whose error has
+             gotten worse than it was at their own last solve (not judged
+             against the absolute error_threshold_db, since some bins can
+             never get under that no matter how many times they're
+             re-solved) -- closes the gap where step 2 can never reconsider
+             a bin once every bin has been refined at least once
         """
         self._n_calls += 1
         H_clean = np.nan_to_num(transfer_function, nan=0.0, posinf=0.0, neginf=0.0)
@@ -284,10 +355,12 @@ class optimal_diagonal_control:
             drifted = np.array([], dtype=int)
 
         n_fix = min(drifted.size, drift_budget, budget)
-        for f in drifted[:n_fix]:
+        fixed_this_call = drifted[:n_fix]
+        for f in fixed_this_call:
             self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self.y_diag_target[f])
             self.H_cache[f] = H_clean[f]
         if n_fix > 0:
+            self.err_db_cache[fixed_this_call] = self._err_db(H_clean, fixed_this_call)
             self.n_frf_updates += int(n_fix)
         budget -= n_fix
 
@@ -296,12 +369,7 @@ class optimal_diagonal_control:
         self.n_deferred = 0
         n_refine = 0
         if not_refined.size > 0:
-            Y = np.einsum('fmn,fnk,flk->fml',
-                           H_clean[not_refined], self.output_cpsd[not_refined],
-                           H_clean[not_refined].conj())
-            achieved = np.maximum(np.real(np.einsum('fmm->fm', Y)), 1e-30)
-            target = np.maximum(self.y_diag_target[not_refined], 1e-30)
-            err_db = np.max(np.abs(10 * np.log10(achieved / target)), axis=1)
+            err_db = self._err_db(H_clean, not_refined)
 
             above = not_refined[err_db > self.error_threshold_db]
             above_err = err_db[err_db > self.error_threshold_db]
@@ -313,7 +381,46 @@ class optimal_diagonal_control:
                 self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self.y_diag_target[f])
                 self.sdp_refined[f] = True
                 self.H_cache[f] = H_clean[f]
+            if n_refine > 0:
+                self.err_db_cache[order[:n_refine]] = self._err_db(H_clean, order[:n_refine])
             self.n_sdp_refinements += int(n_refine)
+            budget -= n_refine
+
+        # --- Step 3: stale-error re-triage on ALREADY-refined bins, using
+        # whatever budget steps 1 and 2 didn't spend. Step 1 only catches
+        # bins whose H moved a lot (>frf_update_threshold); a bin can drift
+        # less than that and still be hurting accuracy, and once every bin
+        # is refined (not_refined empty forever) step 2 can never reconsider
+        # it again -- this closes that gap by re-evaluating refined bins'
+        # predicted error against the CURRENT H, worst-first, same as step 2.
+        # Staleness is judged against each bin's OWN error at its last solve
+        # (err_db_cache), not the absolute error_threshold_db -- many bins
+        # (e.g. near a genuine structural null) can never get under that
+        # absolute threshold no matter how many times they're re-solved, and
+        # comparing to an absolute floor would have this step burn its whole
+        # budget forever re-solving bins that were never going to improve,
+        # instead of the bins that actually got worse since a real FRF change.
+        n_stale = 0
+        self.n_stale_deferred = 0
+        refined_idx = np.where(self.sdp_refined)[0]
+        if n_fix > 0:
+            refined_idx = refined_idx[~np.isin(refined_idx, fixed_this_call)]
+        if budget > 0 and refined_idx.size > 0:
+            err_db_r = self._err_db(H_clean, refined_idx)
+            degraded = err_db_r > self.err_db_cache[refined_idx] + self.error_threshold_db
+
+            stale = refined_idx[degraded]
+            stale_err = err_db_r[degraded]
+            stale_order = stale[np.argsort(-stale_err)]
+
+            n_stale = min(stale_order.size, budget)
+            self.n_stale_deferred = int(stale_order.size - n_stale)
+            for f in stale_order[:n_stale]:
+                self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self.y_diag_target[f])
+                self.H_cache[f] = H_clean[f]
+            if n_stale > 0:
+                self.err_db_cache[stale_order[:n_stale]] = self._err_db(H_clean, stale_order[:n_stale])
+            self.n_stale_refinements += int(n_stale)
 
         # Self-consistency check: what does the control law's OWN H estimate
         # and current solution predict the achieved diagonal error to be?
@@ -335,7 +442,9 @@ class optimal_diagonal_control:
         print(f"[optimal_diagonal_control] _refine_batch call #{self._n_calls}: "
               f"H_changed_since_last={H_changed}, drifted_resolved={n_fix}, "
               f"newly_refined={n_refine}, n_deferred={self.n_deferred}, "
+              f"stale_resolved={n_stale}, n_stale_deferred={self.n_stale_deferred}, "
               f"cum_sdp_refinements={self.n_sdp_refinements}, cum_frf_updates={self.n_frf_updates}, "
+              f"cum_stale_refinements={self.n_stale_refinements}, "
               f"cum_solver_failures={self.n_solver_failures}, n_refined_total={int(np.sum(self.sdp_refined))}/{self.F}, "
               f"self_predicted_rms_db_per_channel={np.array2string(self_rms_per_channel, precision=2)}",
               flush=True)
