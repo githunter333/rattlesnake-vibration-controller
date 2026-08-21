@@ -88,6 +88,23 @@ class SDynPySystemAcquisition(HardwareAcquisition):
         self.output_channels = None
         # Create a dictionary of channels for faster lookup
         self.channel_indices = {tuple([abs(v) for v in val]):index for index,val in enumerate(self.sdynpy_system_data['coordinate'])}
+        # Geometry needed to rebuild the state matrices later (e.g. on an FRF
+        # switch); populated by create_response_channels()
+        self.channel_data = None
+        self.phi_excitation = None
+        self.phi_response = None
+        # Optional live FRF-switch support: set RATTLESNAKE_FRF_SWITCH_FILE to
+        # an alternate system .npz (e.g. one with a shifted resonance/damping)
+        # and RATTLESNAKE_FRF_SWITCH_TRIGGER to a file path; the first time
+        # that trigger file is seen to exist, read() rebuilds self.system from
+        # the switch file's mass/damping/stiffness and deletes the trigger so
+        # it only fires once. Both default to disabled (None).
+        self._frf_switch_file = os.environ.get('RATTLESNAKE_FRF_SWITCH_FILE') or None
+        self._frf_switch_trigger = os.environ.get('RATTLESNAKE_FRF_SWITCH_TRIGGER') or None
+        self._frf_switched = False
+        if self._frf_switch_file or self._frf_switch_trigger:
+            print(f"[SDynPySystemAcquisition] FRF switch armed: file={self._frf_switch_file!r} "
+                  f"trigger={self._frf_switch_trigger!r}", flush=True)
         
     def set_up_data_acquisition_parameters_and_channels(self,
                                                         test_data : DataAcquisitionParameters,
@@ -145,27 +162,43 @@ class SDynPySystemAcquisition(HardwareAcquisition):
         channel_indices = np.array(channel_indices)
         channel_signs = np.array(channel_signs)
         
-        # Now we need to actually go through and set up the A, B, C, D state matrices
-        M = self.sdynpy_system_data['mass']
-        C = self.sdynpy_system_data['damping']
-        K = self.sdynpy_system_data['stiffness']
-        
         # Now we need to pull out the transformation matrices
         phi = self.sdynpy_system_data['transformation'][channel_indices,:]
         # Multiply by the signs
         phi *= channel_signs[:,np.newaxis]
-        
+
         # Separate into responses and excitations; here input is into the system
-        phi_excitation = phi[self.output_channels,:].copy()
-        phi_response = phi[self.response_channels,:].copy()
-        
+        # Store geometry so the state matrices can be rebuilt later (e.g. from
+        # a different mass/damping/stiffness on an FRF switch) without redoing
+        # the channel bookkeeping above.
+        self.channel_data = channel_data
+        self.phi_excitation = phi[self.output_channels,:].copy()
+        self.phi_response = phi[self.response_channels,:].copy()
+
+        M = self.sdynpy_system_data['mass']
+        C = self.sdynpy_system_data['damping']
+        K = self.sdynpy_system_data['stiffness']
+        self.system = self._build_state_space(M, C, K)
+        self.state = np.zeros(self.system.A.shape[0])
+
+    def _build_state_space(self, M, C, K):
+        """Assemble a signal.StateSpace from a given mass/damping/stiffness,
+        reusing the channel geometry (self.phi_response, self.phi_excitation,
+        self.channel_data) computed once in create_response_channels(). Used
+        both for the initial build and to rebuild self.system on an FRF
+        switch with a different M/C/K (same geometry, different dynamics).
+        """
+        phi_excitation = self.phi_excitation
+        phi_response = self.phi_response
+        channel_data = self.channel_data
+
         # Set up some other parameters
         ndofs = M.shape[0]
         tdofs_response = phi_response.shape[0]
         tdofs_input = phi_excitation.shape[0]
-        
+
         # Assembly the full state matrices
-        
+
         # A = [[     0,     I],
         #      [M^-1*K,M^-1*C]]
 
@@ -197,23 +230,23 @@ class SDynPySystemAcquisition(HardwareAcquisition):
                             [np.zeros((tdofs_response, tdofs_input))],
                             [phi_response @ np.linalg.solve(M, phi_excitation.T)],
                             [np.eye(tdofs_input)]])
-        
+
         # Split into different types
         displacement_indices = np.arange(tdofs_response)
         velocity_indices = np.arange(tdofs_response) + tdofs_response
         acceleration_indices = np.arange(tdofs_response) + 2 * tdofs_response
         force_indices = np.arange(tdofs_input) + 3 * tdofs_response
-        
+
         C_disp = C_all[displacement_indices]
         C_vel = C_all[velocity_indices]
         C_accel = C_all[acceleration_indices]
         C_force = C_all[force_indices]
-        
+
         D_disp = D_all[displacement_indices]
         D_vel = D_all[velocity_indices]
         D_accel = D_all[acceleration_indices]
         D_force = D_all[force_indices]
-        
+
         # Now assemble the full response C and D matrices based on the data type
         C_response = []
         D_response = []
@@ -237,7 +270,7 @@ class SDynPySystemAcquisition(HardwareAcquisition):
             response_index += 1
         C_response = np.array(C_response)
         D_response = np.array(D_response)
-        
+
         # Now assemble the final C and D matrices
         C_state = np.empty((len(channel_data), C_response.shape[-1]))
         C_state[self.response_channels,:] = C_response
@@ -245,10 +278,28 @@ class SDynPySystemAcquisition(HardwareAcquisition):
         D_state = np.empty((len(channel_data), D_response.shape[-1]))
         D_state[self.response_channels,:] = D_response
         D_state[self.output_channels,:] = D_force
-        self.system = signal.StateSpace(A_state,B_state,C_state,D_state)
-        self.state = np.zeros(A_state.shape[0])
-        # np.savez('SDynPy_State.npz', A=A_state, B=B_state, C = C_state, D = D_state)
-        
+        return signal.StateSpace(A_state,B_state,C_state,D_state)
+
+    def _check_frf_switch(self):
+        """If an FRF switch is armed and its trigger file has appeared,
+        rebuild self.system from the switch file's mass/damping/stiffness
+        (same geometry, different dynamics) and consume the trigger so it
+        only fires once. Cheap no-op otherwise (a single os.path.exists)."""
+        if self._frf_switched or not self._frf_switch_trigger or not self._frf_switch_file:
+            return
+        if not os.path.exists(self._frf_switch_trigger):
+            return
+        switch_data = {key: val for key, val in np.load(self._frf_switch_file).items()}
+        self.system = self._build_state_space(
+            switch_data['mass'], switch_data['damping'], switch_data['stiffness'])
+        self._frf_switched = True
+        try:
+            os.remove(self._frf_switch_trigger)
+        except OSError:
+            pass
+        print(f"[SDynPySystemAcquisition] FRF switched -- now integrating {self._frf_switch_file}",
+              flush=True)
+
     def set_parameters(self,test_data : DataAcquisitionParameters):
         """Method to set up sampling rate and other test parameters
         
@@ -304,6 +355,7 @@ class SDynPySystemAcquisition(HardwareAcquisition):
             ``n_samples``
         
         """
+        self._check_frf_switch()
         start_time = time.time()
         while self.force_buffer.shape[0] < self.times.size:
             try:

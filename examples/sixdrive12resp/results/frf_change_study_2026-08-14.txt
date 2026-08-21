@@ -1,0 +1,153 @@
+FRF-change-during-control study -- 2026-08-14
+System: 6-drive / 12-response synthetic frame (examples/sixdrive12resp), controlling
+M=8 of the 12 response channels (nodes 7-14), current damping 3-5% (see
+session_summary_2026-07-29.txt for that change).
+
+===============================================================================
+MOTIVATION
+===============================================================================
+Earlier work (2026-07-29) found that enabling "Update Transfer Function During
+Control" in Rattlesnake caused a closed-loop system-ID bias: the live H1
+estimate drifted away from truth over a long run (self-predicted error
+ballooned to 30-45 dB) purely from re-identifying H off a drive signal that's
+no longer broadband once the control law is shaping it -- with no actual
+change in the underlying system. That raised the real question this study
+targets: how does a control law handle the FRF *genuinely* changing mid-test
+(e.g. a resonance shifting and damping increasing as level ramps up), as
+opposed to just noisy re-identification of an unchanging system?
+
+===============================================================================
+1. THE SIMULATED FRF CHANGE
+===============================================================================
+Two modes deliberately shifted, chosen to mimic a level-triggered amplitude-
+dependent nonlinearity (frequency softens, damping increases):
+
+  Mode 1:  120.00 Hz, 4.00% damping  ->  115 Hz, 5% damping
+  Mode 2:  159.79 Hz, 3.34% damping  ->  155 Hz, 5% damping
+  Modes 3+: unchanged
+
+Built with an EXACT rank-1 modal update (examples/sixdrive12resp/code/
+build_shifted_frf_system.py): for a target mode's mass-normalized eigenvector
+phi_i, adding
+    dk * (M phi_i)(M phi_i)^T / (phi_i^T M phi_i)^2
+to K shifts ONLY that mode's stiffness/frequency -- every other mode's
+eigenvector is M-orthogonal to phi_i, so it passes through completely
+unchanged (verified by re-solving the full eigenproblem: modes 3-6 identical
+to 3+ decimal places before/after). Same construction applied to C for the
+damping ratio. Output: sdynpy_frame6x12_system_shifted.npz, same format as
+the nominal system file, only stiffness/damping differ.
+
+===============================================================================
+2. LIVE FRF-SWITCH MECHANISM
+===============================================================================
+Problem: Rattlesnake's SDynPy virtual hardware (components/
+sdynpy_system_virtual_hardware.py) builds its state-space matrices ONCE at
+Initialize Data Acquisition and integrates the same fixed system for the
+whole run -- there was no way to change the simulated dynamics mid-test.
+
+Fix: refactored the state-space assembly out of create_response_channels()
+into a reusable _build_state_space(M, C, K) method, and added a live switch
+hook:
+  - Two new env vars read at hardware __init__: RATTLESNAKE_FRF_SWITCH_FILE
+    (path to the alternate system .npz) and RATTLESNAKE_FRF_SWITCH_TRIGGER
+    (a trigger file path).
+  - read() calls a cheap _check_frf_switch() every frame (~1x/sec at this
+    sample rate) -- the first time the trigger file is seen to exist, it
+    rebuilds self.system from the switch file's M/C/K (same geometry,
+    different dynamics; self.state carries over continuously since the DOF
+    basis doesn't change) and deletes the trigger so it only fires once.
+
+Verified with a standalone functional test (build hardware object with real
+Channel geometry, check state-space poles before/after triggering): poles
+moved from 120.000/159.792 Hz to exactly 115.000/155.000 Hz, every other pole
+(8.226, 214.372, 246.937, 249.18, 286.246, 300.86 Hz) identical, trigger
+consumed correctly, second check is a safe no-op.
+
+Makefile recipes added: build-shifted-system, launch-rattlesnake-frf-study,
+switch-frf, log-frf-switch.
+
+===============================================================================
+3. LIVE RUN NARRATIVE
+===============================================================================
+- Hit the recurring "Hardware File pointed at the wrong .npz" mistake again
+  (now 8 .npz files sitting in examples/sixdrive12resp/results/) --
+  KeyError: 'coordinate' from selecting an analysis-output file instead of
+  sdynpy_frame6x12_system.npz. Resolved by re-selecting the correct file.
+
+- With "Update Transfer Function During Control" ON (required so the control
+  law can actually see the eventual switch) and System ID Averages = 20,
+  BEFORE the switch was ever fired, saw the same closed-loop bias pattern
+  from 2026-07-29: one persistent bad bin showing ~470x relative
+  "since_last_solve" H drift on every call, plus a slow "since_initial"
+  climb (0.50 -> 0.76 over ~25 calls). This confirms the bias is a real,
+  repeatable cost of running with TF-update enabled, not a one-off.
+
+- Bumped System ID Averages 20 -> 40 (kept System ID Averaging = Linear).
+  Error visibly came down over subsequent calls ("slowly coming in").
+
+- Fired the switch (`make switch-frf`). Confirmed in the log:
+  "[SDynPySystemAcquisition] FRF switched -- now integrating
+  .../sdynpy_frame6x12_system_shifted.npz", trigger file consumed.
+
+- Self-predicted diagnostic showed NO jump at the switch instant:
+      before: [10.11 11.72  7.08 21.14 14.26  6.5  14.31 11.73]
+      after:  [10.11 11.70  7.08 21.14 14.26  6.5  14.38 11.65]
+  and stayed essentially flat for 400+ subsequent calls. The resonance shift
+  itself did not visibly perturb the control law's own model of its error at
+  all -- no spike, no divergence.
+
+- User observation on the live plot: most control error concentrated in the
+  300-400 Hz region, not near the shifted 115/155 Hz modes. Confirmed via
+  log comparison that node 10 (4th control channel) was ALREADY at ~21 dB
+  self-predicted error before the switch -- a pre-existing structural weak
+  spot unrelated to the deliberate mode 1/2 shift, similar in character to
+  the deep-null issue found on nodes 13/14 earlier in the session.
+
+- Continued running: live "Response Error (dB)" panel improved further to
+  ~2-3 dB on channels 2-6, and the 300 Hz-region error dropped a lot. The
+  internal self-predicted diagnostic did NOT show this improvement (stayed
+  ~9.5-21 dB) -- explained by the diagnostic reflecting whichever H each bin
+  was individually LAST solved against, while with n_deferred=0 already, only
+  10 drift-protected bins get re-solved per call; it takes many calls to
+  cycle all 901 refined bins through the newer, better-averaged H, so the
+  live (real, measured) accuracy improved faster than the internal
+  self-check caught up. Take-away: the live Response Error panel is the
+  authoritative number; the self-predicted diagnostic is a debugging tool
+  (useful for spotting anomalies like the 470x bad-bin spike) but can lag
+  real improvement.
+
+===============================================================================
+4. HEADLINE COMPARISON
+===============================================================================
+Channels 2-6 (well-coupled control channels), dB error:
+
+  Nominal FRF, TF-update OFF   | optimal_diagonal_control | ~2 dB
+  Nominal FRF, TF-update OFF   | buzz_control_class       | 7+ dB
+  SHIFTED FRF (mode 1/2 moved),
+    TF-update ON, 40 averages  | optimal_diagonal_control | ~2-3 dB
+
+optimal_diagonal_control under the HARDER condition -- a real mid-test
+resonance shift plus all the closed-loop noise that comes with TF-update
+being on -- lands at essentially the same accuracy buzz needed the EASIEST
+possible condition (static FRF, no live noise) to reach. This is the
+strongest result of the study so far: the SDP's robustness isn't limited to
+the drive-RMS efficiency and coherence-cap behavior characterized earlier in
+the session -- it holds up under an actual live structural change too.
+
+===============================================================================
+OPEN THREADS / NEXT STEPS
+===============================================================================
+- Run the same shifted-FRF experiment with buzz_control_class (and the other
+  built-in laws) for a true apples-to-apples comparison under the FRF-change
+  condition, not just against its own static-FRF baseline.
+- Investigate node 10's persistent ~21 dB weak spot (300-400 Hz region) --
+  likely a structural coupling/coherence weakness independent of this study;
+  worth checking its FRF for a null the way frf_drive1_to_resp8_loglog.png
+  did for node 8.
+- Consider whether System ID Averaging = Exponential (small coefficient)
+  would suppress the single-bad-bin ~470x spike more robustly than raising
+  the Linear average count, since it permanently damps any one bad frame's
+  influence rather than weighting all frames equally.
+- The offline (2) noisy-FRF and (3) coherence-cap-sweep experiments discussed
+  before this study are still open; this write-up only closes out (1), the
+  FRF-step-change axis.

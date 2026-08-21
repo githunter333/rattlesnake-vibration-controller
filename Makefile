@@ -2,11 +2,15 @@
 
 REPO_ROOT     := $(shell pwd)
 DEMO_CODE_DIR := $(REPO_ROOT)/examples/sixdrive12resp/code
+DEMO_RESULTS_DIR := $(REPO_ROOT)/examples/sixdrive12resp/results
 RATTLESNAKE_PY := /opt/anaconda3/envs/rattlesnake/bin/python
 SDYNPY_PY      := /opt/anaconda3/envs/sdynpy/bin/python
 GUI_LOG        := $(REPO_ROOT)/gui_debug.log
+FRF_SWITCH_FILE    := $(DEMO_RESULTS_DIR)/sdynpy_frame6x12_system_shifted.npz
+FRF_SWITCH_FILE_ALLMODES := $(DEMO_RESULTS_DIR)/sdynpy_frame6x12_system_shifted_allmodes.npz
+FRF_SWITCH_TRIGGER := /tmp/rattlesnake_frf_switch
 
-.PHONY: help launch-rattlesnake kill-rattlesnake build-demo build-spec frf compare log-tail log-drift log-summary
+.PHONY: help launch-rattlesnake kill-rattlesnake build-demo build-spec frf compare log-tail log-drift log-summary build-shifted-system build-shifted-system-allmodes launch-rattlesnake-frf-study launch-rattlesnake-frf-study-allmodes switch-frf log-frf-switch
 
 help: ## List available recipes with descriptions
 	@echo "Available recipes:"
@@ -39,3 +43,24 @@ log-drift: ## Show the most recent H-drift diagnostic lines from gui_debug.log
 
 log-summary: ## Show the most recent _refine_batch call summaries from gui_debug.log
 	grep "_refine_batch call" $(GUI_LOG) | tail -20
+
+build-shifted-system: ## Rebuild FRF-shift scenario 1 (modes 1/2 shifted only, sdynpy env)
+	cd $(DEMO_CODE_DIR) && $(SDYNPY_PY) build_shifted_frf_system.py
+
+build-shifted-system-allmodes: ## Rebuild FRF-shift scenario 2 (all 33 modes shifted: first 4 deterministic + rest random, sdynpy env)
+	cd $(DEMO_CODE_DIR) && $(SDYNPY_PY) build_shifted_frf_system_allmodes.py
+
+launch-rattlesnake-frf-study: ## Launch Rattlesnake with the live FRF-switch hook armed, scenario 1 (modes 1/2 shifted) until switch-frf fires
+	cd $(REPO_ROOT) && RATTLESNAKE_FRF_SWITCH_FILE=$(FRF_SWITCH_FILE) RATTLESNAKE_FRF_SWITCH_TRIGGER=$(FRF_SWITCH_TRIGGER) \
+		$(RATTLESNAKE_PY) rattlesnake.py RANDOM > $(GUI_LOG) 2>&1
+
+launch-rattlesnake-frf-study-allmodes: ## Launch Rattlesnake with the live FRF-switch hook armed, scenario 2 (all 33 modes shifted) until switch-frf fires
+	cd $(REPO_ROOT) && RATTLESNAKE_FRF_SWITCH_FILE=$(FRF_SWITCH_FILE_ALLMODES) RATTLESNAKE_FRF_SWITCH_TRIGGER=$(FRF_SWITCH_TRIGGER) \
+		$(RATTLESNAKE_PY) rattlesnake.py RANDOM > $(GUI_LOG) 2>&1
+
+switch-frf: ## Fire the armed FRF switch (run this once control has stabilized on the nominal system)
+	touch $(FRF_SWITCH_TRIGGER)
+	@echo "Trigger file created at $(FRF_SWITCH_TRIGGER) -- check 'make log-frf-switch' to confirm it fired"
+
+log-frf-switch: ## Confirm whether/when the FRF switch fired, per gui_debug.log
+	grep "FRF switch" $(GUI_LOG) || echo "No FRF switch activity found yet in $(GUI_LOG)"

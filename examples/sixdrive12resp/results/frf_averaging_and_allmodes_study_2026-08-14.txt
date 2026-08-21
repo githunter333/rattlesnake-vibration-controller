@@ -1,0 +1,558 @@
+FRF averaging sweep + all-modes shift study -- 2026-08-14
+Continuation of frf_change_study_2026-08-14.txt (the two-mode switch study).
+Same system: 6-drive/12-response frame, M=8 control channels (nodes 7-14),
+3-5% damping baseline, optimal_diagonal_control, TF-update ON throughout
+unless noted, all live runs on Rattlesnake (not offline simulation).
+
+===============================================================================
+PART A: SYSTEM ID AVERAGING SWEEP (baseline/nominal system, no FRF switch)
+===============================================================================
+Motivation: with TF-update on, section 3 of the two-mode write-up found a
+persistent, unbounded closed-loop identification bias (H1 drifts away from
+truth over time because the excitation is shaped by the control law, not
+broadband). Question: does more averaging help fight this, as naive intuition
+suggests, or does it make it worse (lag against a moving target)?
+
+Method: nominal (unshifted) system, TF-update ON throughout, live "Response
+Error (dB)" panel read directly off the GUI after each config had stabilized
+(7-26+ minutes per run depending on config). Each run relaunched fresh
+(profile reloaded, hardware reinitialized) to avoid carrying over state.
+
+--- A.1 Linear averaging sweep ---
+  Averages(N) | ch2-6 range (dB) | midpoint
+       10     |    3.0 - 3.7     |   3.35
+       20     |    3.7 - 4.6     |   4.15
+       40     |    4.7 - 5.4     |   5.05
+       80     |    5.4 - 6.6     |   6.00
+
+Monotonic across all four points: MORE averaging is CONSISTENTLY WORSE. Not
+noise -- confirmed by a clean, repeatable trend across 4 independent runs.
+
+Mechanism, verified against the actual code (components/spectral_processing.py
+:214-326): "Linear" averaging is a true sliding boxcar window of the most
+recent N blocks, not a cumulative running mean:
+    S(f,t) = (1/N) * sum_{k=t-N+1}^{t} X_k(f) X_k(f)^H
+A boxcar average of the last N samples has an effective "center of mass" lag
+of about N/2 blocks behind current time. Since H is drifting roughly
+monotonically (unbounded, per the 2026-07-29 finding) rather than settling to
+a fixed noisy value, that lag translates into bias(t) ~ (N/2)*dH/dt -- a
+PERMANENT lag-proportional-to-N bias, not a transient that patience fixes.
+Confirmed with the user that even after long run times, the higher-N configs
+did not catch up to the lower-N ones -- consistent with an unbounded drift
+having no steady state to converge to.
+
+Interesting secondary observation: the increment between successive sweep
+points is roughly CONSTANT (~0.8-0.95 dB) even though N is DOUBLING each
+step (10->20->40->80), suggestive of error ~ log(N) rather than strictly
+linear in N. Noted as a tentative pattern (4 single-run realizations, not
+repeated trials) rather than a confirmed law.
+
+--- A.2 A related knob not swept live: effective delta-f ---
+delta_f = sample_rate / samples_per_frame (currently 1 Hz, 1-second frames).
+The real-time "memory" of the averaging window is:
+    T_window (seconds) = N_averages * T_frame = N_averages / delta_f
+N and delta_f are NOT independent for the lag-vs-drift tradeoff -- they
+multiply together. Finer delta_f (longer frames) makes a given N represent
+MORE real time (worse lag, same effect as raising N); coarser delta_f (shorter
+frames) buys real-time responsiveness at fixed N, at the cost of frequency
+resolution (risk of not resolving closely-spaced modes -- relevant given this
+system has mode pairs only ~2-4 Hz apart, see Part B) and more leakage.
+Coarser delta_f also roughly halves total in-band bin count per Hz coarsened,
+so full SDP convergence (n_deferred=0) happens in proportionally fewer calls.
+Not swept live this session; flagged as a natural 4th axis if revisited.
+
+--- A.3 Exponential averaging ---
+Formula (verified in code, spectral_processing.py "else" branch):
+    S_new = alpha*X_this_frame + (1-alpha)*S_old
+Effective equivalent linear-average count, from matching steady-state
+variance: N_eff = (2-alpha)/alpha ~= 2/alpha - 1.
+
+  Config              | N_eff | ch2-6 range (dB) | midpoint | Drive RMS
+  Exponential a=0.1    | ~19   |   3.3 - 4.3      |   3.75   |   ~3.8
+  Exponential a=0.2    |  ~9   |   2.3 - 2.7      |   2.5    |   ~70 (!)
+
+At a=0.1 (N_eff~19, close to Linear-20's N_eff=20): Exponential clearly beats
+Linear at matched effective window (3.75 vs 4.15 dB midpoint). Consistent
+with theory -- geometrically-decaying weights favor recent data more than a
+boxcar's flat equal-weighting, so less effective lag per unit of
+noise-smoothing for the same nominal "memory".
+
+At a=0.2 (N_eff~9, close to Linear-10's N_eff=10): error improved further
+to the best result in the whole sweep (2.3-2.7 dB) -- but drive RMS exploded
+to ~70 (vs ~4 for every other config tested). This is NOT a favorable
+trade -- ~1 dB further improvement over a=0.1 for a ~17x drive cost. Revised
+interpretation: at a=0.1 the "sees the true (less-lagged) structure more
+accurately" explanation fit the modest drive cost well; at a=0.2 the estimate
+is likely too fast/noisy for the SDP to distinguish real fast-drifting
+structure from raw per-block estimation noise, and it starts chasing noise
+with expensive drive corrections -- same qualitative mechanism as buzz's
+original pinv blowup near an ill-conditioned direction, just triggered by a
+jittery estimate here instead of a static ill-conditioned one. There is
+apparently a regime-change threshold somewhere between a=0.1 and a=0.2.
+
+Chose a=0.15 (N_eff~12) as the working point for Part B's live FRF-switch
+run: fast enough to react promptly to a real switch, with more margin below
+the apparent noise-chasing threshold than a=0.2 gives.
+
+===============================================================================
+PART B: ALL-MODES SHIFTED SYSTEM
+===============================================================================
+Second FRF-change scenario, larger/more diffuse than the two-mode study:
+ALL 33 flexible modes shifted simultaneously instead of just 2.
+
+--- B.1 Construction ---
+  - First 4 modes: deterministic -- frequency +4%, damping -20% of baseline
+    (e.g. mode 1: 120.00->124.80 Hz, 4.00%->3.20%)
+  - Remaining 29 modes: random -- frequency perturbed N(0, 20 Hz) additive,
+    damping perturbed N(0, 25%) multiplicative relative to baseline (seed=42)
+  Built with the same exact rank-1 modal update as the two-mode file
+  (examples/sixdrive12resp/code/build_shifted_frf_system_allmodes.py).
+
+Real bug found and fixed during construction: the first verification pass
+re-solved the full eigenproblem and compared modes by SORTED frequency order.
+With 33 modes (several pairs only a few Hz apart) and +/-20 Hz random shifts,
+18 of 33 modes swapped sorted-order position with a neighbor ("mode
+veering") -- a real, harmless physical outcome, but it silently corrupted
+the index-by-sorted-index comparison (reported a spurious 39 Hz "error").
+Worse, it was a REAL bug, not just a reporting one: the damping-shift step
+was built using the re-sorted eigenvectors, so for any crossed pair it would
+have applied one mode's damping target to a different (crossed) mode's
+eigenvector. Fixed by using each mode's own ORIGINAL eigenvector throughout
+(proven to remain an exact eigenvector of the shifted system regardless of
+sort order, via the same M-orthogonality argument as the two-mode file) and
+its exact target frequency, rather than the re-solved/re-sorted
+eigendecomposition. After the fix: max frequency error 1.1e-13 Hz, max
+damping error 3.5e-17 against each mode's own eigenvector -- exact.
+
+Wired into the same live-switch mechanism as the two-mode file via new
+Makefile variable FRF_SWITCH_FILE_ALLMODES and recipes
+build-shifted-system-allmodes / launch-rattlesnake-frf-study-allmodes
+(switch-frf and log-frf-switch are shared/scenario-agnostic).
+
+--- B.2 Live switch run (Exponential a=0.15, TF-update ON) ---
+Pre-switch baseline (nominal system, stabilized):
+    ch2-6 = 3.05 - 3.48 dB, drive RMS ~3.85
+  (Sits between Linear-10 and Exponential-0.1 from Part A, as expected for
+  N_eff~12 -- confirms 0.15 behaves sanely, nowhere near a=0.2's blowup.)
+
+Fired the switch (all 33 modes). Self-predicted diagnostic:
+    right after switch (call #490): [9.11  6.40 10.92  5.71 10.53  5.53 18.77 17.13]
+    ~200 calls later   (call #693): [13.66  7.41  6.74  6.39 19.00 11.03 25.16 24.58]
+"Nothing changed" was the user's first impression -- correct for the first
+~10 calls, but wrong over a longer window: it took time to show up because
+(1) Exponential smoothing blends in a sudden real change gradually rather
+than jumping instantly (ramps in over roughly N_eff blocks minimum), and
+(2) the SDP only re-solves 10 drift-protected bins/call, so cycling the
+full 901-bin band through the new reality takes many calls regardless of
+how fast the underlying estimate itself reacts.
+
+Live "Response Error (dB)" panel: spiked noticeably right after the switch
+(control law briefly driving against a stale pre-switch H against the now-
+different true system), then RECOVERED/decreased over several minutes to a
+settled plateau -- confirmed by the user watching it stabilize rather than
+still trending down:
+    Settled post-switch: ch2-6 = 3.63 - 4.86 dB, drive RMS ~3.66 (unchanged)
+
+--- B.3 Headline: two-mode vs. all-modes switch ---
+    Two-mode switch (2026-08-14, earlier):  NO measurable change (pre/post
+                                              switch numbers essentially
+                                              identical, both immediately and
+                                              after settling)
+    All-modes switch (this section):        ~0.5-1.5 dB apparent settled
+                                              cost, following a spike-and-
+                                              recover transient
+                                              ** REVISED -- see B.5: this
+                                              "cost" turned out to be a
+                                              scheduler artifact of the
+                                              switch itself, not a property
+                                              of the shifted system. **
+
+--- B.4 Fresh-start comparison (resolves B.3) ---
+Launched Rattlesnake with Hardware File pointed DIRECTLY at the all-modes-
+shifted system from the start (system ID done fresh against the already-
+shifted system, no live switch transient at all), same Exponential a=0.15 /
+TF-update ON settings, specifically to isolate whether the B.3 settled cost
+was inherent to the shifted system's difficulty or a residual artifact of
+the switch transition itself.
+
+Result, confirmed settled (two checks 3+ minutes apart, essentially
+identical -- drive RMS 8.32 both times, ch2-6 and ch7-8 within ~0.1 dB):
+    ch2-6 = 1.85 - 2.56 dB, ch7-8 = 5.1 - 7.9 dB, drive RMS ~8.3
+
+This is the BEST result in the entire study -- including ch7/8, which never
+dropped below ~9 dB in ANY other configuration tested all session (nominal
+system, two-mode switch, all-modes switch, every averaging config in Part
+A). Dramatically better than both the all-modes SWITCHED result (B.2/B.3:
+3.6-4.9 dB) and even the nominal system's own best result. This flips the
+B.3 conclusion: the all-modes-shifted system is not inherently harder to
+control than nominal -- if anything it may be easier (plausibly the random
+mode shifts moved whatever antiresonance null was hurting ch7/8 -- nodes
+13/14 -- in the nominal system). The ~0.5-1.5 dB switched-run cost was a
+scheduler artifact, not a property of the shifted system. See B.5 for the
+mechanism.
+
+--- B.5 Mechanism: why the switched run got stuck (scheduler blind spot) ---
+_refine_batch only has two ways to touch a bin's solution:
+  - Tier 2 (worst-error-first): only considers bins where sdp_refined==False.
+  - Tier 1 (drift-protection): only re-solves an already-refined bin if its
+    MEASURED H has drifted more than frf_update_threshold (5% relative
+    Frobenius norm) since it was last solved.
+
+Fresh start: every bin begins sdp_refined=False. Tier 1 has nothing to do,
+so the full max_bins_per_update budget (20/call) goes to tier 2 -- a genuine
+worst-error-first sweep across the TRUE shifted system, unclouded by any
+history. Every bin eventually gets a real SDP solve against the actual
+current H.
+
+Switched run: before the switch, the control law had already fully
+converged against the OLD (nominal) system -- n_deferred==0, all 901 bins
+marked sdp_refined=True. After the switch, tier 2 can NEVER fire again
+(nothing left in not_refined) -- the only path back to re-optimization is
+tier 1, capped at HALF the budget (10/call, our earlier fix) and gated on
+the 5% drift threshold.
+
+That gate is the actual bug: if a bin's true H changes enough to hurt its
+tracking accuracy but by LESS than 5% in Frobenius norm, it is never
+flagged as drifted, so it is NEVER re-solved -- it sits on its stale
+pre-switch solution indefinitely, no matter how long the test runs, because
+nothing in the scheduler ever asks "is this bin's ACHIEVED ERROR bad" for
+an already-refined bin -- only "has its H moved enough". Given the all-modes
+shift moved 33 modes by modest amounts (+/-20 Hz, +/-25% damping, mostly
+away from any one bin's resonant peak), it's very plausible many bins moved
+just enough to matter for accuracy but not enough to cross the 5% trigger.
+Those bins are permanently orphaned after a switch in a way they are never
+orphaned on a fresh start. Fix: see Part C.
+
+===============================================================================
+UPDATED HEADLINE TABLE (all configs, ch2-6 dB error, live panel)
+===============================================================================
+  Nominal FRF, TF-update OFF                              | buzz_control_class     | 7+
+  Nominal FRF, TF-update OFF                              | optimal_diagonal_control| ~2
+  Nominal FRF, TF-update ON, Linear N=10                  | optimal_diagonal_control| 3.0-3.7
+  Nominal FRF, TF-update ON, Exponential a=0.1 (Neff~19)  | optimal_diagonal_control| 3.3-4.3
+  Nominal FRF, TF-update ON, Linear N=20                  | optimal_diagonal_control| 3.7-4.6
+  Nominal FRF, TF-update ON, Linear N=40                  | optimal_diagonal_control| 4.7-5.4
+  Nominal FRF, TF-update ON, Linear N=80                  | optimal_diagonal_control| 5.4-6.6
+  Nominal FRF, TF-update ON, Exponential a=0.2 (Neff~9)   | optimal_diagonal_control| 2.3-2.7 (drive RMS ~70!)
+  Two-mode shift (switched), TF-update ON, Linear N=40    | optimal_diagonal_control| ~2-3 (unchanged by switch)
+  All-modes shift (switched), PRE-scheduler-fix            | optimal_diagonal_control| 3.6-4.9, ch7-8 ~9-25 (never recovered)
+  All-modes shift (FRESH START), TF-update ON, Exp a=0.15 | optimal_diagonal_control| 1.85-2.56, ch7-8: 5.1-7.9 (BEST overall)
+  All-modes shift (switched), POST-scheduler-fix           | optimal_diagonal_control| 2.04-2.71, ch7-8: 6.81-8.68 (matches fresh start)
+
+===============================================================================
+PART C: SCHEDULER FIX (orphaned-bin blind spot from B.5) -- CONFIRMED WORKING
+===============================================================================
+Implemented in control_laws/optimal_diagonal_control.py: a new step 3 in
+_refine_batch spends whatever budget steps 1-2 didn't use re-triaging
+ALREADY-refined bins by predicted error, not H-drift magnitude. Critically,
+staleness is judged against each bin's OWN error at ITS OWN last solve
+(new err_db_cache, updated by every step whenever a bin is solved) --
+NOT the absolute error_threshold_db. First implementation used the absolute
+threshold and was caught in verification before ever running live: at
+convergence on the static nominal system, 841 of 901 bins sit permanently
+above error_threshold_db (they're near-null/hard-limited, not stale), so
+that version would have wasted its whole budget forever re-solving bins
+that can never improve, instead of the genuinely-degraded ones. Fixed to
+compare against err_db_cache + error_threshold_db (bin must have gotten
+WORSE by more than the threshold since its own last solve) before ever
+testing live.
+
+Verified in two stages:
+  1. Offline: static H (no drift) -> stale_resolved stays 0 for the entire
+     run, confirming zero behavior change for ordinary fresh-start
+     convergence (matches pre-fix numbers exactly: buzz=5.749,
+     optimal-diagonal=5.724 RMS dB, identical to before).
+  2. Offline: 2% random H perturbation (under the 5% drift threshold, so
+     tier 1 never fires) -> step 3 found and fixed 4 genuinely-degraded
+     bins in the first call, then correctly stayed at n_stale_deferred=0
+     for 14 more calls -- catches real degradation without getting stuck
+     re-trying bins that can't improve.
+
+Live confirmation: re-ran the all-modes SWITCH experiment (Exponential
+a=0.15, TF-update ON) with the fix in place.
+  - Right after switch: no jump (as before the fix).
+  - ~14 calls later: still flat (as before the fix) -- looked identical to
+    the pre-fix run at this point, which was misleading; the real
+    difference shows up over a longer horizon.
+  - Over hundreds of subsequent calls, n_stale_deferred (the backlog of
+    degraded-but-unfixed bins) DOES build up for a while -- tier 1
+    permanently claims half the budget for ongoing closed-loop noise
+    (drifted_resolved=10/call, every call, the whole run), so tier 3 only
+    ever gets the other half to clear the switch-induced backlog. Backlog
+    peaked around n_stale_deferred~409 (call #663) then visibly drained
+    (409 -> 307 over the next 14 calls, self_predicted error improving
+    over that same window) -- NOT stuck, just budget-constrained and
+    slower than the switch transient itself.
+  - Settled result (~21 minutes post-switch, drive RMS ~5.9):
+        ch2-6 = 2.04 - 2.71 dB, ch7-8 = 6.81 - 8.68 dB
+
+Comparison, confirms the fix:
+    Fresh start (no switch):              ch2-6 1.85-2.56, ch7-8 5.1-7.9
+    Switched, PRE-fix:                    ch2-6 3.6-4.9,   ch7-8 ~9-25 (never recovered)
+    Switched, POST-fix:                   ch2-6 2.04-2.71, ch7-8 6.81-8.68
+
+Post-fix switched result lands within noise of the fresh-start result on
+ch2-6, and in the same range on ch7-8 -- a dramatic improvement over the
+pre-fix run, which never recovered on ch7-8 at all. Confirms the B.5
+diagnosis: the orphaned-bin scheduler blind spot, not anything about the
+shifted system itself, was the real cause of the original degradation.
+Recovery is not instantaneous (took most of the ~21-minute run to fully
+settle, constrained by tier 1's permanent half-budget claim) but it does
+converge to essentially the same place a fresh start reaches.
+
+===============================================================================
+PART D: TIGHTER COHERENCE CAP (0.9 vs. default 0.95), all-modes switch
+===============================================================================
+Re-ran the all-modes switch experiment (scheduler fix active, Exponential
+a=0.15, TF-update ON) with max_drive_coherence lowered from the default 0.95
+to 0.9 (Control Parameters = "1e-6,0.05,20,1.0,0.9", spelling out the
+preceding defaults explicitly since blank entries are dropped, not treated
+as "keep default").
+
+Pre-switch baseline (nominal system, ~8.5 min, drive RMS ~3.73):
+    ch2-6 = 1.99 - 2.67 dB, ch7-8 = 12.06 / 9.64 dB
+  Noticeably better than the 0.95-cap pre-switch baseline from Part B.2
+  (3.05-3.48 dB) at essentially the same drive cost (~3.73 vs ~3.85) --
+  tightening the cap looks like a small, consistent win on ch2-6 on the
+  static system, not just a drive-RMS/accuracy tradeoff the way the earlier
+  offline SDP capped-vs-uncapped investigation characterized it (that
+  comparison was 0.95 vs. uncapped=1.0; this is 0.9 vs. 0.95, a different
+  point on the same curve).
+
+Post-switch (all 33 modes, ~17 minutes after firing, drive RMS ~5.94):
+    ch2-6 = 1.99 - 2.67 dB (IDENTICAL to pre-switch), ch7-8 = 8.61 / 6.66 dB
+  (ch7-8 actually IMPROVED post-switch, consistent with the fresh-start
+  finding in B.4 that the all-modes shift may move whatever antiresonance
+  null was hurting those channels)
+
+No visible spike-and-recover this time (or it had already fully resolved by
+the 17-minute mark) -- ch2-6 shows literally no measurable degradation
+across the switch. Comparable to the 0.95-cap post-fix result from Part C
+(ch2-6 2.04-2.71, ch7-8 6.81-8.68) -- close enough that the coherence-cap
+change doesn't appear to be doing much additional work on top of the
+scheduler fix in the switched scenario, but the small, consistent ~1 dB
+edge on ch2-6 shows up both pre- and post-switch here, suggesting it's a
+real (if modest) standalone improvement independent of the switch question.
+
+===============================================================================
+PART E: HOW MUCH DOES THE CAP ACTUALLY BITE? Achieved coherence + 0.5 cap run
+===============================================================================
+Question raised: does lower coherence eventually cost accuracy, as intuition
+suggests? The single 0.9-vs-0.95 comparison in Part D couldn't distinguish
+"no such cost exists" from "haven't tightened the cap enough to find it yet".
+
+--- E.1 What coherence is actually being achieved? ---
+Loaded a saved live run (six12system8cont.95corrcapdrive.nc4, 0.95 cap,
+nominal system, "Save Current Spectral Data") and computed the REAL achieved
+drive-to-drive coherence directly from the measured drive_cpsd (901 in-band
+bins x 15 drive pairs):
+    mean=0.58, median=0.60, 95th pct=0.94, 99th pct=0.98, max=0.9999
+    fraction > 0.90: 9.7%,  fraction > 0.94: 4.7%
+
+Most bins sit well under EITHER cap (0.9 or 0.95) -- only the top ~10% tail
+was anywhere near 0.90, under 5% near 0.94. That's why 0.9 vs 0.95 barely
+moved anything in Part D: neither cap was constraining the bulk of the band,
+only a small tail. (Max=0.9999, above the nominal 0.95 cap, is expected and
+not a bug -- the cap only applies to SDP-refined bins; any bin still on the
+uncapped buzz baseline at save time can show coherence near 1.0.)
+
+Checked whether high-coherence bins cluster at modal frequencies (a
+reasonable physical hypothesis): weakly true in bulk (mean coherence within
+3 Hz of a mode: 0.593 vs 0.580 away -- small), but the EXTREME tail tells a
+sharper story. The top-coherence bins cluster specifically in two DENSELY
+MODAL regions -- 100-250 Hz (five modes packed together: 120, 159.79,
+214.37, 246.94, 249.18 Hz) and 610-656 Hz (three modes: 610.78, 620.29,
+654.36 Hz) -- and typically sit 10-16 Hz OFF a mode peak, not on it.
+Interpretation: it's not proximity to any single mode that demands high
+coherence, it's discriminating between several CLOSELY-SPACED modes at
+once (hitting a flat target near each without letting neighbors bleed into
+each other) that does -- a more specific, and more demanding, mechanism
+than simple resonance proximity.
+
+--- E.2 Cap = 0.5 (nominal system, no switch) ---
+Since the achieved coherence is mostly under 0.6, a cap of 0.5 should
+finally bite into a meaningful fraction of the band rather than just the
+tail -- the right test of whether accuracy eventually suffers.
+
+  Cap  | ch2-6 range (dB) | Drive RMS
+  0.95 |    3.05 - 3.48   |   ~3.85
+  0.9  |    1.99 - 2.67   |   ~3.73
+  0.5  |    1.89 - 2.86   |   ~4.69   (~9 min, not fully confirmed settled;
+                                        user later flagged the Exponential
+                                        coefficient may have been set wrong
+                                        for this run, not confirmed =0.15 --
+                                        drive-RMS figure here is suspect,
+                                        treat as unconfirmed/possibly confounded)
+
+Result: accuracy is STILL not meaningfully worse than 0.9 -- essentially the
+same range. What moved is drive RMS, up ~25% from the 0.9-cap level. This
+extends the pattern already seen in the offline capped-vs-uncapped
+investigation (0.95 vs. fully uncapped: same accuracy, +20% drive RMS) all
+the way down to 0.5: tightening the coherence constraint keeps getting paid
+for in drive effort, not tracking accuracy, at least across the whole range
+tested so far (0.5-1.0). The SDP appears to reliably find an alternative,
+less-correlated drive combination that still hits the diagonal target, just
+at higher power cost.
+
+Qualitative observation on the live plot: overall/average error is close to
+the 0.9-cap run, but a few individual control-signal traces show more
+pronounced outlier spikes than at 0.9 -- consistent with the cap now
+genuinely constraining a handful of specific bins (rather than zero bins,
+as at 0.9) enough to show up as visible, if not RMS-dominant, excursions.
+
+--- E.3 Cap = 0.25 (nominal system, no switch, Exponential coef confirmed 0.15) ---
+Tighter still, and this time BOTH numbers moved in the direction the
+original intuition expected:
+
+  Cap  | ch2-6 range (dB) | Drive RMS
+  0.95 |    3.05 - 3.48   |   ~3.85
+  0.9  |    1.99 - 2.67   |   ~3.73
+  0.5  |    1.89 - 2.86   |   ~4.69   (coefficient unconfirmed, see E.2 note)
+  0.25 |    2.64 - 3.46   |   ~4.80   (~10 min, coefficient confirmed 0.15)
+
+At 0.25, error crept back up past the 0.9 result to roughly the 0.95-cap
+level, AND drive RMS is now the highest of the confirmed-coefficient runs.
+This is the first clean sign of a genuine accuracy cost, not just a
+drive-RMS cost -- consistent with the original intuition that a tight
+enough cap should eventually hurt tracking, not only cost more power. The
+0.5-cap result's flat accuracy may partly reflect its unconfirmed
+coefficient rather than the cap alone; 0.25 is the first data point in this
+sweep with a clean, confirmed setup showing real movement.
+
+Worth a finer sweep (0.6, 0.4, 0.15, 0.1) with confirmed settings and full
+settle times per point to map out where the crossover actually sits and how
+sharp it is.
+
+===============================================================================
+PART F: SDP SPEEDUP (cached DPP problem + CLARABEL) -- 2026-08-16
+===============================================================================
+Motivation: with the coherence-cap and scheduler work done, asked whether
+the per-bin SDP solve itself (control_laws/optimal_diagonal_control.py's
+_solve_one_bin) could be sped up -- each call was rebuilding a fresh
+cp.Variable/cp.Problem from scratch (DCP canonicalization overhead) and
+solving with SCS. Two "quick win" changes, no algorithmic/formulation
+change to the optimization itself:
+
+  1. Reuse a single parametrized cvxpy Problem across every bin solve
+     instead of rebuilding one per call. H can't be a direct cp.Parameter
+     -- diag(H X H^H) is bilinear in H (H appears on both sides of X),
+     which isn't DPP-affine-in-parameter and would either error or silently
+     defeat the caching. Reformulated instead: each response channel m's
+     diagonal term is a linear functional of X,
+         diag(H X H^H)[m] = h_m X h_m^H = real(sum(W_m .* X)),
+         W_m = outer(h_m, conj(h_m))
+     so W_m (computed in plain numpy per bin, negligible cost) is what's
+     fed in as the Parameter -- a standard "coefficient .* variable"
+     pattern DPP accepts. Problem is built once (verified
+     prob.is_dcp(dpp=True)), reused via .value updates + warm_start=True.
+  2. Solver: SCS -> CLARABEL (already installed, zero new dependencies).
+
+Verified offline against examples/sixdrive12resp/code/
+compare_buzz_vs_optimal_diagonal.py (the existing 901-bin, F=100-1000Hz,
+M=8/N=6 validation harness) before touching the live code path:
+  - Accuracy unchanged: RMS dB error 5.682 (new) vs 5.724 (old baseline),
+    within solver-choice noise. Zero solver failures either way.
+  - Speed: 56.6s -> 9.4s end-to-end for full 901-bin convergence, ~6x
+    faster. An isolated per-solve microbenchmark (random 8x6 H, 8 trials)
+    showed ~7.5x per-solve speedup once the one-time problem-build cost is
+    amortized (mean solve time 54.0ms -> 6.9ms).
+Committed as 3371ac50.
+
+--- F.1 Live confirmation, baseline system, max_bins_per_update=20 (default) ---
+Same steady-state accuracy as before the speedup: Response Error settled at
+[5.679, 1.791, 2.644, 2.242, 2.065, 2.073, 11.910, 9.122] dB (matches the
+pre-speedup run's [5.612-5.76, 1.78-1.9, 2.49-2.64, 2.1-2.2, 1.8-2.1,
+1.85-2.1, 11.9-12.0, 9.3-9.4] range closely). What changed is wall-clock:
+Total Test Time to reach this steady state was 2:03, versus ~4-6 minutes
+remembered from pre-speedup runs at the same 20-bins/loop setting. Same
+number of _refine_batch calls needed to cover all 901 bins either way (the
+budget-per-call, not solve speed, sets that count) -- the win is purely
+each call's SDP solves now taking a fraction of the wall-clock time they
+used to.
+
+--- F.2 Live test, baseline system, max_bins_per_update=100 (bumped from 20) ---
+Motivation: now that each solve is ~7x cheaper, is there a benefit to
+spending more SDP budget per call? Set via the GUI's Control Parameters
+field (confirmed the field, not just the saved .xlsx, has to be set live --
+editing the profile .xlsx's Control Parameters cell alone did NOT take
+effect on an already-running/already-loaded environment; had to type it
+directly into the GUI field and confirmed via a new
+"[optimal_diagonal_control] __init__:" log line showing
+max_bins_per_update=100 before trusting the run).
+
+Result: bin COVERAGE reached full (901/901) dramatically faster --
+by call #17, versus call #46 at the 20-bins/loop setting. But steady-state
+ACCURACY was worse, not better: settled self-predicted RMS
+[5.91, 3.24, 3.73, 3.68, 3.57, 3.05, 11.74, 9.36] dB vs the 20-bins/loop
+plateau of [5.75-5.76, 1.78-1.84, 2.49-2.64, 2.12-2.17, 1.83-2.04,
+1.85-2.06, 11.92-11.95, 9.27-9.34] dB -- roughly 1.5-2x worse on the
+well-coupled channels (2-6).
+
+Working hypothesis: "Update Sys ID During Control" was ON for this test
+(user's choice, to keep it comparable to the drift-driven live conditions
+of the earlier FRF-change work), and the live H1 estimate under that
+setting carries the closed-loop identification bias documented in
+frf_change_study_2026-08-14.txt section 3 (H1 drifts away from truth
+because the excitation is shaped by the control law, not broadband -- not
+a real system change). The per-call drift-protected re-solve budget is
+capped at half of max_bins_per_update, so raising the cap 20->100 means
+already-refined bins get re-solved against that biased H far more often
+per unit time (cum_frf_updates hit 5850 by call #119 at max=100, vs only
+2150 by call #217 at max=20 -- i.e. roughly 25x more re-solves per unit
+wall-clock time). More aggressive re-solving against a systematically
+biased (not just noisy) H estimate means the scheduler chases the bias
+harder, so spending more budget per call made steady-state accuracy worse
+under this specific condition. This is a genuine, reproducible tradeoff
+introduced by the speedup making re-solves cheap enough to spend
+liberally, not a bug in the speedup itself.
+
+NOT yet isolated from the "is 100 just worse in general" question -- a
+TF-update-OFF (static H) run at max_bins_per_update=100 would isolate
+whether more budget/loop is actually neutral-to-helpful absent the closed-
+loop bias, or whether something else about 100 is worse independent of
+that. Flagged as open, not run (user chose to keep TF-update on for this
+round, and then asked to revert to the confirmed-good 20-bins/loop
+setting instead).
+
+Recommendation: keep max_bins_per_update at the default (20) when
+TF-update is on. The speedup's main practical benefit under that condition
+is wall-clock (4-6min -> ~2min to converge), not "raise the budget" --
+raising the budget interacts badly with the known closed-loop bias.
+
+===============================================================================
+OPEN THREADS / NEXT STEPS
+===============================================================================
+- Isolate the max_bins_per_update=100 accuracy regression (Part F.2): rerun
+  at 100 with TF-update OFF (static H) to check whether the effect is
+  purely the closed-loop-bias-chasing mechanism described there, or
+  whether 100 is worse for some other reason even on a clean system.
+- Scheduler fix (Part C) -- DONE, confirmed live: switched result now
+  matches fresh-start within noise.
+- Coherence cap sweep (Parts D, E) -- 0.95/0.9/0.5/0.25 tested. Accuracy
+  flat down to 0.9, first real accuracy cost appears at 0.25 (confirmed
+  coefficient), alongside the highest drive RMS in the confirmed-setting
+  runs. Still open: finer sweep (0.6, 0.4, 0.15, 0.1) with confirmed
+  settings and full settle times,
+  to find whether accuracy eventually breaks down at some point, or whether
+  the SDP keeps trading drive for accuracy indefinitely as intuition would
+  eventually expect it not to.
+- Consider whether tier 1's permanent half-budget claim (for ongoing
+  closed-loop noise) should itself be adaptive -- e.g. shrink its share
+  once n_stale_deferred backlog is large, so a real post-switch backlog
+  clears faster instead of competing evenly with routine noise-driven
+  re-solves the whole time. Not yet needed (recovery did complete, just
+  slower than the switch transient itself) but worth considering if a
+  future scenario needs faster post-switch recovery.
+- buzz_control_class (and the other built-in laws) under the FRF-change
+  conditions, not just optimal_diagonal_control -- still open from the
+  two-mode write-up.
+- Node 10's persistent structural weak spot -- still open, unrelated to
+  either FRF-change scenario.
+- Try Hv or H3 FRF estimator for the single-bad-bin spike issue specifically
+  (discussed conceptually; not yet tried live). Verified in code
+  (spectral_processing.py:423-450) that none of H1/H2/H3/Hv correct for the
+  root cause (non-persistently-exciting, closed-loop-correlated excitation)
+  -- only plausibly helps the per-bin numerical-instability symptom.
+- Precise delta_f sweep (Part A.2) -- flagged, not run.
+- Offline noisy-FRF and coherence-cap-sweep experiments from before the FRF-
+  change study -- still open.
