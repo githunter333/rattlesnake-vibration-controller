@@ -520,8 +520,152 @@ is wall-clock (4-6min -> ~2min to converge), not "raise the budget" --
 raising the budget interacts badly with the known closed-loop bias.
 
 ===============================================================================
+PART G: GENUINELY NONLINEAR (AMPLITUDE-DEPENDENT) FRF -- 2026-08-20/21
+===============================================================================
+Motivation: Parts B/C's FRF-change scenarios switch between two FIXED
+systems at a trigger -- useful, but not the same thing as a real structural
+nonlinearity where the FRF continuously depends on how hard the system is
+currently being driven. Built a genuinely nonlinear variant instead: same
+6-drive/12-response geometry, same linear M/K/C, plus an amplitude-
+dependent softening stiffness + damping increase on mode 1 (120 Hz, 4%
+baseline damping) in modal coordinates:
+    q'' + 2*zeta0*wn*q' + wn^2*q + k3*q^3 + c2*q'*|q'| = Qn(t)
+projected onto physical DOFs via the mode's own mass-normalized
+eigenvector (same rank-1 M-orthogonal projection idea as Part A's shifted
+systems, just nonlinear/state-dependent instead of a constant shift).
+k3 (softening, <0) gives frequency drop scaling ~amplitude^2; c2 gives
+damping increase scaling ~amplitude. Calibrated numerically (free-decay
+root-solving on the isolated SDOF, not first-order Duffing formulas) to
+target roughly -4% frequency / +20% damping change between a reference
+modal amplitude and 2x that amplitude -- landed close but not exact by
+design (frequency and damping scale differently with amplitude, so they
+don't move together proportionally the way a single linear knob would).
+
+New files only -- the existing linear sdynpy_system_virtual_hardware.py is
+completely untouched: build_nonlinear_frf_system.py (system builder +
+calibration) and components/sdynpy_nonlinear_system_virtual_hardware.py
+(hardware subclass overriding only read(), since the nonlinear force is
+state-dependent and scipy's lsim -- exact for LTI only -- can't handle it).
+
+--- G.1 A real accuracy bug caught before shipping ---
+A single-substep RK4 (one step per sample, ~0.195ms at 5120 Hz) disagreed
+with the linear system's exact lsim baseline by ~13% (relative, on
+acceleration outputs specifically -- the C matrix's omega^2-scale
+coefficients amplify small state errors from under-resolving the ~900 Hz
+top mode). Fixed with 4 RK4 substeps between each reported sample: matches
+lsim to ~0.05% relative, consistent with RK4's expected 4th-order
+convergence. Real-time budget checked: ~0.57s raw integration time within
+the 1.0s frame budget at this system's sample rate -- workable, not
+generous, since substeps make this meaningfully more expensive than the
+linear system's near-instant lsim.
+
+--- G.2 Reference-amplitude calibration was initially unrealistic ---
+First calibration picked a reference modal amplitude (Q0_REF=1.0, abstract
+mass-normalized units) with no connection to what the system could
+actually reach -- turned out to need ~81,000 V RMS-equivalent drive to hit,
+useless for a live demo. Also found a uniform in-phase drive across all 6
+shakers barely couples into mode 1 at all (its modal participation factor
+for that mode shape is tiny) -- had to shape the open-loop characterization
+drive proportional to the mode's own shape at the drive points (standard
+single-mode-excitation practice) to get any real coupling. Recalibrated
+Q0_REF against an actual resonant-response formula at a chosen reference
+drive level (20 V RMS, mode-shaped), landing on a sensible working range:
+negligible nonlinearity below ~4V, mild 8-20V, clear 24-28V (open-loop
+sine-drive characterization -- the live closed-loop number differs some,
+see G.4).
+
+--- G.3 Hardware dispatch wiring -- three separate gaps, all fixed ---
+Registering the new hardware type (index 7) required touching four spots,
+not the one expected:
+  1. components/acquisition.py / output.py -- dispatch elif branches
+     (purely additive, existing types 0-6 untouched).
+  2. components/combined_environments_controller.ui -- the Hardware Type
+     combobox has no dynamic lookup; its item ORDER directly maps to the
+     hardware index, so an unlisted index 7 had nothing to select and
+     silently fell back toward index 6 with no error.
+  3. components/user_interface.py's hardware_update() -- a hardcoded
+     if/elif chain per index (for showing/hiding the right widgets and
+     prompting for a file) that falls through to an "Invalid Hardware
+     Type! ... How did you do this?!" dialog for any unhandled index.
+  4. The same file's `in [4,5,6]` grouping (reads sample_rate/
+     output_oversample from the state-space-style widgets) -- missing 7
+     there would have silently used output_oversample=1 regardless of the
+     configured value, a correctness bug rather than a hard error.
+Also hit the standard "the loaded profile doesn't refresh an already-open
+GUI session" issue from earlier parts of this study -- had to reload the
+profile and re-select the hardware type explicitly in a couple of cases
+even after the file itself was correct.
+
+--- G.4 Live confirmation: control tracks the nonlinearity across an 8x
+    drive-level swing ---
+Ran optimal_diagonal_control (unmodified, coherence-capped SDP) against
+the nonlinear system, TF-update ON, at Target Test Level -6dB, 0dB, then
++12dB (roughly an 8x swing in actual drive amplitude). Response Error (dB)
+stayed essentially IDENTICAL across all three levels:
+    -6dB: [5.37, 1.52, 2.46, 2.11, 1.93, 1.93, 11.69, 9.10]
+     0dB: [5.31, 1.56, 2.38, 2.04, 1.93, 1.85, 11.64, 9.06]
+   +12dB: [5.40, 1.55, 2.46, 2.07, 1.94, 1.92, 11.72, 9.09]
+Live log confirmed continuous H_changed_since_last=True with steady
+drifted_resolved=10/call throughout -- i.e. this flat error is NOT because
+nothing was happening; the live FRF genuinely was drifting under the
+amplitude-dependent nonlinearity, and the scheduler's drift-protected
+re-solve was actively, successfully compensating for it the whole time.
+This is the clean, positive demonstration this whole build was for.
+
+Along the way, found (and want on record so it isn't re-discovered as a
+surprise later): the "Output Voltages (RMS)" GUI panel is computed
+(random_vibration_sys_id_data_analysis.py) directly from the control
+law's raw, PRE-test-level-scale output_cpsd -- it does not reflect actual
+test level at all, by design elsewhere in the existing (untouched)
+codebase, not a bug introduced here. Confirmed the ACTUAL drive signal
+really is scaled correctly via Rattlesnake.log's dedicated per-process log
+("Random Signal Generation -- Test Level at 3.981...", matching
+db2scale(12dB) exactly) -- gui_debug.log (raw stdout capture) does not
+carry these messages; Rattlesnake.log (a separate file, written by a
+dedicated logging process) does.
+
+--- G.5 Post-run validation from saved spectral data ---
+Saved a .nc4 snapshot at +12dB and checked it offline. First pass raised a
+false alarm: comparing the achieved drive CPSD's modal-force projection
+directly against the stability threshold suggested the system was ~11,000x
+past the point where the softening spring's restoring force flips sign
+(runaway). That comparison was wrong -- it skipped the resonant
+amplification factor (q_ss = Q0/(2*zeta*wn^2)) that converts modal FORCE
+into modal RESPONSE amplitude, the two are very different scales.
+Corrected: achieved modal amplitude q_ss ~ 1.02x the calibration reference
+(right at the intended operating point) and only ~0.25x the stability
+limit -- comfortably stable, not a runaway. Lesson: check units before
+raising an alarm from a quick calculation, even under time pressure.
+
+Also checked whether the softened mode 1 frequency is actually visible in
+the measured FRF (not just inferred from the fact that error stayed
+controlled). A broad 90-180 Hz peak search initially found nothing near
+120 Hz -- mode 2's larger, sharper peak elsewhere was dominating that
+naive top-2-peaks-in-a-window search. Narrowing to 95-135 Hz specifically
+found it: response channels 7 and 8 (the project's known persistent
+structural weak spot, already flagged in earlier parts of this study) show
+the clearest signature, peaking at 117 Hz against drive 1 -- a ~2.5%
+downward shift from the 120 Hz linear baseline, consistent with the
+calibrated softening effect at this achieved amplitude. Channels 1 and 2
+against drive 1 show a smaller ~1% shift (121 Hz). The nonlinearity is
+real, working, comfortably stable, and now confirmed in live measured
+data, not just inferred.
+
+===============================================================================
 OPEN THREADS / NEXT STEPS
 ===============================================================================
+- Nonlinear system (Part G): only tested with the standard optimal_
+  diagonal_control (coherence-capped SDP) so far. optimal_diagonal_
+  control_fast (the Burer-Monteiro fast/safe-fallback variant) has only
+  been run live on the LINEAR baseline system -- worth trying against the
+  nonlinear system too, since its safety fallback (falls back to the SDP
+  the instant H changes) should engage continuously here given TF-update
+  is on and H is always drifting.
+- A direct TF-update-OFF run at a high test level (e.g. +12dB) on the
+  nonlinear system, for contrast against G.4's TF-update-ON result --
+  would show the RAW, uncompensated nonlinear effect on response error
+  (expected to degrade visibly, unlike the tracked case), directly
+  isolating what the live drift-tracking is actually buying.
 - Isolate the max_bins_per_update=100 accuracy regression (Part F.2): rerun
   at 100 with TF-update OFF (static H) to check whether the effect is
   purely the closed-loop-bias-chasing mechanism described there, or
