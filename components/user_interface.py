@@ -766,6 +766,22 @@ class Ui(QtWidgets.QMainWindow):
             self.lanxi_maximum_acquisition_processes_selector.hide()
             self.integration_oversample_selector.show()
             self.integration_oversample_label.show()
+        elif current_index == 7:
+            # Load in a nonlinear sdynpy system (same file format as index 6,
+            # plus nl_* keys -- see build_nonlinear_frf_system.py)
+            if select_file:
+                filename,file_filter = QtWidgets.QFileDialog.getOpenFileName(self,'Load a Nonlinear SDynPy System',filter='Numpy File (*.npz)')
+                if filename == '':
+                    self.hardware_selector.setCurrentIndex(0)
+                    self.hardware_file = None
+                else:
+                    self.hardware_file = filename
+            self.sample_rate_selector.show()
+            self.lanxi_sample_rate_selector.hide()
+            self.lanxi_maximum_acquisition_processes_label.hide()
+            self.lanxi_maximum_acquisition_processes_selector.hide()
+            self.integration_oversample_selector.show()
+            self.integration_oversample_label.show()
         else:
             error_message_qt('Invalid Hardware Type!','You have selected an invalid hardware type.  How did you do this?!')
     
@@ -825,7 +841,7 @@ class Ui(QtWidgets.QMainWindow):
             if output_oversample == 0:
                 output_oversample = 1
             acquisition_processes = self.lanxi_maximum_acquisition_processes_selector.value()
-        elif self.hardware_selector.currentIndex() in [4,5,6]:
+        elif self.hardware_selector.currentIndex() in [4,5,6,7]:
             sample_rate = self.sample_rate_selector.value()
             output_oversample = self.integration_oversample_selector.value()
             acquisition_processes = 1

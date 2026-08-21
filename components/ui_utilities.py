@@ -261,7 +261,7 @@ def save_combined_environments_profile_template(filename,environment_data):
     # Fill out the hardware worksheet
     hardware_worksheet.cell(1,1,'Hardware Type')
     hardware_worksheet.cell(1,2,'# Enter hardware index here')
-    hardware_worksheet.cell(1,3,'Hardware Indices: 0 - NI DAQmx; 1 - LAN XI; 2 - Data Physics Quattro; 3 - Data Physics 900 Series; 4 - Exodus Modal Solution; 5 - State Space Integration; 6 - SDynPy System Integration')
+    hardware_worksheet.cell(1,3,'Hardware Indices: 0 - NI DAQmx; 1 - LAN XI; 2 - Data Physics Quattro; 3 - Data Physics 900 Series; 4 - Exodus Modal Solution; 5 - State Space Integration; 6 - SDynPy System Integration; 7 - SDynPy Nonlinear System Integration')
     hardware_worksheet.cell(2,1,'Hardware File')
     hardware_worksheet.cell(2,2,'# Path to Hardware File (Depending on Hardware Device: 0 - Not Used; 1 - Not Used; 2 - Path to DpQuattro.dll library file; 3 - Not Used; 4 - Path to Exodus Eigensolution; 5 - Path to State Space File; 6 - Path to SDynPy system file)')
     hardware_worksheet.cell(3,1,'Sample Rate')
