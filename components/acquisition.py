@@ -148,6 +148,9 @@ class AcquisitionProcess(AbstractMessageProcess):
         elif data_acquisition_parameters.hardware == 6:
             from .sdynpy_system_virtual_hardware import SDynPySystemAcquisition
             self.hardware = SDynPySystemAcquisition(data_acquisition_parameters.hardware_file,self.queue_container.single_process_hardware_queue)
+        elif data_acquisition_parameters.hardware == 7:
+            from .sdynpy_nonlinear_system_virtual_hardware import SDynPyNonlinearSystemAcquisition
+            self.hardware = SDynPyNonlinearSystemAcquisition(data_acquisition_parameters.hardware_file,self.queue_container.single_process_hardware_queue)
         else:
             raise ValueError('Invalid Hardware or Hardware Not Implemented!')
         # Initialize hardware and create channels

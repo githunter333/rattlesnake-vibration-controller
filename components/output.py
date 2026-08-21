@@ -139,6 +139,12 @@ class OutputProcess(AbstractMessageProcess):
         elif data_acquisition_parameters.hardware == 6:
             from .sdynpy_system_virtual_hardware import SDynPySystemOutput
             self.hardware = SDynPySystemOutput(self.queue_container.single_process_hardware_queue)
+        elif data_acquisition_parameters.hardware == 7:
+            # Output side needs no nonlinear-specific behavior -- it only
+            # passes drive data through the queue; the nonlinear integration
+            # happens entirely on the acquisition side.
+            from .sdynpy_system_virtual_hardware import SDynPySystemOutput
+            self.hardware = SDynPySystemOutput(self.queue_container.single_process_hardware_queue)
         else:
             raise ValueError('Invalid Hardware or Hardware Not Implemented!')
         # Initialize hardware and create channels
