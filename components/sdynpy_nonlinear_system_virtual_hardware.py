@@ -2,9 +2,10 @@
 Nonlinear variant of the synthetic SDynPy "hardware": same linear
 mass/damping/stiffness integration as sdynpy_system_virtual_hardware.py,
 plus an amplitude-dependent softening-stiffness + quadratic-damping term
-on one target mode (see examples/sixdrive12resp/code/
-build_nonlinear_frf_system.py for how the nonlinear coefficients are
-calibrated and stored in the system .npz).
+on one OR MORE target modes (see examples/sixdrive12resp/code/
+build_nonlinear_frf_system.py for the single-mode case and
+build_nonlinear_frf_system_allmodes.py for the all-modes case -- how the
+nonlinear coefficients are calibrated and stored in the system .npz).
 
 This is a NEW file that subclasses SDynPySystemAcquisition without
 modifying it -- the existing linear hardware class, and every live run
@@ -13,20 +14,29 @@ signal.lsim (exact for LTI systems only) is replaced with a fixed-step
 RK4 integrator, since the nonlinear restoring force makes the system
 state-dependent in a way lsim can't handle.
 
-Modal form for the target mode's mass-normalized coordinate q (mn=1):
-    q'' + 2*zeta0*wn*q' + wn^2*q + k3*q^3 + c2*q'*|q'| = Qn(t)
-projected onto the physical state via the mode's own mass-normalized
-eigenvector phi (phi^T M phi = 1):
-    x'' = [linear part, same A matrix as the base class] - phi*(k3*q^3 + c2*q'*|q'|)
-    q = phi^T M x_disp,  q' = phi^T M x_vel
-which is why M is needed once at setup (to build the fixed projection row
-vector phi^T M) even though the base class discards M/C/K after building
-its state-space matrices.
+Modal form for EACH target mode's mass-normalized coordinate q_i (mn=1):
+    q_i'' + 2*zeta0_i*wn_i*q_i' + wn_i^2*q_i + k3_i*q_i^3 + c2_i*q_i'*|q_i'| = Qn_i(t)
+projected onto the physical state via each mode's own mass-normalized
+eigenvector phi_i (phi_i^T M phi_i = 1), summed across all target modes:
+    x'' = [linear part, same A matrix as the base class]
+          - sum_i phi_i*(k3_i*q_i^3 + c2_i*q_i'*|q_i'|)
+    q_i = phi_i^T M x_disp,  q_i' = phi_i^T M x_vel
+which is why M is needed once at setup (to build the fixed projection
+matrix Phi^T M) even though the base class discards M/C/K after building
+its state-space matrices. Vectorized across modes throughout (a single
+mode is just the n_modes=1 case, no special-casing needed).
+
+System file format: accepts EITHER the single-mode keys (nl_target_mode_
+shape (ndof,), nl_k3/nl_c2 scalars -- build_nonlinear_frf_system.py) OR
+the all-modes keys (nl_target_mode_shapes (ndof,n_modes), nl_k3s/nl_c2s
+(n_modes,) arrays -- build_nonlinear_frf_system_allmodes.py). Both are
+normalized internally to the (ndof,n_modes)/(n_modes,) all-modes shape.
 
 RATTLESNAKE_NONLINEARITY_STRENGTH (env var, default 1.0): multiplies
-(k3, c2) together. strength=0 recovers the pure linear baseline exactly
-(the RK4 integrator then just reproduces what lsim would have given,
-modulo integration scheme -- verified in the build/validation script).
+(k3, c2) together for EVERY target mode uniformly. strength=0 recovers
+the pure linear baseline exactly (the RK4 integrator then just reproduces
+what lsim would have given, modulo integration scheme -- verified in the
+build/validation scripts).
 """
 
 from .sdynpy_system_virtual_hardware import SDynPySystemAcquisition, SDynPySystemOutput
@@ -42,32 +52,44 @@ class SDynPyNonlinearSystemAcquisition(SDynPySystemAcquisition):
     def __init__(self, system_file: str, queue: mp.queues.Queue):
         super().__init__(system_file, queue)
         d = self.sdynpy_system_data
-        self._has_nonlinearity = 'nl_k3' in d and 'nl_c2' in d and 'nl_target_mode_shape' in d
-        if not self._has_nonlinearity:
-            print("[SDynPyNonlinearSystemAcquisition] WARNING: system file has no nl_* keys -- "
-                  "behaving as a pure linear system (use build_nonlinear_frf_system.py's output).",
-                  flush=True)
-            self.nl_phi = None
-            self.nl_k3_base = 0.0
-            self.nl_c2_base = 0.0
+
+        if 'nl_target_mode_shapes' in d and 'nl_k3s' in d and 'nl_c2s' in d:
+            self._has_nonlinearity = True
+            self.nl_phis = np.atleast_2d(d['nl_target_mode_shapes'])       # (ndof, n_modes)
+            self.nl_k3_base = np.atleast_1d(d['nl_k3s']).astype(float)     # (n_modes,)
+            self.nl_c2_base = np.atleast_1d(d['nl_c2s']).astype(float)     # (n_modes,)
+        elif 'nl_target_mode_shape' in d and 'nl_k3' in d and 'nl_c2' in d:
+            self._has_nonlinearity = True
+            self.nl_phis = np.asarray(d['nl_target_mode_shape'])[:, None]  # (ndof, 1)
+            self.nl_k3_base = np.atleast_1d(float(d['nl_k3']))
+            self.nl_c2_base = np.atleast_1d(float(d['nl_c2']))
         else:
-            self.nl_phi = d['nl_target_mode_shape']
-            self.nl_k3_base = float(d['nl_k3'])
-            self.nl_c2_base = float(d['nl_c2'])
+            self._has_nonlinearity = False
+            print("[SDynPyNonlinearSystemAcquisition] WARNING: system file has no nl_* keys -- "
+                  "behaving as a pure linear system (use build_nonlinear_frf_system.py or "
+                  "build_nonlinear_frf_system_allmodes.py's output).", flush=True)
+            self.nl_phis = None
+            self.nl_k3_base = None
+            self.nl_c2_base = None
 
         strength_env = os.environ.get('RATTLESNAKE_NONLINEARITY_STRENGTH')
         self.nl_strength = float(strength_env) if strength_env not in (None, '') else 1.0
 
         # Set up once M is available (create_response_channels loads it locally
         # and discards it -- redo that one step here to build the fixed
-        # phi^T M projection row vector, and to know which output channels
+        # Phi^T M projection matrix, and to know which output channels
         # are acceleration-type and therefore need the nonlinear correction).
-        self._nl_w_modal = None          # (ndof,) = phi^T M, fixed
-        self._nl_response_coeff = None   # (n_response_channels,) = -(phi_response_row . phi), per channel
+        self._nl_w_modal = None          # (n_modes, ndof) = Phi^T M, fixed
+        self._nl_response_coeff = None   # (n_response_channels, n_modes) = -(phi_response_row . phi_i), per channel/mode
         self._nl_accel_mask = None       # (n_response_channels,) bool, True where channel_type is acceleration
 
+        n_modes = self.nl_phis.shape[1] if self._has_nonlinearity else 0
         print(f"[SDynPyNonlinearSystemAcquisition] nonlinearity_strength={self.nl_strength:g} "
-              f"(k3={self.nl_k3_base*self.nl_strength:.3f}, c2={self.nl_c2_base*self.nl_strength:.6f})",
+              f"n_modes={n_modes} "
+              f"(k3 range=[{self.nl_k3_base.min():.3g},{self.nl_k3_base.max():.3g}], "
+              f"c2 range=[{self.nl_c2_base.min():.3g},{self.nl_c2_base.max():.3g}])"
+              if self._has_nonlinearity else
+              f"[SDynPyNonlinearSystemAcquisition] nonlinearity_strength={self.nl_strength:g} n_modes=0",
               flush=True)
 
     def create_response_channels(self, channel_data: List[Channel]):
@@ -75,7 +97,7 @@ class SDynPyNonlinearSystemAcquisition(SDynPySystemAcquisition):
         if not self._has_nonlinearity:
             return
         M = self.sdynpy_system_data['mass']
-        self._nl_w_modal = self.nl_phi @ M   # fixed row vector: q = self._nl_w_modal @ x_disp
+        self._nl_w_modal = self.nl_phis.T @ M   # (n_modes, ndof): q = self._nl_w_modal @ x_disp
 
         # response-channel-ordered (not full channel_data-ordered) coefficient
         # and accel-type mask, matching self.phi_response's row order
@@ -85,10 +107,10 @@ class SDynPyNonlinearSystemAcquisition(SDynPySystemAcquisition):
         for i, channel in enumerate(channel_data):
             if not self.response_channels[i]:
                 continue
-            coeffs.append(-(self.phi_response[response_idx] @ self.nl_phi))
+            coeffs.append(-(self.phi_response[response_idx] @ self.nl_phis))  # (n_modes,)
             accel_mask.append(channel.channel_type.lower() in ['accel', 'acceleration', 'acc'])
             response_idx += 1
-        self._nl_response_coeff = np.array(coeffs)
+        self._nl_response_coeff = np.array(coeffs)  # (n_response_channels, n_modes)
         self._nl_accel_mask = np.array(accel_mask, dtype=bool)
 
     def read(self):
@@ -108,31 +130,31 @@ class SDynPyNonlinearSystemAcquisition(SDynPySystemAcquisition):
         this_force = self.force_buffer[:self.times.size]
         self.force_buffer = self.force_buffer[self.times.size:]
 
-        if not self._has_nonlinearity or self.nl_strength == 0.0:
-            k3 = c2 = 0.0
-        else:
-            k3 = self.nl_k3_base * self.nl_strength
-            c2 = self.nl_c2_base * self.nl_strength
+        active = self._has_nonlinearity and self.nl_strength != 0.0
+        if active:
+            k3s = self.nl_k3_base * self.nl_strength    # (n_modes,)
+            c2s = self.nl_c2_base * self.nl_strength    # (n_modes,)
 
         A, B, C_out, D_out = self.system.A, self.system.B, self.system.C, self.system.D
         ndof = A.shape[0] // 2
-        w_modal = self._nl_w_modal
-        phi = self.nl_phi
+        w_modal = self._nl_w_modal    # (n_modes, ndof)
+        phis = self.nl_phis           # (ndof, n_modes)
 
-        def nl_accel(x_state):
-            if phi is None or (k3 == 0.0 and c2 == 0.0):
-                return 0.0, 0.0
+        def nl_terms_fn(x_state):
+            """Returns (n_modes,) nonlinear generalized-force term per mode."""
+            if not active:
+                return None
             x_disp = x_state[:ndof]
             x_vel = x_state[ndof:]
-            q = w_modal @ x_disp
-            qd = w_modal @ x_vel
-            nl_term = k3 * q ** 3 + c2 * qd * abs(qd)
-            return nl_term, q  # nl_term used both for state accel correction and output correction
+            q = w_modal @ x_disp     # (n_modes,)
+            qd = w_modal @ x_vel     # (n_modes,)
+            return k3s * q ** 3 + c2s * qd * np.abs(qd)   # (n_modes,)
 
         def deriv(x_state, u):
-            nl_term, _ = nl_accel(x_state)
             xdot = A @ x_state + B @ u
-            xdot[ndof:] -= phi * nl_term if phi is not None else 0.0
+            if active:
+                nl_terms = nl_terms_fn(x_state)
+                xdot[ndof:] -= phis @ nl_terms   # (ndof,)
             return xdot
 
         # RK4 substeps between each reported sample -- a single step per
@@ -177,9 +199,9 @@ class SDynPyNonlinearSystemAcquisition(SDynPySystemAcquisition):
         # (displacement/velocity channels are already exact -- they come
         # straight from the true nonlinear state trajectory, not from a
         # linear-acceleration formula the way the accel output row is)
-        if phi is not None and self._nl_response_coeff is not None and (k3 != 0.0 or c2 != 0.0):
-            nl_terms = np.array([nl_accel(x_out_states[i])[0] for i in range(n_steps)])  # (n_steps,)
-            correction = np.outer(nl_terms, self._nl_response_coeff)  # (n_steps, n_response_channels)
+        if active and self._nl_response_coeff is not None:
+            nl_terms_series = np.array([nl_terms_fn(x_out_states[i]) for i in range(n_steps)])  # (n_steps, n_modes)
+            correction = nl_terms_series @ self._nl_response_coeff.T  # (n_steps, n_response_channels)
             correction[:, ~self._nl_accel_mask] = 0.0
             sys_out[:, self.response_channels] += correction
 
