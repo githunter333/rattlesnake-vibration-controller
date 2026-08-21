@@ -1522,6 +1522,11 @@ As an example, if NI is used, and Analog Output ao0 on device PXI1Slot4 is teed 
                  <string>SDynPy System Integration...</string>
                 </property>
                </item>
+               <item>
+                <property name="text">
+                 <string>SDynPy Nonlinear System Integration...</string>
+                </property>
+               </item>
               </widget>
              </item>
              <item>
