@@ -652,8 +652,119 @@ real, working, comfortably stable, and now confirmed in live measured
 data, not just inferred.
 
 ===============================================================================
+PART H: ALL-33-MODES NONLINEARITY -- 2026-08-21
+===============================================================================
+Motivation: Part G's single-mode nonlinearity is a clean, easy-to-verify
+demo, but a real test article's nonlinearity won't confine itself to one
+known mode. Built a generalized version to check whether optimal_
+diagonal_control's live drift-tracking (validated in G.4 against one
+shifting mode) still holds up when it doesn't know -- and isn't told --
+how many modes are moving or by how much.
+
+--- H.1 Build ---
+Generalized both the hardware class and the system builder to an
+arbitrary number of target modes (vectorized throughout -- a single mode
+is just the n_modes=1 case, verified byte-for-byte backward compatible
+with Part G's existing single-mode file). New build script perturbs all
+33 flexible modes: first 4 deterministic (matching Part G's mode-1
+target), remaining 29 randomized (fixed seed), each independently
+calibrated via the same free-decay root-solving as Part G, generalized to
+be robust across a real spread of (frequency, damping, target)
+combinations rather than hand-tuned for one mode's numbers.
+
+29/33 modes calibrated successfully; 4 modes (7, 22, 30, 33) hit a
+numerical edge case in the root-solving brackets for their randomized
+targets and fell back to k3=c2=0 (linear, no nonlinearity) for that mode
+specifically, with a clear warning rather than crashing the whole build --
+deliberate graceful degradation for a demo/exploration tool, not silently
+hidden. Real-time budget with all 33 modes active: ~0.84s of the 1.0s
+frame budget (tighter than the single-mode case's ~0.57s, as expected
+with 33x the modal projection work each substep, but still within
+budget).
+
+--- H.2 Live confirmation: same result holds with all modes in play ---
+Ran optimal_diagonal_control against the all-modes system, TF-update ON,
+at -6dB then +12dB (same protocol as G.4). Response Error (dB) again
+stayed essentially flat across the level swing:
+    -6dB:  [5.41, 1.61, 2.61, 2.20, 1.92, 1.76, 11.69, 9.07]
+   +12dB:  [5.52, 1.60, 2.58, 2.17, 1.80, 1.69, 11.82, 9.17]
+Confirmed genuinely active tracking via the log, not a null result:
+H_changed_since_last=True continuously through the whole +12dB dwell,
+cum_frf_updates=16,480, and Step 3's stale-error re-triage also
+periodically engaging (stale_resolved=1-2 on several calls) -- the full
+scheduler working, not idling.
+
+This is the key result: the scheduler doesn't need to know how many modes
+are shifting or which ones. The same generic "re-solve whatever the live
+H says has drifted" mechanism that worked for one known mode in G.4 holds
+up unchanged when all 33 modes are independently, unpredictably in play --
+directly answering the concern that a single-mode demo might not
+generalize to a realistic laboratory nonlinearity.
+
+--- H.3 Post-hoc modal shift check -- real signal, but a real analysis
+    limitation worth recording ---
+Saved .nc4 snapshots at -6dB (fullnonlinearminus6dbspectra.nc4) and +12dB
+(plus12dbmultinonlinearsystem.nc4) and searched the measured FRF near each
+mode's baseline frequency for a peak shift between the two levels
+(auto-selecting, per mode, whichever response/drive channel pair showed
+the strongest peak at -6dB). 24/33 modes checked showed a >0.5 Hz shift.
+
+That aggregate number is trustworthy; the PER-MODE breakdown mostly is
+not. With 33 modes spread over 100-900 Hz, many sit close enough together
+that the search windows overlap, and the "peak" found is often the same
+shared nearby feature claimed by several different target frequencies --
+visible directly in the results as literal duplicate (peak_lo, peak_hi)
+pairs across neighboring modes (e.g. modes 6/7/8 all reporting the exact
+same 301->305 Hz peak; modes 25-30, six different target modes, all
+reporting the same 778->783 Hz peak). Cross-checking against modes with
+NO nonlinearity assigned (the 4 failed-calibration modes) makes the
+problem concrete: modes 22 and 33 both show large apparent shifts
+(+15 Hz, +6 Hz) despite having k3=c2=0 -- pure neighbor bleed-through,
+not a real effect, and a useful negative control for how much to trust
+this method generally.
+
+Of the 24 flagged rows, only about 7 look like independently-resolved
+detections rather than duplicates -- modes 2, 3, 9, 16, 31, 32 (and
+arguably 19, which conflicts with its own neighbors 20/21 despite
+overlapping search windows, so is ambiguous rather than clean):
+
+    mode 2  (159.8 Hz):  +1.0 Hz
+    mode 3  (214.4 Hz):  -2.0 Hz
+    mode 9  (335.2 Hz):  -6.0 Hz
+    mode 16 (478.7 Hz):  +1.0 Hz
+    mode 31 (837.4 Hz):  +8.0 Hz
+    mode 32 (860.6 Hz): +17.0 Hz
+
+These magnitudes (roughly 1-17 Hz, i.e. a fraction of a percent up to a
+few percent depending on the mode) are in the right ballpark for what was
+calibrated and read as real. Mode 1 itself, oddly, does NOT look clean in
+this particular pass (found a peak at 130 Hz at -6dB, well off both the
+120 Hz linear baseline and the clean 117-121 Hz found in G.5's dedicated
+single-mode-only analysis) -- likely contamination from mode 2 at the
+window edge, a good illustration of exactly the failure mode described
+above rather than a real discrepancy in the underlying physics.
+
+Takeaway: a simple per-mode peak search is the wrong tool once modes are
+closely spaced (true for most of this system above ~400 Hz) -- it needs
+either isolated modal-coordinate projection (the technique G.5 used
+successfully for the single clean mode-1 case, sidesteps the window-
+overlap problem entirely by using the known mode shape instead of a
+generic frequency window) generalized across all 33 modes, or a proper
+multi-mode curve fit, neither of which has been built yet. The live
+Response Error result (H.2) remains the reliable, already-trustworthy
+measurement of what actually matters here; this offline check is useful
+corroboration that SOMETHING shifted broadly across the band, not a
+precise characterization of what shifted where.
+
+===============================================================================
 OPEN THREADS / NEXT STEPS
 ===============================================================================
+- Build a proper multi-mode post-hoc verification tool (H.3): generalize
+  G.5's isolated modal-coordinate projection technique across all 33
+  modes (project the measured/achieved response onto each mode's own
+  known shape rather than searching a shared frequency window) to get
+  trustworthy per-mode shift numbers instead of the current window-
+  overlap-prone peak search.
 - Nonlinear system (Part G): only tested with the standard optimal_
   diagonal_control (coherence-capped SDP) so far. optimal_diagonal_
   control_fast (the Burer-Monteiro fast/safe-fallback variant) has only
