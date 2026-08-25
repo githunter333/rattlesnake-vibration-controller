@@ -8,13 +8,13 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.normpath(os.path.join(_HERE, "..", "..", "..")))
+sys.path.insert(0, os.path.normpath(os.path.join(_HERE, "..")))
 sys.path.insert(0, _HERE)
 from components.sdynpy_system_virtual_hardware import SDynPySystemAcquisition
 import components.utilities as util
 from global_cva_frf import global_cva_v2, frf_from_ss, modes_from_A
 
-RESULTS_DIR = os.path.normpath(os.path.join(_HERE, "..", "results"))
+RESULTS_DIR = os.path.normpath(os.path.join(_HERE, "..", "examples", "sixdrive12resp", "results"))
 d = {k: v for k, v in np.load(os.path.join(RESULTS_DIR, "sdynpy_frame6x12_system.npz")).items()}
 
 
