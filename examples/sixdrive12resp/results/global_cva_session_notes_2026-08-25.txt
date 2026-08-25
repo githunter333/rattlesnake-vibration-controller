@@ -1,0 +1,464 @@
+GLOBAL CVA FRF -- SESSION NOTES (FOLLOW-ON TO THE 2026-08-25 HANDOFF)
+Written so a cold session can pick this up without re-deriving anything.
+Supersedes/extends global_cva_handoff_2026-08-25.txt -- read that first for
+the original method description; this doc covers everything done after it
+in the same-day follow-on session: peak-undershoot root cause, a repo
+reorg, and a rank/lags sensitivity sweep that turns the "known limits" in
+that handoff's section 5 into validated results.
+
+System throughout: 6-drive / 12-response frame, 8 control channels (nodes
+7-14), fs = 5120 Hz, 33 modes, band of interest 100-1000 Hz.
+
+===============================================================================
+1. CORRECTIONS TO THE ORIGINAL HANDOFF (as found at session start)
+===============================================================================
+The original handoff (global_cva_handoff_2026-08-25.txt) flagged two things
+as outstanding that were actually already resolved by the time this session
+picked it up:
+  - Section 6.2 said global_cva_frf.py / validate_global_cva.py were
+    UNTRACKED. They were not -- both were committed the same morning
+    (commits 63de927c, 3ac8b7b9), same batch as the handoff doc itself.
+  - Section 6.3 said frf_averaging_and_allmodes_study_2026-08-14.txt was
+    wiped to 1 byte in the working tree. It was not -- 49KB, matches git
+    HEAD exactly.
+Section 6.1 (global_cva_frf_pairs.png has no generating script -- was
+presumably made by an ad-hoc script that was never saved) was correct and
+is fixed in section 5 below.
+
+===============================================================================
+2. WHY CVA PEAKS READ LOW VS GROUND TRUTH
+===============================================================================
+Visual review of global_cva_frf_validation.png and global_cva_frf_pairs.png
+showed a consistent pattern: CVA tracks the true FRF closely everywhere
+(mode frequencies, anti-resonance dips, off-resonance shape) EXCEPT at the
+tops of resonance peaks, which consistently read a bit low vs ground truth.
+Frequency locations are essentially exact; it's specifically peak HEIGHT
+that's biased.
+
+2.1 Hypothesis (reasoned from the method, before running anything new):
+identified poles are systematically slightly more damped than true. Peak
+height for a lightly-damped mode goes roughly as 1/zeta, so even a small
+zeta bias produces a visibly flattened peak while leaving frequency, phase,
+and off-resonance regions untouched. Candidate mechanisms:
+  (a) ERRORS-IN-VARIABLES SHRINKAGE: the state sequence Xk used to fit A is
+      itself an estimate (J @ P, from a finite record), not the true state.
+      Regressing Xk+1 on a noisy Xk is a classic errors-in-variables
+      problem, and it biases fitted eigenvalues toward the origin (i.e.
+      toward more apparent damping). This is well documented for
+      subspace/N4SID-family methods generally.
+  (b) C/D COLLINEARITY: C and D are fit jointly in one lstsq against
+      [Xk, u_k]. Xk is built from delayed y,u including samples adjacent to
+      the current u_k, so some resonant energy could get explained by the
+      flat, non-resonant D term instead of by C(zI-A)^-1B, which would also
+      read as "peaks low, everything else fine."
+  (c) rank/lags truncation.
+
+2.2 Empirical test (globalcva/check_damping_bias.py): rebuilt the exact
+physical state-space SDynPySystemAcquisition._build_state_space builds
+(components/sdynpy_system_virtual_hardware.py), directly from the raw
+mass/damping/stiffness/transformation/coordinate arrays in
+sdynpy_frame6x12_system.npz -- this sidesteps importing components/, which
+pulls in the full Qt GUI stack (components/__init__.py imports Ui,
+environments, acquisition, output, streaming -- the whole Rattlesnake app;
+not worth headless-shimming for a diagnostic script). Sanity check: this
+hand-built continuous-time H(f) matches the saved ground-truth
+frf_frame6x12_H.npz to rel_err = 0.0000, so the reproduction is exact, not
+an approximation. Bonus: this system's damping is EXACTLY proportional
+(Phi.T @ C @ Phi is diagonal to numerical precision), so the true per-mode
+zeta pulled from eigh(K,M) + modal projection of C is exact ground truth,
+not itself an estimate.
+
+Result at 1s / lags=40 / rank=66 (the validated config): of 33 true modes
+in-band, CVA resolved 32 distinct poles. Matching each true mode to its
+nearest identified pole:
+    median zeta_id/zeta_true = 1.078   mean = 1.161   76% of modes over-damped
+
+This confirms hypothesis (a)/(b) directly -- most modes read ~5-15% more
+damped than true. But the biggest outliers were not generic bias: they were
+CLOSELY-SPACED MODE PAIRS that collapse onto a single identified pole. True
+modes at 412.66/413.61 Hz (0.95 Hz apart), 451.00/454.74 Hz (3.7 Hz apart),
+and 718.25/728.20 Hz (10 Hz apart) each get ONE identified pole, and that
+merged pole's damping has to broaden to explain both resonances at once --
+the mode near 438 Hz showed zeta_id/zeta_true = 3.0, and 788 Hz showed 1.87.
+So there are two stacked effects: a broad ~10% shrinkage bias on essentially
+every mode, plus a much larger, localized effect wherever two true modes sit
+closer together than the record's frequency resolution (~1/duration) can
+separate -- see section 4 for how this responds (or doesn't) to rank/lags.
+
+Full per-mode table is reproducible via: python3 globalcva/check_damping_bias.py
+
+===============================================================================
+3. REPO REORG: globalcva/ DIRECTORY
+===============================================================================
+Moved (git mv, history preserved) out of examples/sixdrive12resp/code/ into
+a new top-level globalcva/ directory, and updated their internal
+__file__-relative path math to match (repo root is now 1 level up, not 3;
+results dir is now "../examples/sixdrive12resp/results", not "../results"):
+    globalcva/global_cva_frf.py
+    globalcva/validate_global_cva.py
+Committed as 35b11131 "moved all global cva files to own directory under
+controller" (after 3ac8b7b9 "global cva work and notes", by the user
+directly -- this session's git identity isn't configured, so commits went
+through the user's own shell).
+
+New files added this session (all under globalcva/, committed same way as
+above unless noted):
+    build_true_system.py            shared helper: rebuilds the verified
+                                     physical state-space + true per-mode
+                                     (f, zeta) from the raw M,K,C/
+                                     transformation/coordinate arrays, used
+                                     by check_damping_bias.py and
+                                     sweep_rank_lags.py
+    check_damping_bias.py           section 2's diagnostic
+    sweep_rank_lags.py              section 4's sweep
+    plot_cva_vs_true_examples.py    section 5's plot regenerator
+
+Current globalcva/ layout:
+    build_true_system.py
+    check_damping_bias.py
+    global_cva_frf.py
+    plot_cva_vs_true_examples.py
+    sweep_rank_lags.py
+    validate_global_cva.py
+
+===============================================================================
+4. RANK / LAGS SENSITIVITY SWEEP (globalcva/sweep_rank_lags.py)
+===============================================================================
+Answers handoff item 5's "automatic order selection is the single biggest
+open question" and "lags=40 likewise hand-chosen, not swept." Run as three
+parts (`python3 globalcva/sweep_rank_lags.py A|B|C`, or no arg for all);
+each part reuses one cached broadband u,y per duration.
+
+4.1 PART A -- auto rank heuristic (rank=None) vs forced rank=66, lags=40:
+
+  duration  auto rank_used   auto rel_err   rank=66 rel_err
+    0.5s          62            0.2342          0.2277
+    1.0s          63            0.1445          0.1408
+    2.0s          65            0.0979          0.0979
+    4.0s          65            0.0802          0.0803
+
+  The heuristic never lands on exactly 66, but always within a few states,
+  and its FRF error matches the forced-rank=66 case within 1-3% at every
+  duration. VALIDATED as a safe fallback -- but see 4.2, it's landing close
+  to (not comfortably inside) a real collapse threshold, not in the middle
+  of a wide safe zone.
+
+4.2 PART C -- rank sweep, lags=40 fixed (checked before B because it's the
+sharper result):
+
+  duration=1.0s
+    rank=50:  rel_err=0.8223  n_modes=24  max|eig|=0.99724  zeta_bias=0.470
+    rank=58:  rel_err=0.5324  n_modes=29  max|eig|=0.99386  zeta_bias=0.853
+    rank=66:  rel_err=0.1408  n_modes=32  max|eig|=0.99326  zeta_bias=1.078
+    rank=74:  rel_err=0.1366  n_modes=33  max|eig|=0.99340  zeta_bias=1.060
+    rank=82:  rel_err=0.1334  n_modes=35  max|eig|=0.99346  zeta_bias=1.032
+    rank=90:  rel_err=0.1355  n_modes=36  max|eig|=0.99345  zeta_bias=1.027
+    rank=100: rel_err=0.1329  n_modes=38  max|eig|=0.99339  zeta_bias=1.039
+    rank=120: rel_err=0.1302  n_modes=43  max|eig|=0.99357  zeta_bias=1.018
+
+  duration=2.0s
+    rank=50:  rel_err=0.8279  n_modes=24  max|eig|=0.99689  zeta_bias=0.502
+    rank=58:  rel_err=0.5325  n_modes=29  max|eig|=0.99490  zeta_bias=0.834
+    rank=66:  rel_err=0.0979  n_modes=32  max|eig|=0.99354  zeta_bias=1.049
+    rank=74:  rel_err=0.0990  n_modes=34  max|eig|=0.99366  zeta_bias=1.046
+    rank=82:  rel_err=0.0985  n_modes=34  max|eig|=0.99370  zeta_bias=1.035
+    rank=90:  rel_err=0.0969  n_modes=35  max|eig|=0.99360  zeta_bias=1.036
+    rank=100: rel_err=0.0975  n_modes=38  max|eig|=0.99331  zeta_bias=1.034
+    rank=120: rel_err=0.0954  n_modes=41  max|eig|=0.99358  zeta_bias=1.067
+
+  rank<=58 COLLAPSES (rel_err 0.5-0.8, several true modes missing entirely,
+  AND the identified poles come back UNDER-damped, zeta_bias 0.47-0.85 --
+  a qualitatively different, worse failure than the over-damping bias in
+  section 2). rank=66 snaps to good performance and stays essentially flat
+  through rank=120, with only marginal further error reduction but a
+  steadily growing count of extra "modes" past the true 33 (43 at
+  rank=120) -- almost certainly spurious/numerical, not physical. rank=66
+  is a real, sharp threshold (= 2 x 33 true modes), not an arbitrary choice
+  that happened to work.
+
+4.3 PART B -- lags sweep, rank=66 fixed:
+
+  duration=1.0s
+    lags=20:  rel_err=0.1464  n_modes=29  zeta_bias=1.101
+    lags=30:  rel_err=0.1369  n_modes=31  zeta_bias=1.086
+    lags=40:  rel_err=0.1408  n_modes=32  zeta_bias=1.078
+    lags=50:  rel_err=0.1557  n_modes=32  zeta_bias=1.094
+    lags=60:  rel_err=0.1750  n_modes=32  zeta_bias=1.107
+    lags=80:  rel_err=0.2220  n_modes=33  zeta_bias=1.146
+    lags=100: rel_err=0.2728  n_modes=33  zeta_bias=1.207
+
+  duration=2.0s
+    lags=20:  rel_err=0.1144  n_modes=31  zeta_bias=1.055
+    lags=30:  rel_err=0.0996  n_modes=32  zeta_bias=1.033
+    lags=40:  rel_err=0.0979  n_modes=32  zeta_bias=1.049
+    lags=50:  rel_err=0.1032  n_modes=32  zeta_bias=1.064
+    lags=60:  rel_err=0.1127  n_modes=32  zeta_bias=1.059
+    lags=80:  rel_err=0.1954  n_modes=33  zeta_bias=1.090
+    lags=100: rel_err=0.3375  n_modes=33  zeta_bias=1.037
+
+  Best error is around lags=30 (a wash vs lags=40: 0.0996 vs 0.0979 at 2s).
+  Past ~50-60 it degrades steadily; by lags=100 FRF rel_err roughly DOUBLES
+  vs lags=40. Mechanism: a bigger embedding depth shrinks N (the number of
+  independent non-overlapping past/future block-rows available at a fixed
+  record length), and N is exactly what the canonical-correlation
+  order-selection step leans on -- so more "memory" is not free. lags=40 is
+  near-optimal, not just a convenient historical choice; would not
+  recommend pushing it higher without also lengthening the record.
+
+4.4 Close-pair resolution vs rank/lags: tracked, for the 4 true-mode pairs
+<5 Hz apart in-band (246.94/249.18, 412.66/413.61, 451.00/454.74,
+821.75/824.72 Hz), how many resolve into two DISTINCT identified poles
+rather than collapsing onto one. Result: no clean monotonic trend against
+either rank or lags -- bounced between 0/4 and 3/4 across the whole sweep
+with no obvious pattern. The one lever that consistently helped was
+DURATION (part A): 1/4 resolved at 0.5s vs 2/4 at both 2s and 4s. This
+supports reading the close-pair failure as closer to a fundamental
+frequency-resolution limit (~1/duration -- at 1s that's ~1 Hz, right at the
+edge of the 0.95 Hz-apart pair) than as something rank or lags alone fixes.
+
+4.5 CONCLUSION / VALIDATED DEFAULTS: keep LAGS=40, RANK=66. rank=66 sits
+right at a sharp real threshold (not padding room needed above it); lags=40
+is near-optimal and larger values actively hurt. The rank=None auto
+heuristic is safe to use unattended (matches forced-rank=66 performance
+within a few percent at every duration tested) but is not slack -- it picks
+values close to the rank<=58 collapse zone, so don't assume it would
+gracefully degrade on a system where the true order is less certain than
+here. global_cva_frf.py's module docstring has been updated with this
+validation summary (previously it only reported the H1-comparison numbers).
+Reproducible via: python3 globalcva/sweep_rank_lags.py [A|B|C]
+
+===============================================================================
+5. REPRODUCIBILITY FIX: global_cva_frf_pairs.png NOW HAS A SCRIPT
+===============================================================================
+Handoff item 6.1 flagged global_cva_frf_pairs.png as having no generating
+script. globalcva/plot_cva_vs_true_examples.py regenerates it (same 6
+drive/response pairs, same 1s duration, at the now-validated lags=40,
+rank=66) and OVERWRITES examples/sixdrive12resp/results/global_cva_frf_pairs.png
+in place. Per-pair rel_err on regeneration matched the original image
+almost exactly (0.112/0.143/0.158/0.130/0.165/0.141 vs the original's
+same six numbers), confirming both that the state-space reconstruction in
+section 2 is faithful and that the original image's inferred provenance
+(handoff section 6.1's guess) was correct. Overall rel_err (all 8x6 pairs,
+1s, lags=40, rank=66): 0.1408, matching validate_global_cva.py's own 1.0s
+table entry exactly.
+Reproducible via: python3 globalcva/plot_cva_vs_true_examples.py
+
+===============================================================================
+6. SUGGESTED NEXT STEPS
+===============================================================================
+Carried forward from the original handoff (still open):
+  1. Add measurement noise to the validation; find where CVA's short-record
+     advantage over H1 breaks down.
+  2. Run against a real .nc4 record from a live Rattlesnake run (everything
+     to date is noise-free offline simulation).
+  3. Closed loop, then the nonlinear system (sdynpy_frame6x12_system_
+     nonlinear_allmodes.npz) -- the actual destination of this work.
+New from this session:
+  4. The close-pair collapse (section 4.4) looks like a genuine frequency-
+     resolution limit rather than a rank/lags tuning problem -- worth
+     characterizing directly (e.g. does a matrix-pencil / ESPRIT-style
+     high-resolution method resolve 412.66/413.61 Hz from 1s where CVA
+     can't?) rather than continuing to sweep rank/lags against it.
+  5. The zeta_bias metric (median zeta_id/zeta_true) is now cheap to compute
+     (build_true_system.py) -- worth folding into validate_global_cva.py's
+     regular output alongside rel_err, since rel_err alone doesn't surface
+     the over-/under-damping distinction between the rank<=58 collapse mode
+     and the normal-operating-range shrinkage bias.
+
+===============================================================================
+7. STATE OF THE TREE (as of end of this session, 2026-08-25)
+===============================================================================
+Committed (by the user, this session's own git identity isn't configured):
+  35b11131 moved all global cva files to own directory under controller
+Modified this session, not yet committed as of this writing:
+  globalcva/global_cva_frf.py           (docstring: validated-defaults note)
+  globalcva/build_true_system.py        (new)
+  globalcva/sweep_rank_lags.py          (new)
+  globalcva/plot_cva_vs_true_examples.py (new)
+  examples/sixdrive12resp/results/global_cva_frf_pairs.png  (regenerated)
+  examples/sixdrive12resp/results/global_cva_session_notes_2026-08-25.txt (this file, new)
+Known ongoing nuisance: git commands on this repo (via the device-bridge
+shell) leave a stale .git/index.lock behind because that shell can't
+unlink files on this mount -- doesn't block reads, but can block the NEXT
+write-requiring git command (add/mv/commit) until the lock is renamed out
+of the way or deleted directly on the Mac.
+
+===============================================================================
+8. NOISE INJECTION SWEEP (globalcva/noise_injection_sweep.py)
+===============================================================================
+Motivated by a design question raised mid-session: many CVA formulations
+include an explicit stochastic/innovations term --
+    x(k+1) = A x(k) + B u(k) + K e(k)
+    y(k)   = C x(k) + D u(k) + e(k)
+-- which global_cva_v2 omits entirely (pure deterministic output-error fit).
+The existing validation is noise-free, so that omission costs nothing there.
+This sweep adds additive white measurement noise to the response (per
+output channel, std = noise_frac * that channel's own RMS, since channel
+amplitudes span ~2 orders of magnitude -- see global_cva_frf_pairs.png) and
+re-runs both CVA (lags=40, rank=66) and H1 across noise_frac in
+[0, 0.02, 0.05, 0.1, 0.2, 0.5] at durations [0.5, 1, 2, 4]s.
+
+RESULT -- decisive, not marginal: the zero-noise CVA-vs-H1 advantage that
+motivates this whole line of work collapses almost immediately under noise,
+not gradually.
+
+  duration=1.0s
+    noise_frac   CVA rel_err  zeta_bias  n_modes | H1 rel_err
+        0.00         0.1408      1.078      32   |    0.1970
+        0.02         0.2369      1.149      29   |    0.1975   <- H1 already wins
+        0.05         0.2478      1.289      28   |    0.2003
+        0.10         0.2555      1.250      27   |    0.2099
+        0.20         0.2842      1.266      27   |    0.2407
+        0.50         0.3441      1.461      24   |    0.4006
+
+  duration=2.0s
+    0.00  0.0979  1.049  32 | 0.1263
+    0.02  0.1493  1.098  31 | 0.1265   <- H1 already wins
+    0.05  0.1621  1.160  30 | 0.1274
+    0.10  0.1722  1.212  28 | 0.1309
+    0.20  0.1950  1.241  27 | 0.1447
+    0.50  0.2534  1.415  25 | 0.2194
+
+  duration=4.0s: same pattern, H1 already ahead by noise_frac=0.02
+    (0.1116 CVA vs 0.1008 H1).
+
+  duration=0.5s is the one exception: CVA keeps an edge across the whole
+  noise range (0.50 vs H1's 0.65 at the top), but the huge zero-noise
+  advantage (0.23 vs 0.56, 2.4x better) craters to a much smaller one
+  (0.41 vs 0.56, 1.4x) at the very first noise step, then plateaus --
+  most of the damage happens between 0% and 2% noise, same as the other
+  durations, it just doesn't fully cross over because H1 is already so
+  poor at 0.5s.
+
+zeta_bias climbs monotonically with noise at every duration (e.g. 1s:
+1.078 -> 1.461 from 0% to 50%), and n_modes recovered drops (32 -> 24) --
+i.e. measurement noise directly compounds the SAME over-damping/pole-
+shrinkage bias characterized in section 2, via the same mechanism
+(regressing A on an increasingly noisy estimated state Xk). This is not a
+new, separate failure mode -- noise makes the existing one worse.
+
+CONCLUSION: the explicit error/innovations term is worth building, and this
+is no longer a theoretical argument -- it's demonstrated. The deterministic
+-only formulation's core selling point (2-4x less data than H1) is a
+noise-free-only result. At durations >=1s, H1 already matches or beats CVA
+at just 2% RMS sensor noise, well before real accelerometer/shaker noise
+floors would plausibly land. This directly de-risks handoff item 4 (never
+run live on Rattlesnake) -- running the current deterministic model against
+a real .nc4 record would very likely underperform H1, not beat it.
+
+Plot: examples/sixdrive12resp/results/global_cva_noise_injection_sweep.png
+Reproducible via: python3 globalcva/noise_injection_sweep.py
+
+Suggested next step (updates section 6): before running against a real
+.nc4 record (old item 2), implement the innovations-form extension (K e(k)
+term) and re-run this exact noise sweep against it, to quantify how much
+of this collapse it recovers. The unused Vgt (future-side canonical
+directions) already computed in global_cva_v2 is the natural starting
+point -- see section 2's note on this.
+
+===============================================================================
+9. INNOVATIONS-FORM REBUILD (globalcva/global_cva_innovations, in global_cva_frf.py)
+===============================================================================
+Direct follow-on to section 8's finding and the mid-session design question:
+does adding the explicit error/innovations term many CVA formulations use
+(x(k+1)=Ax+Bu+Ke(k), y(k)=Cx+Du+e(k)) help? Implemented as a new function,
+global_cva_innovations(), appended to global_cva_frf.py (global_cva_v2 is
+untouched -- still the validated deterministic baseline; v2's return dict
+gained one new key, Xkp1, needed by the new function, which is additive and
+doesn't change v2's existing behavior for any caller).
+
+9.1 SCOPING DECISION: this does NOT re-derive N4SID's oblique-projection
+state-extraction theory (the textbook mechanism that gives subspace ID
+proven consistency under noise). That would mean changing how Xk itself is
+built, a bigger and riskier rewrite. Instead it keeps global_cva_v2's
+Xk = J @ P exactly as validated, and adds a standard two-stage
+"subspace init + Kalman refinement" scheme:
+  1. Run global_cva_v2 once for an initial A,B,C,D and state sequence Xk.
+  2. Compute that fit's residuals -- w_k (process) and e_k (the
+     innovation) -- and their sample covariances Q, R, S.
+  3. Solve the filter-form discrete algebraic Riccati equation (via
+     scipy.linalg.solve_discrete_are, using the standard control<->filter
+     DARE duality: solve_discrete_are(A.T, C.T, Q, R, s=S)) for the
+     steady-state Kalman gain K.
+  4. Run the resulting steady-state Kalman filter FORWARD through the
+     actual (y,u) data, warm-started from Xk[0], to get a filtered state
+     x_hat(k) -- a minimum-variance estimate GIVEN the model, which
+     down-weights noisy samples via K rather than treating every raw
+     sample equally the way the static projection Xk=J@P does.
+  5. Re-fit A,B,C,D on x_hat instead of Xk (same lstsq machinery as v2),
+     and repeat 2-4 for refine_iters rounds.
+Note explicitly: computing K alone (refine_iters=0) changes NOTHING about
+the deterministic transfer function C(zI-A)^-1B+D -- K only describes the
+noise-to-state path. All of the improvement below comes from the
+refinement loop actually re-fitting on the Kalman-filtered state.
+
+9.2 CORRECTNESS CHECKS (all passed):
+  - refine_iters=0 gives A,B,C,D bit-identical to global_cva_v2 -- confirms
+    the "K alone changes nothing" claim above is actually true in code,
+    not just in the docstring.
+  - The closed-loop filter A-KC is Schur stable (max|eig|=0.953<1) on the
+    first test case -- a real correctness check on the DARE solve/gain
+    formula, not just "it ran without erroring."
+  - P (the Riccati solution) is PSD to numerical precision.
+  - Convergence: refine_iters=1,2,3,5,8 give IDENTICAL rel_err in every
+    case tested (noise-free and noisy) -- one refinement pass reaches a
+    stable fixed point, more iterations buy nothing. refine_iters=1 is the
+    practical default.
+  - In the full noise sweep below (24 duration x noise_frac combinations),
+    the refined filter was Schur-stable in every single case -- no
+    divergence encountered.
+
+9.3 RESULT -- improves BOTH the noise-free baseline AND noise robustness,
+substantially. Repeated the exact noise/duration grid from section 8
+(globalcva/noise_injection_compare_innovations.py), now three-way:
+CVA-deterministic (v2) vs CVA-innovations (1 refine) vs H1.
+
+  duration=1.0s
+    noise   CVA(det)  CVA(innov)     H1
+     0.00    0.1408     0.0854     0.1970   <- innov ~40% lower than det, even noise-free
+     0.02    0.2369     0.1477     0.1975   <- det already lost to H1 (sec 8); innov still well ahead
+     0.05    0.2478     0.1602     0.2003
+     0.10    0.2555     0.1846     0.2099
+     0.20    0.2842     0.2305     0.2407
+     0.50    0.3441     0.3069     0.4006   <- innov beats H1 at EVERY level tested, 0-50%
+
+  duration=2.0s
+     0.00    0.0979     0.0707     0.1263
+     0.02    0.1493     0.1068     0.1265
+     0.05    0.1621     0.1214     0.1274
+     0.10    0.1722     0.1347     0.1309   <- crossover point (det crossed at 0.02, sec 8)
+     0.20    0.1950     0.1625     0.1447
+     0.50    0.2534     0.2216     0.2194
+
+  duration=4.0s: same shape, crossover pushed to ~0.15-0.2 (det crossed at 0.02).
+  duration=0.5s: innov beats H1 at every level tested (H1 baseline already
+    poor at 0.5s -- see section 8).
+
+  Headline: innov's FRF rel_err is lower than det's at EVERY single point
+  in the whole grid (24/24), and the noise level at which CVA loses to H1
+  is pushed from ~2% (deterministic, section 8) out to roughly 10-20% at
+  2-4s, and beyond the entire 0-50% range tested at 0.5-1s. The zero-noise
+  improvement (e.g. 1s: 0.141->0.085) suggests the refinement is also
+  correcting some of the errors-in-variables/pole-shrinkage bias from
+  section 2, independent of any injected measurement noise -- consistent
+  with x_hat being a fundamentally better state estimate than the raw
+  static Xk=J@P even when there's nothing but numerical/estimation noise
+  to filter out.
+
+Plot: examples/sixdrive12resp/results/global_cva_innovations_noise_comparison.png
+Reproducible via: python3 globalcva/noise_injection_compare_innovations.py
+
+9.4 WHAT THIS DOESN'T ANSWER YET: still open (updates section 6):
+  - Whether the remaining gap at higher noise fractions (>~10-20% at 2-4s)
+    would close further with the full oblique-projection state extraction
+    (the bigger rewrite this deliberately avoided) -- untested, and not
+    knowable from this result alone.
+  - Whether the zeta_bias / close-pair-collapse issues from sections 2 and
+    4 respond to the innovations refinement the same way rel_err did --
+    not checked yet, would reuse the same matching logic from
+    check_damping_bias.py against x_hat's identified A.
+  - Real .nc4 data (still untested throughout this whole session, per
+    original handoff item 4) is the actual test that matters -- everything
+    above is still synthetic additive-white-noise injection, which may not
+    resemble a real accelerometer's noise floor or a shaker's drive
+    non-idealities.
