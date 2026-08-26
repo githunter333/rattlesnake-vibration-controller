@@ -462,3 +462,124 @@ Reproducible via: python3 globalcva/noise_injection_compare_innovations.py
     above is still synthetic additive-white-noise injection, which may not
     resemble a real accelerometer's noise floor or a shaker's drive
     non-idealities.
+
+===============================================================================
+10. INNOVATIONS-FORM vs TRUE: DAMPING BIAS + PAIR PLOT (answers 9.4's open item)
+===============================================================================
+globalcva/check_damping_bias_innovations.py reruns the section 2 damping
+check for BOTH global_cva_v2 and global_cva_innovations side by side (1s,
+lags=40, rank=66), matching each true mode to its nearest identified pole
+in each model:
+
+                         deterministic     innovations
+    median zeta ratio         1.078             0.988
+    mean zeta ratio           1.161             1.125
+    fraction over-damped       0.76              0.48
+    close pairs resolved       1/4               1/4
+
+The median over-damping bias is essentially GONE (0.988 -- almost exactly
+unbiased) vs the deterministic fit's 1.078, and the fraction of modes
+reading over-damped drops from 76% to 48%, i.e. from a systematic bias to
+roughly a coin flip (consistent with residual estimation noise rather than
+a directional bias). This lines up with the FRF-level result from section
+9.3 and gives a mode-level mechanism for it, not just an aggregate number.
+
+BUT this is not a clean sweep -- two nuances worth flagging:
+  - Close-pair resolution is UNCHANGED (still 1/4 -- the same specific
+    pair, 246.94/249.18 Hz, is the only one resolved in both models).
+    Refinement changes A,B,C,D given a fixed rank/state dimension; it
+    doesn't add resolving power to distinguish two eigenvalues that are
+    fundamentally too close together for the data to separate at this
+    rank/lags/duration (section 4.4's frequency-resolution-limit read
+    still holds).
+  - The large local damping blowup from an unresolved close pair doesn't
+    disappear, it MOVES. In the deterministic fit, the isolated mode at
+    438.26 Hz (not itself part of a close pair) picked up a 3.0x zeta
+    blowup, apparently from cross-contamination by the nearby unresolved
+    451.00/454.74 Hz pair. In the innovations fit, that 438 Hz mode is
+    fixed (ratio 1.135), but the 451.00/454.74 Hz pair itself now shows a
+    ~2.64x blowup instead. Net: refinement fixed the general/systematic
+    bias but didn't eliminate the localized failure mode near unresolved
+    doublets, just relocated which nearby pole absorbs the excess energy.
+
+Reproducible via: python3 globalcva/check_damping_bias_innovations.py
+
+Comparison plot (same 6 pairs, same 1s/lags=40/rank=66 as
+global_cva_frf_pairs.png, but innovations-form):
+examples/sixdrive12resp/results/global_cva_frf_pairs_innovations.png
+Per-pair rel_err, deterministic -> innovations (every pair improved):
+    resp 8/drive 1:   0.112 -> 0.079
+    resp 10/drive 3:  0.143 -> 0.099
+    resp 12/drive 5:  0.158 -> 0.099
+    resp 13/drive 6:  0.130 -> 0.042   (largest improvement)
+    resp 14/drive 1:  0.165 -> 0.112
+    resp 7/drive 4:   0.141 -> 0.102
+Visually the improvement is concentrated exactly where section 2 first
+flagged the problem: the high-frequency (~700-1000 Hz) peaks, which
+previously undershot ground truth, now track closely.
+Reproducible via: python3 globalcva/plot_cva_vs_true_examples_innovations.py
+
+===============================================================================
+11. H1 vs CVA ON THE CLOSELY-SPACED MODE PAIRS
+===============================================================================
+Question: does classical H1 resolve the same 4 close true-mode pairs
+(gaps 0.95-3.75 Hz, section 4.4) any better or worse than CVA (lags=40)?
+
+11.1 THE HARD LIMIT: at nperseg=1024 (fs=5120 Hz), the SAME H1 settings
+used everywhere else in this project (validate_global_cva.py,
+noise_injection_sweep.py, etc.), frequency resolution = fs/nperseg = 5 Hz.
+All 4 gaps (0.95, 2.24, 2.97, 3.75 Hz) are SMALLER than that bin spacing --
+this isn't a statistical limitation, it's provable from the FFT bin
+spacing alone: at most one H1 frequency sample can ever land between two
+modes that close together, so H1 literally cannot show two separate peaks
+for any of them. Checked directly (globalcva/h1_close_pair_resolution.py,
+counting local maxima of |H1(f)| near each pair) at nperseg=1024 across
+1s/2s/4s durations: H1 resolves 0 of 4 pairs, every single time. CVA
+(lags=40) resolves 1 of 4 (the 246.94/249.18 Hz pair, the 2.24 Hz gap) --
+worse than one would like, but strictly better than H1's zero.
+
+Reason CVA can do this at all: it's a parametric method (fitting discrete
+poles), not bound to a fixed FFT bin spacing the way a periodogram-based
+estimate is -- in principle a parametric fit can place two poles closer
+together than 1/duration if the data supports it ("super-resolution").
+It's not doing great here either (1/4, and section 4.4 showed duration is
+the main lever, not rank/lags), but the comparison is apples-to-oranges in
+CVA's favor: H1 has a hard resolution floor that no amount of averaging
+removes, while CVA's floor is a soft, data/SNR-dependent one.
+
+11.2 CAN H1 BE PUSHED FURTHER? Yes, by raising nperseg -- but that trades
+away Welch's averaging (fewer blocks), which is the entire mechanism that
+makes H1 noise-robust in the first place (section 9's whole comparison).
+Swept nperseg in [512, 1024, 2048, 4096, 8192] at 1/2/4s:
+  - nperseg=2048 (2.5 Hz resolution): starts resolving some pairs (3/4 at
+    2s, with only 9 blocks averaged) -- but the resolved peak LOCATIONS
+    don't always land near the true frequencies (e.g. one "resolved" pair
+    showed peaks 6-8 Hz off from either true frequency), suggesting at
+    least some of this is estimation noise from too few averaged blocks,
+    not genuine modal separation.
+  - nperseg=4096/8192 (1.25/0.6 Hz resolution): only 4-9 blocks averaged
+    at these durations. The naive peak-count sees 5-12 "local maxima" in
+    a 20-30 Hz window around several pairs -- almost certainly noise
+    ripples from an under-averaged periodogram, not 5-12 real modes. This
+    result should NOT be read as "H1 resolves everything at high
+    nperseg" -- it means the simple peak-counting metric breaks down once
+    block count gets this low, and a real answer would need either much
+    longer records (defeating the short-record point of this whole
+    project) or a proper significance test (e.g. coherence-based),
+    neither of which this check attempts.
+  - CONCLUSION: at the record lengths this project actually cares about
+    (short, 0.5-4s), H1 cannot cleanly resolve these pairs at settings
+    that also give it enough averaging to be trustworthy. The nperseg=1024
+    "0/4, but reliable" result is the fair comparison point against CVA's
+    "1/4."
+
+Visual: examples/sixdrive12resp/results/global_cva_close_pairs_h1_vs_cva.png
+zooms in on all 4 pairs (2s duration) -- true vs CVA-innovations vs H1
+(nperseg=1024). H1's markers are 5 Hz apart, visibly too sparse to trace
+either mode individually; several panels show it interpolating a single
+lopsided hump (or even a small spurious wiggle, e.g. the 821.75/824.72 Hz
+panel) rather than anything resembling two resonances, while CVA still
+traces a continuous, if imperfect, single merged peak of its own.
+
+Reproducible via: python3 globalcva/h1_close_pair_resolution.py
+                   python3 globalcva/close_pair_h1_vs_cva_zoom.py
