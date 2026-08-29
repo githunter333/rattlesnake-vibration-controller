@@ -34,7 +34,7 @@ from .environments import (ControlTypes,environment_definition_ui_paths,
 from .random_vibration_sys_id_utilities import load_specification
 
 from .utilities import (VerboseMessageQueue, DataAcquisitionParameters,
-                        load_python_module, GlobalCommands, db2scale)
+                        load_python_module, GlobalCommands, db2scale, scale2db)
 from .ui_utilities import (TransformationMatrixWindow,
                            multiline_plotter,
                            PlotWindow)
@@ -1853,6 +1853,12 @@ class RandomVibrationEnvironment(AbstractSysIdEnvironment):
         #     (RandomVibrationDataAnalysisCommands.INITIALIZE_PARAMETERS,
         #      self.environment_parameters))
         
+        # Let the control law know the current test level (in dB), if it cares.
+        # This is a no-op for control laws that don't define set_test_level_db.
+        self.queue_container.data_analysis_command_queue.put(
+            self.environment_name,
+            (RandomVibrationDataAnalysisCommands.SET_TEST_LEVEL_DB,scale2db(data)))
+
         # Start the data analysis running
         self.queue_container.data_analysis_command_queue.put(
             self.environment_name,
@@ -1927,6 +1933,11 @@ class RandomVibrationEnvironment(AbstractSysIdEnvironment):
             self.environment_name,
             (DataCollectorCommands.SET_TEST_LEVEL,
              (self.environment_parameters.skip_frames,data)))
+        # Let the control law know the updated test level (in dB), if it cares.
+        # This is a no-op for control laws that don't define set_test_level_db.
+        self.queue_container.data_analysis_command_queue.put(
+            self.environment_name,
+            (RandomVibrationDataAnalysisCommands.SET_TEST_LEVEL_DB,scale2db(data)))
     
     def quit(self,data):
         for queue in [self.queue_container.spectral_command_queue,

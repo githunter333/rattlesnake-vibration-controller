@@ -40,7 +40,8 @@ class RandomVibrationDataAnalysisCommands(Enum):
     PERFORM_CONTROL_PREDICTION = 1
     RUN_CONTROL = 2
     STOP_CONTROL = 3
-    # SHUTDOWN_ACHIEVED = 4
+    SET_TEST_LEVEL_DB = 4
+    # SHUTDOWN_ACHIEVED = 5
 
 class RandomVibrationDataAnalysisProcess(AbstractSysIDAnalysisProcess):
     
@@ -61,8 +62,10 @@ class RandomVibrationDataAnalysisProcess(AbstractSysIDAnalysisProcess):
                          self.perform_control_prediction)
         self.map_command(RandomVibrationDataAnalysisCommands.RUN_CONTROL,self.run_control)
         self.map_command(RandomVibrationDataAnalysisCommands.STOP_CONTROL,self.stop_control)
+        self.map_command(RandomVibrationDataAnalysisCommands.SET_TEST_LEVEL_DB,self.set_test_level_db)
         self.error_indices = None
         self.control_function = None
+        self.current_test_level_db = None
         self.response_cpsd_prediction = None
         self.drive_cpsd_prediction = None
         self.control_frf = None
@@ -115,9 +118,36 @@ class RandomVibrationDataAnalysisProcess(AbstractSysIDAnalysisProcess):
                 self.last_response_cpsd, # Last Control Response for Error Correction
                 self.last_drive_cpsd, # Last Control Excitation for Drive-based control
                 )
+            # If a test level was already received (e.g. race with SET_TEST_LEVEL_DB),
+            # sync it into the freshly-constructed control law now.  Most control laws
+            # don't care about test level, so this is a no-op unless the control law
+            # defines set_test_level_db.
+            if (self.current_test_level_db is not None
+                and hasattr(self.control_function,'set_test_level_db')):
+                self.control_function.set_test_level_db(self.current_test_level_db)
         else: # Function
             self.control_function = getattr(module,data.control_python_function)
-        
+
+    def set_test_level_db(self,data):
+        """Receives the current test level in dB and forwards it to the control law
+
+        This is a no-op for control laws that don't care about test level (i.e.
+        anything other than class-style control laws that define a
+        ``set_test_level_db`` method, such as ``octave_band_switching_control``).
+
+        Parameters
+        ----------
+        data : float :
+            Current test level in dB
+
+        """
+        self.current_test_level_db = data
+        if (self.control_function is not None
+            and self.parameters is not None
+            and self.parameters.control_python_function_type == 2
+            and hasattr(self.control_function,'set_test_level_db')):
+            self.control_function.set_test_level_db(data)
+
     def perform_control_prediction(self,data):
         if self.sysid_frf is None:
             return
