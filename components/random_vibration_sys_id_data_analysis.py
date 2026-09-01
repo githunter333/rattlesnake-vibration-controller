@@ -74,6 +74,12 @@ class RandomVibrationDataAnalysisProcess(AbstractSysIDAnalysisProcess):
         self.last_response_cpsd = None
         self.last_drive_cpsd = None
         self.startup = True
+        # Item 5 (design doc section 3/4/7): gating/publish parameters for
+        # estimators that refit independently every window (currently just
+        # CVA) rather than incrementally averaging like H1/H2/H3/Hv. Not yet
+        # exposed via xlsx/UI -- hardcoded defaults, open item per section 5.
+        self.cva_publish_confidence_threshold = 0.5
+        self.cva_publish_deadband_fraction = 0.5
     
     def initialize_sysid_parameters(self,data : RandomVibrationMetadata):
         self.parameters : RandomVibrationMetadata
@@ -224,6 +230,41 @@ class RandomVibrationDataAnalysisProcess(AbstractSysIDAnalysisProcess):
         if self.startup:
             self.log('Starting Control')
             self.frames = 0
+            if getattr(self.parameters,'sysid_estimator',None) == 'CVA':
+                # Item 5 hardening (2026-08-30, design doc section 13): seed
+                # control_frf/control_coherence/control_frf_condition from
+                # the already-validated system-ID-phase estimate, NOT from
+                # whatever the first live control-phase CVA refit happens to
+                # produce. A live run on 2026-08-30 showed live CVA refits
+                # under closed-loop control are consistently low-confidence
+                # and wildly inconsistent cycle to cycle -- the old
+                # unconditional-first-candidate bootstrap gave that first
+                # live candidate a free pass with no confidence check at
+                # all, and since every later refit was (correctly) rejected
+                # by the gate, nothing ever replaced it -- control ran the
+                # whole test off an unvetted FRF. Seeding from sysid_frf
+                # means the exact same well-supported+meaningfully-different
+                # gate below governs the very first live candidate too, just
+                # like every candidate after it. If sysid_frf is somehow
+                # unavailable (CVA system ID never completed), this leaves
+                # control_frf at None and the gate's existing fallback
+                # (self.control_frf is None) reverts to the old
+                # unconditional-publish behavior rather than deadlocking.
+                self.control_frf = self.sysid_frf
+                # NOTE: self.sysid_coherence (read everywhere else in this
+                # class) is a pre-existing, unrelated bug -- the inherited
+                # AbstractSysIDAnalysisProcess.run_sysid_transfer_function()
+                # actually populates self.coherence (a differently-named
+                # attribute), so self.sysid_coherence is always None here at
+                # runtime regardless of estimator. Not introduced by CVA and
+                # not fixed here (touching the shared base class risks other
+                # environments, e.g. transient_sys_id_environment.py, which
+                # legitimately use self.coherence themselves) -- reading the
+                # attribute that's actually populated instead, so this seed
+                # at least carries the real system-ID coherence rather than
+                # silently seeding None. Worth a real fix separately.
+                self.control_coherence = getattr(self,'coherence',None)
+                self.control_frf_condition = self.sysid_condition
             self.data_out_queue.put([self.drive_cpsd_prediction])
             self.startup = False
         spectral_data = flush_queue(self.data_in_queue)
@@ -231,11 +272,67 @@ class RandomVibrationDataAnalysisProcess(AbstractSysIDAnalysisProcess):
             self.log('Obtained Spectral Data')
             (self.frames,
              self.frequencies,
-             self.control_frf,
-             self.control_coherence,
+             candidate_frf,
+             candidate_coherence,
              self.last_response_cpsd,
              self.last_drive_cpsd,
-             self.control_frf_condition) = spectral_data[-1]
+             candidate_frf_condition) = spectral_data[-1]
+            # Item 5 (design doc section 3/4/7): gated publish. CVA refits
+            # from scratch on every window (no incremental averaging like
+            # H1/H2/H3/Hv), so unconditionally replacing control_frf every
+            # cycle reads ordinary refit-to-refit estimation noise as drift
+            # -- optimal_diagonal_control's own Step 1 burns its budget
+            # revalidating bins that didn't really change, and
+            # optimal_diagonal_control_fast's bit-equality gate never
+            # engages. Hold control_frf/control_coherence/control_frf_condition
+            # literally constant (same object) between updates; only adopt a
+            # new candidate when it is both well-supported (candidate-c
+            # explained-variance coherence-analog median, see design doc
+            # section 10 -- treated as "don't know" rather than "reject" if
+            # unavailable, since it's diagnostic-only, not a hard blocker
+            # per section 7 item 3) and meaningfully different (relative
+            # Frobenius-norm change against a deadband tied to a fraction of
+            # the loaded control law's own frf_update_threshold, mirroring
+            # the convention optimal_diagonal_control already uses
+            # internally for its per-bin drift check). Bootstraps
+            # unconditionally on the first candidate (self.control_frf is
+            # still None) so control never stalls waiting on a gate. Other
+            # estimators (H1/H2/H3/Hv) already produce a slowly-varying,
+            # incrementally-averaged FRF, so they keep the original
+            # publish-every-cycle behavior unchanged.
+            if (getattr(self.parameters,'sysid_estimator',None) == 'CVA'
+                    and self.control_frf is not None and candidate_frf is not None):
+                if candidate_coherence is None:
+                    # Coherence-analog unavailable/disabled this cycle --
+                    # don't gate on it, just fall through to the deadband
+                    # check (same reasoning as spectral_processing.py's
+                    # fit-failure fallback: a missing confidence signal
+                    # should never be treated as low confidence).
+                    confidence = float('nan')
+                    well_supported = True
+                else:
+                    confidence = np.nanmedian(np.real(candidate_coherence))
+                    well_supported = (not np.isfinite(confidence)) or confidence >= self.cva_publish_confidence_threshold
+                delta = np.linalg.norm((candidate_frf - self.control_frf).reshape(-1))
+                baseline = np.linalg.norm(self.control_frf.reshape(-1)) + 1e-30
+                relative_change = delta/baseline
+                update_threshold = getattr(self.control_function,'frf_update_threshold',0.05)
+                deadband = self.cva_publish_deadband_fraction*update_threshold
+                meaningfully_different = relative_change > deadband
+                if well_supported and meaningfully_different:
+                    self.log('CVA publish: confidence={:} relative_change={:0.4f} (deadband={:0.4f}) -- '
+                             'adopting new FRF'.format(confidence,relative_change,deadband))
+                    self.control_frf = candidate_frf
+                    self.control_coherence = candidate_coherence
+                    self.control_frf_condition = candidate_frf_condition
+                else:
+                    self.log('CVA publish gate held: confidence={:} (need >={:0.2f}) relative_change={:0.4f} '
+                             '(deadband={:0.4f}) -- keeping published FRF'.format(
+                                 confidence,self.cva_publish_confidence_threshold,relative_change,deadband))
+            else:
+                self.control_frf = candidate_frf
+                self.control_coherence = candidate_coherence
+                self.control_frf_condition = candidate_frf_condition
             self.gui_update_queue.put((self.environment_name,
                                        ('control_update',
                                         (self.frames,

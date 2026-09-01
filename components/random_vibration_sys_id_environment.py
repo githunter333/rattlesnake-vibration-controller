@@ -119,6 +119,12 @@ class RandomVibrationQueues:
         self.data_for_spectral_computation_queue = mp.Queue()
         self.updated_spectral_quantities_queue = mp.Queue()
         self.cpsd_to_generate_queue = mp.Queue()
+        # Raw, un-windowed time-domain tap for estimators (e.g. CVA) that need
+        # it -- see data_collector.py's acquire() and spectral_processing.py's
+        # _run_cva_processing(). Always created (a Queue costs nothing idle);
+        # only written to / read from when CollectorMetadata.raw_tap_enabled
+        # is True (i.e. the CVA estimator is actually selected).
+        self.raw_data_for_cva_queue = mp.Queue()
         self.log_file_queue = log_file_queue
 
 # %% Metadata
@@ -1513,7 +1519,7 @@ class RandomVibrationUI(AbstractSysIdUI):
         worksheet.cell(19,1,'Exponential Averaging Coefficient:')
         worksheet.cell(19,2,'# Averaging Coefficient for Exponential Averaging (if used)')
         worksheet.cell(20,1,'System ID Estimator:')
-        worksheet.cell(20,2,'# Technique used to compute system ID.  Should be one of H1, H2, H3, or Hv.')
+        worksheet.cell(20,2,'# Technique used to compute system ID.  Should be one of H1, H2, H3, Hv, or CVA.')
         worksheet.cell(21,1,'System ID Level (V RMS):')
         worksheet.cell(21,2,'# RMS Value of Flat Voltage Spectrum used for System Identification.')
         worksheet.cell(22,1,'System ID Signal Type:')
@@ -1743,7 +1749,8 @@ class RandomVibrationEnvironment(AbstractSysIdEnvironment):
             frame_size,
             window,
             response_transformation_matrix = self.environment_parameters.response_transformation_matrix,
-            reference_transformation_matrix = self.environment_parameters.reference_transformation_matrix)
+            reference_transformation_matrix = self.environment_parameters.reference_transformation_matrix,
+            raw_tap_enabled = self.environment_parameters.sysid_estimator == 'CVA')
     
     def get_signal_generation_metadata(self):
         return SignalGenerationMetadata(
@@ -1775,6 +1782,8 @@ class RandomVibrationEnvironment(AbstractSysIdEnvironment):
             frf_estimator = Estimator.H3
         elif self.environment_parameters.sysid_estimator == 'Hv':
             frf_estimator = Estimator.HV
+        elif self.environment_parameters.sysid_estimator == 'CVA':
+            frf_estimator = Estimator.CVA_INNOVATIONS
         num_response_channels = self.environment_parameters.num_response_channels
         num_reference_channels = self.environment_parameters.num_reference_channels
         frequency_spacing = self.environment_parameters.frequency_spacing
@@ -1999,7 +2008,8 @@ def random_vibration_process(environment_name : str,
                                      queue_container.updated_spectral_quantities_queue,
                                      queue_container.environment_command_queue,
                                      queue_container.gui_update_queue,
-                                     queue_container.log_file_queue))
+                                     queue_container.log_file_queue),
+                               kwargs=dict(raw_data_in_queue=queue_container.raw_data_for_cva_queue))
     spectral_proc.start()
     analysis_proc = mp.Process(target=random_data_analysis_process,
                                args=(environment_name,
@@ -2025,7 +2035,8 @@ def random_vibration_process(environment_name : str,
                                        [queue_container.data_for_spectral_computation_queue],
                                        queue_container.environment_command_queue,
                                        queue_container.log_file_queue,
-                                       queue_container.gui_update_queue))
+                                       queue_container.gui_update_queue),
+                                 kwargs=dict(raw_data_out_queues=[queue_container.raw_data_for_cva_queue]))
     
     collection_proc.start()
     process_class = RandomVibrationEnvironment(

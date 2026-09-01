@@ -1205,7 +1205,8 @@ class AbstractSysIdEnvironment(AbstractEnvironment):
             frame_size,
             window,
             response_transformation_matrix = self.environment_parameters.response_transformation_matrix,
-            reference_transformation_matrix = self.environment_parameters.reference_transformation_matrix)
+            reference_transformation_matrix = self.environment_parameters.reference_transformation_matrix,
+            raw_tap_enabled = self.environment_parameters.sysid_estimator == 'CVA')
     
     def get_sysid_spectral_processing_metadata(self,is_noise=False) -> SpectralProcessingMetadata:
         averaging_type = AveragingTypes.LINEAR if self.environment_parameters.sysid_averaging_type == 'Linear' else AveragingTypes.EXPONENTIAL
@@ -1219,6 +1220,8 @@ class AbstractSysIdEnvironment(AbstractEnvironment):
             frf_estimator = Estimator.H3
         elif self.environment_parameters.sysid_estimator == 'Hv':
             frf_estimator = Estimator.HV
+        elif self.environment_parameters.sysid_estimator == 'CVA':
+            frf_estimator = Estimator.CVA_INNOVATIONS
         num_response_channels = self.environment_parameters.num_response_channels
         num_reference_channels = self.environment_parameters.num_reference_channels
         frequency_spacing = self.environment_parameters.sysid_frequency_spacing

@@ -1,0 +1,151 @@
+Session summary -- 2026-09-01
+System: 6-drive / 12-response synthetic frame (examples/sixdrive12resp), CVA-innovations
+live FRF estimation for the sixdrive12resp / optimal_diagonal_control integration.
+No Rattlesnake GUI work today -- this was entirely offline investigation, following up
+on two live control runs from 2026-08-30/31 (see design doc sections 13 and 15) where
+CVA-driven control tracked much worse than H1-driven control.
+
+Starting question from the user: CVA control had large errors (5-7 dB on several
+channels); suspicion that relative inter-channel phase accuracy was the cause; also
+a specific recollection that Wayne Larimore's own CVA work was used for control
+applications, which argued against giving up on the approach.
+
+===============================================================================
+1. LITERATURE CHECK -- CLOSED-LOOP CVA IS REAL, THIS IMPLEMENTATION LACKS THE FIX
+===============================================================================
+Searched for Larimore's actual publications on closed-loop subspace ID (rather than
+relying on recall): "Maximum likelihood subspace identification for linear,
+nonlinear, and closed-loop systems" and "Closed-loop subspace identification with
+innovation estimation" (Larimore), the ADAPTx software, and a 2006 survey (Qin,
+"An overview of subspace identification") that lays out the mechanism precisely.
+
+Mechanism: under feedback, future inputs (Uf) become correlated with the noise term
+in the standard subspace-ID equation, biasing the fit. Larimore's fix (and related
+methods -- Jansson's SSARX, Shi & MacGregor): pre-estimate the future-input effect
+(Hf) via a high-order ARX model, subtract it from the future-output block, THEN do
+the canonical-correlation projection. This is an algorithmic fix, not a dither/
+excitation trick.
+
+Checked globalcva/global_cva_frf.py's global_cva_v2 against this: the past/future
+whitening IS genuine canonical-correlation weighting (real CVA, not disguised
+N4SID), but the future block is raw future outputs with no ARX pre-estimate and no
+subtraction step -- exactly the "naive" formulation the literature says is biased
+under feedback. This gives a mechanistic explanation for the first live-control
+incident (section 13: near-zero-confidence, wildly inconsistent refits during
+control). IMPORTANT SCOPE LIMIT: this only explains fitting DURING control
+(closed loop). It does NOT explain the second live run (section 15), whose FRF was
+fit entirely open-loop before control started.
+
+===============================================================================
+2. RAW-TAP PIPELINE CHECK -- NO IMPLEMENTATION BUG FOUND
+===============================================================================
+Checked data_collector.py::acquire() directly for a channel-order/timing/
+transformation-matrix mismatch between the CVA raw tap and the H1 windowed-FFT
+path (the user's phase-accuracy hypothesis, checked as a possible bug rather than
+just a structural limitation). Both paths are sourced from the exact same
+acquisition_data block, apply identical channel indices, identical transformation
+matrices, and identical test_level normalization -- no decimation stage found
+between the ADC read and either path. global_cva_frf.py::frf_from_ss's discrete-
+to-frequency mapping is the standard textbook formula. No bug found; whatever's
+happening is a property of the fit itself, not the acquisition path.
+
+===============================================================================
+3. DIRECT CVA-VS-H1-VS-GROUND-TRUTH COMPARISON -- THE ACTUAL FINDING
+===============================================================================
+Built an offline comparison (globalcva/cva_vs_h1_phase_comparison.py) matching the
+live configuration as closely as possible: global_cva_innovations (the function
+actually called live, not the plain global_cva_v2 the original validation table
+used), lags=40/rank=66/refine_iters=1, cva_window_seconds=2.0 -- all live defaults
+-- on the same noise-free linear ground-truth system (sdynpy_frame6x12_system.npz,
+confirmed by the user as what was actually loaded live). Computed CVA and H1 FRFs
+against known ground truth, per response channel, magnitude and phase separately.
+
+First pass used full-bandwidth (0-2560 Hz) white noise excitation, matching the
+existing validate_global_cva.py methodology. Result: CVA beat H1 on every one of
+the 8 response channels, both magnitude and phase (mean mag error ~0.6-0.9 dB CVA
+vs ~0.8-1.0 dB H1; mean phase error ~2-6 deg CVA vs ~4-6 deg H1; overall relative
+error CVA~0.07-0.08 vs H1~0.13). This ruled out "CVA is just worse than H1 in
+general" -- if anything the idealized case says the opposite.
+
+Checked the actual live excitation spec: examples/sixdrive12resp/code/
+build_flat_spec_large.py / results/flat_spec_frame6x12.mat. Confirmed via direct
+load: flat 0.001 g^2/Hz, but BAND-LIMITED to 100-1000 Hz, zero elsewhere -- not
+full-bandwidth white noise like the first offline pass used. Reran the identical
+comparison (globalcva/cva_vs_h1_bandlimited.py) with excitation matched exactly to
+this band. Result: CVA collapsed.
+
+  Metric (mean across 8 channels) | CVA, full-BW  | CVA, 100-1000 Hz | H1, 100-1000 Hz
+  Mean magnitude error            | ~0.6-0.9 dB   | ~5.6-6.8 dB      | ~0.8-1.0 dB
+  Mean phase error                | ~2-6 deg      | ~50-59 deg       | ~4-6 deg
+  Overall relative error          | 0.07-0.08     | 1.02-1.35        | 0.12
+
+H1 on the same band-limited data was essentially unaffected (expected -- its
+target band already matched the excited band). CVA's relative error exceeded 1.0
+-- worse than predicting zero. The plot (globalcva/cva_vs_h1_bandlimited.png)
+shows H1 still tracking every resonance/anti-resonance sharply while CVA smooths
+the whole shape out and drifts systematically low above ~600 Hz -- an
+under-identified subspace model, not an isolated artifact.
+
+Checked whether this is a hard cliff or graded: reran with the band widened to
+20-2000 Hz (globalcva/cva_vs_h1_bandlimited_wide.py). CVA partially recovered
+(overall relative error ~0.64-0.65) -- better than 100-1000 Hz but still far short
+of both its own full-bandwidth performance and H1 at the same width. Confirms a
+genuine, graded, dose-response relationship to excitation bandwidth.
+
+===============================================================================
+4. MECHANISM, AND WHY THIS RECONCILES THE USER'S MEMORY OF LARIMORE
+===============================================================================
+H1 estimates each frequency bin independently from local coherent energy --
+restricting excitation to the evaluated band costs it nothing. CVA builds one
+joint state-space realization from a Hankel embedding across lags=40 samples of
+delay; the canonical-correlation whitening needs input persistently exciting
+across the system's FULL dynamic order, not just the band being evaluated,
+because the past/future covariance structure integrates across the whole
+embedded lag window regardless of where the model will be used. Starved of
+energy outside the target band, that covariance becomes too poorly conditioned to
+separate a rank=66 realization, even scored only within the excited band. This is
+a known persistency-of-excitation result in subspace-ID theory, not specific to
+this codebase.
+
+This reconciles the user's memory better than the closed-loop explanation did:
+Larimore's own subspace-ID practice almost certainly used genuinely broadband
+identification excitation (PRBS, multisine, wideband noise) spanning well past
+the eventual control band, because that's what "persistently exciting of
+sufficient order" requires for a subspace method. This Rattlesnake sys-ID phase
+instead reused the exact same 100-1000 Hz control-target spec as the
+identification excitation itself -- correct for H1, and precisely the choice
+that breaks CVA.
+
+===============================================================================
+5. THREE SEPARATE EXPLANATIONS -- KEEP THEM DISTINCT
+===============================================================================
+- Closed-loop bias (section 13): only applies when CVA is fit DURING control.
+  Known literature fix is algorithmic (ARX pre-estimate + subtract), not dither.
+- Sensor-noise sensitivity (noise_injection_sweep.py, section 15): only applies
+  with real measurement noise at realistic levels; irrelevant to every live run
+  so far (noise-free simulated system).
+- Excitation bandwidth (this session): applies any time the identification
+  excitation is narrower than CVA's embedding needs, open- or closed-loop, noisy
+  or not. This is the one that explains section 15's run (pure open-loop,
+  noise-free, static FRF) on its own.
+
+===============================================================================
+NET STATUS / NOT YET DONE
+===============================================================================
+Root cause of section 15's accuracy gap identified and reproduced offline. Not
+yet mapped: the precise bandwidth needed for CVA to reach H1-competitive accuracy
+at lags=40/rank=66 (100-1000 fails badly, 20-2000 partially recovers, full 0-2560
+fully recovers -- crossover not pinned down). Not yet designed or implemented:
+decoupling the sys-ID phase's excitation bandwidth from the control phase's
+target spec (wide broadband probe for identification, narrower 100-1000 Hz spec
+kept for the actual control target). No code changes made this session --
+offline investigation only. This write-up was also appended to
+control_laws/cva_frf_integration_design_2026-08-26.md as section 16.
+
+Scripts/plots added this session (all in globalcva/):
+  cva_vs_h1_phase_comparison.py / .png   -- full-bandwidth CVA vs H1 vs truth
+  cva_vs_h1_bandlimited.py / .png        -- same, with the real 100-1000 Hz spec
+  cva_vs_h1_bandlimited_wide.py          -- same, with a 20-2000 Hz spec
+
+Next session: map the bandwidth/error curve further, then design a widened
+sys-ID excitation spec.

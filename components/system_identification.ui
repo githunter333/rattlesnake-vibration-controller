@@ -182,6 +182,11 @@
             <string>Hv</string>
            </property>
           </item>
+          <item>
+           <property name="text">
+            <string>CVA</string>
+           </property>
+          </item>
          </widget>
         </item>
         <item row="6" column="0">

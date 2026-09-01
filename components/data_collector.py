@@ -217,7 +217,8 @@ class CollectorMetadata:
                  window_parameter_3 = 0,
                  wait_samples = 0,
                  response_transformation_matrix = None,
-                 reference_transformation_matrix = None):
+                 reference_transformation_matrix = None,
+                 raw_tap_enabled = False):
         self.num_channels = num_channels
         self.response_channel_indices = response_channel_indices
         self.reference_channel_indices = reference_channel_indices
@@ -239,6 +240,11 @@ class CollectorMetadata:
         self.response_transformation_matrix = response_transformation_matrix
         self.reference_transformation_matrix = reference_transformation_matrix
         self.wait_samples = wait_samples
+        self.raw_tap_enabled = raw_tap_enabled
+        # raw_tap_enabled: True when the selected FRF estimator (e.g. CVA)
+        # needs raw, un-windowed, causally-ordered time samples rather than
+        # windowed FFT frames -- see DataCollectorProcess.acquire(). False
+        # (default) costs nothing extra for H1/H2/H3/Hv.
         
     def __eq__(self,other):
         try:
@@ -259,7 +265,8 @@ class DataCollectorProcess(AbstractMessageProcess):
                  environment_command_queue : VerboseMessageQueue,
                  log_file_queue : mp.queues.Queue,
                  gui_update_queue : mp.queues.Queue,
-                 environment_name):
+                 environment_name,
+                 raw_data_out_queues : List[mp.queues.Queue] = None):
         """
         Constructs the data collector class
 
@@ -295,6 +302,10 @@ class DataCollectorProcess(AbstractMessageProcess):
         self.test_level = None
         self.data_in_queue = data_in_queue
         self.data_out_queues = data_out_queues
+        # Optional second output path: raw, un-windowed time-domain samples
+        # (see CollectorMetadata.raw_tap_enabled and acquire() below). Empty
+        # by default -- existing H1/H2/H3/Hv environments are unaffected.
+        self.raw_data_out_queues = raw_data_out_queues if raw_data_out_queues is not None else []
         if DEBUG:
             self.received_data_index = 0
         
@@ -306,6 +317,8 @@ class DataCollectorProcess(AbstractMessageProcess):
         # Flush the outputs to make sure that there's nothing hanging out on
         # the queue when we start up.
         for queue in self.data_out_queues:
+            flush_queue(queue)
+        for queue in self.raw_data_out_queues:
             flush_queue(queue)
         self.collector_metadata = data
         self.frame_buffer = FrameBuffer(
@@ -401,6 +414,30 @@ class DataCollectorProcess(AbstractMessageProcess):
 #            self.log('No Incoming Data!')
             self.command_queue.put(self.process_name,(DataCollectorCommands.ACQUIRE,None))
             return
+        # Raw, un-windowed time-domain tap for estimators (e.g. CVA) that need
+        # causally-ordered raw samples rather than windowed FFT frames. Tapped
+        # from the raw acquisition block itself -- BEFORE FrameBuffer's
+        # possibly-overlapping analysis-frame chunking below -- so consecutive
+        # pushes are genuinely contiguous, non-duplicated, correctly-ordered
+        # samples. (Concatenating FrameBuffer's overlapping analysis frames
+        # instead would re-visit the same samples out of order and corrupt
+        # the lag/Hankel structure a subspace method like CVA relies on.)
+        # Skipped during a level-ramp skip window for the same reason H1
+        # frames are skipped then: transient, not-yet-settled data. Zero cost
+        # when raw_tap_enabled is False (the default for H1/H2/H3/Hv).
+        if (self.collector_metadata.raw_tap_enabled and self.raw_data_out_queues
+                and self.skip_frames == 0 and self.test_level):
+            raw = np.copy(acquisition_data)  # already (num_channels, num_samples), see FrameBuffer.add_data
+            raw_response = raw[self.collector_metadata.response_channel_indices]
+            raw_reference = raw[self.collector_metadata.reference_channel_indices]
+            if self.collector_metadata.response_transformation_matrix is not None:
+                raw_response = self.collector_metadata.response_transformation_matrix@raw_response
+            if self.collector_metadata.reference_transformation_matrix is not None:
+                raw_reference = self.collector_metadata.reference_transformation_matrix@raw_reference
+            raw_response = raw_response/self.test_level
+            raw_reference = raw_reference/self.test_level
+            for queue in self.raw_data_out_queues:
+                queue.put((raw_response,raw_reference))
         # Add data to buffer
         self.log('Putting Data to Buffer')
         output_frames = self.frame_buffer.add_data_get_frame(acquisition_data)
@@ -487,6 +524,8 @@ class DataCollectorProcess(AbstractMessageProcess):
         self.log('Stopping Data Collection')
         for queue in self.data_out_queues:
             flush_queue(queue)
+        for queue in self.raw_data_out_queues:
+            flush_queue(queue)
         self.command_queue.flush(self.process_name)
         self.frame_buffer.reset_trigger()
         self.environment_command_queue.put(self.process_name,(DataCollectorCommands.SHUTDOWN_ACHIEVED,None))
@@ -512,7 +551,8 @@ def data_collector_process(environment_name : str,
                            environment_command_queue : VerboseMessageQueue,
                            log_file_queue : mp.queues.Queue,
                            gui_update_queue : mp.queues.Queue,
-                           process_name : str = None):
+                           process_name : str = None,
+                           raw_data_out_queues : List[mp.queues.Queue] = None):
     """Random vibration data collector process function called by multiprocessing
     
     This function defines the Random Vibration Data Collector process that
@@ -532,6 +572,7 @@ def data_collector_process(environment_name : str,
         data_out_queues,
         environment_command_queue,
         log_file_queue,
-        gui_update_queue, environment_name)
+        gui_update_queue, environment_name,
+        raw_data_out_queues = raw_data_out_queues)
     
     data_collector_instance.run()

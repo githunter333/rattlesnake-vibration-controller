@@ -23,12 +23,34 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 import multiprocessing as mp
-from .utilities import (flush_queue,DataAcquisitionParameters,VerboseMessageQueue,GlobalCommands)
+from .utilities import (flush_queue,DataAcquisitionParameters,VerboseMessageQueue,GlobalCommands,
+                        load_python_module)
 import scipy.signal as sig
 import numpy as np
 from enum import Enum
 from .abstract_message_process import AbstractMessageProcess
 import time
+import os
+
+# Set True to enable spectral_processing.py's CVA raw-data capture hook
+# (dumps the raw sys-ID response/reference buffers + resulting FRF to
+# examples/sixdrive12resp/results/cva_captures/latest_cva_sysid_capture.npz
+# on every successful CVA fit, for offline verification -- see the comment
+# at the capture site in _run_cva_processing). Off has zero cost/behavior
+# change; on writes one small side file per fit.
+CVA_CAPTURE_RAW_DATA = True
+
+# Set True to enable spectral_processing.py's H1/H2/H3/HV raw-FRF capture
+# hook (dumps the resulting FRF + frequencies + underlying cross/auto
+# spectral matrices to examples/sixdrive12resp/results/cva_captures/
+# latest_h1_sysid_capture.npz on every successful non-CVA FRF computation,
+# for offline verification against ground truth -- see the comment at the
+# capture site in run_spectral_processing, right before the FRF is put on
+# data_out_queue). Off has zero cost/behavior change; on writes one small
+# side file per fit. Named "h1" for brevity but fires for whichever
+# estimator (H1/H2/H3/HV) is actually selected -- check the "estimator"
+# field in the saved file.
+H1_CAPTURE_FRF = True
 
 WAIT_TIME = 0.05
 
@@ -50,6 +72,7 @@ class Estimator(Enum):
     H2 = 1
     H3 = 2
     HV = 3
+    CVA_INNOVATIONS = 4
 
 class SpectralProcessingMetadata():
     def __init__(self,
@@ -64,7 +87,20 @@ class SpectralProcessingMetadata():
                  compute_cpsd = True,
                  compute_frf = True,
                  compute_coherence = True,
-                 compute_apsd = True):
+                 compute_apsd = True,
+                 cva_lags = 40,
+                 cva_rank = 66,
+                 cva_window_seconds = 2.0,
+                 cva_refine_iters = 1,
+                 cva_refit_interval_seconds = 1.0):
+        # cva_* : only consulted when frf_estimator == Estimator.CVA_INNOVATIONS.
+        # Defaults are the offline-validated settings for the 6-drive/8-response
+        # sixdrive12resp bench system (globalcva/ sweep results); per the design
+        # doc's "not yet validated" note, these do NOT automatically transfer to
+        # a different channel count -- a production system needs its own sweep.
+        # cva_refit_interval_seconds is a simple wall-clock throttle (this pass
+        # only -- real gating/publish logic is a separate, not-yet-built piece)
+        # so a live CVA fit doesn't re-run every ~50ms polling cycle.
         self.averaging_type = averaging_type
         self.averages = averages
         self.exponential_averaging_coefficient = exponential_averaging_coefficient
@@ -78,6 +114,11 @@ class SpectralProcessingMetadata():
         self.compute_frf = compute_frf
         self.compute_coherence = compute_coherence
         self.compute_apsd = compute_apsd
+        self.cva_lags = cva_lags
+        self.cva_rank = cva_rank
+        self.cva_window_seconds = cva_window_seconds
+        self.cva_refine_iters = cva_refine_iters
+        self.cva_refit_interval_seconds = cva_refit_interval_seconds
 
     def __eq__(self,other):
         try:
@@ -132,7 +173,8 @@ class SpectralProcessingProcess(AbstractMessageProcess):
                  environment_command_queue : VerboseMessageQueue,
                  gui_update_queue : mp.queues.Queue,
                  log_file_queue : mp.queues.Queue,
-                 environment_name : str):
+                 environment_name : str,
+                 raw_data_in_queue : mp.queues.Queue = None):
         """
         Constructor for the FRF Computation Process
         
@@ -174,6 +216,24 @@ class SpectralProcessingProcess(AbstractMessageProcess):
         self.reference_fft = None
         self.spectral_processing_parameters = None
         self.frames_computed = 0
+        # CVA (Estimator.CVA_INNOVATIONS) state -- unused, zero cost, for any
+        # other estimator. raw_data_in_queue carries (raw_response,raw_reference)
+        # un-windowed time blocks from DataCollectorProcess's raw tap (see
+        # data_collector.py); the rolling buffers below accumulate them into
+        # the sliding window global_cva_innovations fits.
+        self.raw_data_in_queue = raw_data_in_queue
+        self._cva_response_buffer = None   # (num_response_channels, N) rolling raw samples
+        self._cva_reference_buffer = None  # (num_reference_channels, N)
+        self._cva_last_fit_wall_time = 0.0
+        self._cva_module = None            # lazily-loaded globalcva/global_cva_frf.py
+        # Last successfully-fit FRF/coherence/condition, reused as a fallback
+        # on a failed fit (e.g. during the zero-drive noise-floor phase,
+        # where CVA's Hankel/covariance matrices are exactly singular --
+        # expected and harmless, see _run_cva_processing). None until the
+        # first successful fit.
+        self._cva_last_frf = None
+        self._cva_last_coherence = None
+        self._cva_last_condition = None
            
     def initialize_parameters(self,data : SpectralProcessingMetadata):
         """Initializes the signal processing parameters from the environment.
@@ -206,6 +266,12 @@ class SpectralProcessingProcess(AbstractMessageProcess):
         if reshape_arrays:
             self.log('Initializing Empty Arrays')
             self.frames_computed = 0
+            self._cva_response_buffer = None
+            self._cva_reference_buffer = None
+            self._cva_last_fit_wall_time = 0.0
+            self._cva_last_frf = None
+            self._cva_last_coherence = None
+            self._cva_last_condition = None
             self.response_spectral_matrix = None
             self.reference_spectral_matrix = None
             self.reference_response_spectral_matrix = None
@@ -243,6 +309,9 @@ class SpectralProcessingProcess(AbstractMessageProcess):
             ``command_map``
 
         """
+        if (self.spectral_processing_parameters is not None
+                and self.spectral_processing_parameters.frf_estimator == Estimator.CVA_INNOVATIONS):
+            return self._run_cva_processing(data)
         data = flush_queue(self.data_in_queue,timeout = WAIT_TIME)
         if len(data) == 0:
             time.sleep(WAIT_TIME)
@@ -495,13 +564,291 @@ class SpectralProcessingProcess(AbstractMessageProcess):
             response_spectral_matrix = None
             reference_spectral_matrix = None
         frequencies = np.arange(self.spectral_processing_parameters.num_frequency_lines)*self.spectral_processing_parameters.frequency_spacing
+        # --- Raw-FRF capture for offline verification (2026-09-03) ---
+        # Companion to the CVA_CAPTURE_RAW_DATA hook above, for the H1/H2/
+        # H3/HV path: dumps the just-computed FRF (whichever estimator is
+        # selected) so it can be checked against ground truth offline,
+        # the same way the CVA capture is checked -- e.g. to test whether
+        # raising Integration Oversampling changes the *plant simulation's*
+        # own fidelity (see design doc section 17), independent of which
+        # FRF estimator is in use. Safe to leave on -- pure side file
+        # write, no effect on control-path behavior.
+        if H1_CAPTURE_FRF and frf is not None:
+            try:
+                capture_dir = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    'examples', 'sixdrive12resp', 'results', 'cva_captures')
+                os.makedirs(capture_dir, exist_ok=True)
+                np.savez(
+                    os.path.join(capture_dir, 'latest_h1_sysid_capture.npz'),
+                    frequencies=frequencies,
+                    frf=frf,
+                    estimator=self.spectral_processing_parameters.frf_estimator.name,
+                    frames=frames,
+                    sample_rate=self.spectral_processing_parameters.sample_rate,
+                    response_reference_spectral_matrix=(
+                        self.response_reference_spectral_matrix
+                        if self.spectral_processing_parameters.requires_spectral_reference_response
+                        else np.array([])),
+                    reference_spectral_matrix=(
+                        self.reference_spectral_matrix
+                        if self.spectral_processing_parameters.requires_full_spectral_reference
+                        else np.array([])),
+                    capture_wall_time=time.time())
+                self.log('H1/H2/H3/HV raw-FRF capture written to {:}'.format(capture_dir))
+            except Exception as exc:
+                self.log('H1 raw-FRF capture failed ({!r}); continuing without it'.format(exc))
         self.log('Sending Updated Spectral Data')
         self.data_out_queue.put((frames,frequencies,frf,coherence,
                                  response_spectral_matrix,
                                  reference_spectral_matrix,frf_condition))
         # Keep running
         self.command_queue.put(self.process_name,(SpectralProcessingCommands.RUN_SPECTRAL_PROCESSING,None))
-        
+
+    # ------------------------------------------------------------------
+    # CVA-innovations estimator branch (design doc section 7 items 1/2/4).
+    # Reached only when frf_estimator == Estimator.CVA_INNOVATIONS; the
+    # H1/H2/H3/HV path above is completely unmodified otherwise.
+    # ------------------------------------------------------------------
+    def _load_cva_module(self):
+        """Lazily load globalcva/global_cva_frf.py by path. globalcva/ isn't
+        a package (no __init__.py) -- reuses load_python_module, the same
+        runtime-loader utility already used elsewhere in this codebase for
+        loading control laws by path, rather than inventing a new sys.path
+        convention."""
+        if self._cva_module is None:
+            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            self._cva_module = load_python_module(
+                os.path.join(repo_root,'globalcva','global_cva_frf.py'))
+        return self._cva_module
+
+    def _cva_explained_variance_coherence(self,frf):
+        """Coherence-analog candidate (c) from cva_frf_integration_design's
+        section 10 ("how much of the total response is explained by the FRF
+        times the input?"): block-wise prediction residual vs actual
+        response. Upper-bounded at 1 by construction for ANY H -- no
+        per-bin-optimality assumption needed, unlike substituting H into
+        Rattlesnake's H1-derived multiple-coherence formula above (section
+        10 found that substitution unbounded even for the exact true
+        system H, not just CVA's). Clipped to [0,1]; a negative raw value
+        (model worse than predicting zero at that bin/channel) is
+        legitimate signal, not a bug, but callers/GUI expect [0,1] like the
+        H1/H2/H3/HV coherence field.
+
+        Reuses the SAME nperseg as the live frequency grid (see
+        _run_cva_processing) so frf -- already evaluated on that grid --
+        can be used directly with no re-interpolation."""
+        params = self.spectral_processing_parameters
+        nperseg = 2*(params.num_frequency_lines-1)
+        noverlap = nperseg//2
+        win = sig.get_window('hann',nperseg)
+        step = nperseg-noverlap
+        n = self._cva_response_buffer.shape[-1]
+        starts = list(range(0,n-nperseg+1,step))
+        if not starts:
+            return None
+        num_reference = self._cva_reference_buffer.shape[0]
+        num_response = self._cva_response_buffer.shape[0]
+        Uf = np.zeros((len(starts),num_reference,nperseg//2+1),dtype=complex)
+        Yf = np.zeros((len(starts),num_response,nperseg//2+1),dtype=complex)
+        for bi,st in enumerate(starts):
+            useg = self._cva_reference_buffer[:,st:st+nperseg]
+            yseg = self._cva_response_buffer[:,st:st+nperseg]
+            useg = useg-useg.mean(axis=1,keepdims=True)
+            yseg = yseg-yseg.mean(axis=1,keepdims=True)
+            Uf[bi] = np.fft.rfft(useg*win[np.newaxis,:],axis=1)
+            Yf[bi] = np.fft.rfft(yseg*win[np.newaxis,:],axis=1)
+        Yhat = np.einsum('fij,bjf->bif',frf,Uf)
+        E = Yf-Yhat
+        Gee = np.mean(np.abs(E)**2,axis=0)   # (num_response, F)
+        Gyy = np.mean(np.abs(Yf)**2,axis=0)  # (num_response, F)
+        Gyy_safe = np.where(Gyy == 0,1.0,Gyy)
+        coh = np.clip(1.0-(Gee/Gyy_safe),0.0,1.0)
+        return coh.T  # (F, num_response) -- matches the H1/H2/H3/HV coherence shape
+
+    def _cva_diagonal_cpsd(self):
+        """Lightweight per-channel (diagonal-only) Welch PSD of the raw CVA
+        buffer, embedded into (F,M,M)/(F,N,N) matrices with zero off-
+        diagonal cross-terms, purely so downstream code that expects the
+        H1/H2/H3/HV full-matrix shape (GUI CPSD display, and any control
+        law's sysid_response_cpsd/sysid_reference_cpsd argument -- see
+        control_laws.py's match_coherence_phase) doesn't crash on a shape
+        mismatch while CVA is selected. This is NOT the full cross-channel
+        matrix H1/H2/H3/Hv produce -- known, documented simplification for
+        this pass: a control law's buzz-baseline warm-start would see
+        uncorrelated (diagonal-only) drive structure rather than the real
+        measured cross-correlation, since off-diagonal terms are zero."""
+        params = self.spectral_processing_parameters
+        nperseg = 2*(params.num_frequency_lines-1)
+        _,response_psd = sig.welch(self._cva_response_buffer,fs=params.sample_rate,
+                                   nperseg=nperseg,axis=-1)
+        _,reference_psd = sig.welch(self._cva_reference_buffer,fs=params.sample_rate,
+                                    nperseg=nperseg,axis=-1)
+        response_psd = response_psd.T   # (F, num_response)
+        reference_psd = reference_psd.T # (F, num_reference)
+        F = response_psd.shape[0]
+        response_matrix = np.zeros((F,response_psd.shape[1],response_psd.shape[1]),dtype=complex)
+        reference_matrix = np.zeros((F,reference_psd.shape[1],reference_psd.shape[1]),dtype=complex)
+        ridx = np.arange(response_psd.shape[1])
+        fidx = np.arange(reference_psd.shape[1])
+        response_matrix[:,ridx,ridx] = response_psd
+        reference_matrix[:,fidx,fidx] = reference_psd
+        return response_matrix,reference_matrix
+
+    def _run_cva_processing(self,data):
+        """CVA-innovations estimator branch. Unlike H1/H2/H3/HV, which
+        operate on windowed FFT frames accumulated into spectral matrices,
+        CVA needs raw, un-windowed, causally-ordered time samples -- these
+        arrive on self.raw_data_in_queue (the raw tap in data_collector.py's
+        acquire(), gated by CollectorMetadata.raw_tap_enabled). Maintains a
+        rolling window of raw samples, refits on a wall-clock throttle
+        (cva_refit_interval_seconds -- a simple stand-in for real gating/
+        publish logic, which is a separate, not-yet-built piece; see design
+        doc section 7 item 5), and emits the SAME output tuple shape as the
+        H1/H2/H3/HV path so RandomVibrationDataAnalysisProcess needs no
+        changes (design doc section 7 item 2)."""
+        params = self.spectral_processing_parameters
+        if self.raw_data_in_queue is None:
+            self.log('CVA_INNOVATIONS selected but raw_data_in_queue is not wired up -- '
+                     'no raw data can arrive. Idling.')
+            time.sleep(WAIT_TIME)
+            self.command_queue.put(self.process_name,(SpectralProcessingCommands.RUN_SPECTRAL_PROCESSING,None))
+            return
+        new_blocks = flush_queue(self.raw_data_in_queue,timeout=WAIT_TIME)
+        if new_blocks:
+            new_response = np.concatenate([b[0] for b in new_blocks],axis=-1)
+            new_reference = np.concatenate([b[1] for b in new_blocks],axis=-1)
+            if self._cva_response_buffer is None:
+                self._cva_response_buffer = new_response
+                self._cva_reference_buffer = new_reference
+            else:
+                self._cva_response_buffer = np.concatenate(
+                    (self._cva_response_buffer,new_response),axis=-1)
+                self._cva_reference_buffer = np.concatenate(
+                    (self._cva_reference_buffer,new_reference),axis=-1)
+            window_samples = int(params.cva_window_seconds*params.sample_rate)
+            if self._cva_response_buffer.shape[-1] > window_samples:
+                self._cva_response_buffer = self._cva_response_buffer[...,-window_samples:]
+                self._cva_reference_buffer = self._cva_reference_buffer[...,-window_samples:]
+
+        window_samples = int(params.cva_window_seconds*params.sample_rate)
+        if (self._cva_response_buffer is None
+                or self._cva_response_buffer.shape[-1] < window_samples):
+            have = 0 if self._cva_response_buffer is None else self._cva_response_buffer.shape[-1]
+            self.log('CVA buffer filling: {:}/{:} samples'.format(have,window_samples))
+            time.sleep(WAIT_TIME)
+            self.command_queue.put(self.process_name,(SpectralProcessingCommands.RUN_SPECTRAL_PROCESSING,None))
+            return
+
+        now = time.time()
+        if now-self._cva_last_fit_wall_time < params.cva_refit_interval_seconds:
+            time.sleep(WAIT_TIME)
+            self.command_queue.put(self.process_name,(SpectralProcessingCommands.RUN_SPECTRAL_PROCESSING,None))
+            return
+
+        frequencies = np.arange(params.num_frequency_lines)*params.frequency_spacing
+        dt = 1.0/params.sample_rate
+        self._cva_last_fit_wall_time = now
+        try:
+            cva = self._load_cva_module()
+            fit_time = time.time()
+            result = cva.global_cva_innovations(
+                self._cva_response_buffer,self._cva_reference_buffer,
+                lags=params.cva_lags,tol=1e-10,rank=params.cva_rank,
+                refine_iters=params.cva_refine_iters)
+            frf = cva.frf_from_ss(result['A'],result['B'],result['C'],result['D'],frequencies,dt)
+            self.log('Computed CVA FRF in {:0.2f} seconds ({:} samples, lags={:}, rank={:})'.format(
+                time.time()-fit_time,self._cva_response_buffer.shape[-1],params.cva_lags,params.cva_rank))
+            self._cva_last_frf = frf
+            self._cva_last_condition = np.linalg.cond(frf)
+            # --- Raw-data capture for offline verification (2026-09-02) ---
+            # Temporarily enabled to directly answer: is the LIVE CVA fit as
+            # accurate as the offline-validated method, on the SAME raw data?
+            # (design doc section 16's "band-limited excitation" root cause
+            # was found to be wrong -- get_sysid_signal_generator() hardcodes
+            # low/high_frequency_cutoff=None, i.e. the live sys-ID excitation
+            # is already full-bandwidth regardless of the Specification File.
+            # That reopens the question this capture is meant to settle.)
+            # Overwrites a single file each successful fit, so once sys-ID
+            # completes it holds the LAST (most-averaged, about-to-be-used-
+            # for-control) fit's raw data + resulting FRF. Safe to leave in
+            # place -- pure side file write, no effect on control-path
+            # behavior -- but flip CVA_CAPTURE_RAW_DATA to False once this
+            # investigation is done.
+            if CVA_CAPTURE_RAW_DATA:
+                try:
+                    capture_dir = os.path.join(
+                        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        'examples', 'sixdrive12resp', 'results', 'cva_captures')
+                    os.makedirs(capture_dir, exist_ok=True)
+                    np.savez(
+                        os.path.join(capture_dir, 'latest_cva_sysid_capture.npz'),
+                        response_buffer=self._cva_response_buffer,
+                        reference_buffer=self._cva_reference_buffer,
+                        frequencies=frequencies,
+                        frf=frf,
+                        A=result['A'], B=result['B'], C=result['C'], D=result['D'],
+                        sample_rate=params.sample_rate,
+                        cva_lags=params.cva_lags,
+                        cva_rank=params.cva_rank,
+                        cva_refine_iters=params.cva_refine_iters,
+                        cva_window_seconds=params.cva_window_seconds,
+                        capture_wall_time=now)
+                    self.log('CVA raw-data capture written to {:}'.format(capture_dir))
+                except Exception as exc:
+                    self.log('CVA raw-data capture failed ({!r}); continuing without it'.format(exc))
+            if params.compute_coherence:
+                try:
+                    self._cva_last_coherence = self._cva_explained_variance_coherence(frf)
+                except Exception as exc:
+                    self.log('CVA coherence-analog failed ({!r}); publishing FRF without coherence'.format(exc))
+                    self._cva_last_coherence = None
+        except Exception as exc:
+            # EXPECTED and harmless during the zero-drive noise-floor phase --
+            # CVA's Hankel/covariance matrices are exactly singular with no
+            # persistent excitation on the reference channels (H1's pinv
+            # degrades gracefully there instead of raising). Still fall
+            # through to the emit below with the LAST successful frf/
+            # coherence/condition (None on the very first failure, which is
+            # fine -- run_sysid_noise() doesn't use them) -- emitting nothing
+            # here would leave self.frames stuck at 0 in
+            # AbstractSysIDAnalysisProcess forever, since that only advances
+            # when spectral_data actually arrives (bug found live 2026-08-29:
+            # noise-floor phase hung indefinitely, Start stayed grayed out).
+            self.log('CVA fit failed ({!r}); publishing last known-good FRF/coherence '
+                     '(None if none yet) so frame-count-driven phase transitions '
+                     '(e.g. noise-floor completion) are not blocked'.format(exc))
+
+        response_spectral_matrix = None
+        reference_spectral_matrix = None
+        if params.compute_cpsd or params.compute_apsd:
+            try:
+                response_spectral_matrix,reference_spectral_matrix = self._cva_diagonal_cpsd()
+            except Exception as exc:
+                self.log('CVA CPSD/APSD display computation failed ({!r})'.format(exc))
+
+        frf = self._cva_last_frf
+        coherence = self._cva_last_coherence
+        frf_condition = self._cva_last_condition
+        # H1/H2/H3/HV report "frames" as the number of averages actually
+        # accumulated so far, and AbstractSysIDAnalysisProcess.run_sysid_noise/
+        # run_sysid_transfer_function gate phase completion on an EXACT match
+        # against the configured target (sysid_noise_averages/sysid_averages/
+        # frames_in_cpsd, all of which flow into params.averages -- see
+        # get_sysid_spectral_processing_metadata/get_spectral_processing_metadata).
+        # CVA doesn't accumulate an incremental average the same way -- each
+        # completed window IS the estimate -- so report the target directly
+        # once we've reached one full window+throttle cycle; using the raw
+        # sample count here (an earlier version of this method did) could
+        # never satisfy that exact-equality check and would hang the same way
+        # the missing-emit bug above did.
+        frames = params.averages
+        self.log('Sending Updated CVA Spectral Data')
+        self.data_out_queue.put((frames,frequencies,frf,coherence,
+                                 response_spectral_matrix,
+                                 reference_spectral_matrix,frf_condition))
+        self.command_queue.put(self.process_name,(SpectralProcessingCommands.RUN_SPECTRAL_PROCESSING,None))
+
     def clear_spectral_processing(self,data):
         """Clears all data in the buffer so the FRF starts fresh from new data
 
@@ -517,6 +864,12 @@ class SpectralProcessingProcess(AbstractMessageProcess):
         self.response_spectral_matrix = None
         self.reference_spectral_matrix = None
         self.response_reference_spectral_matrix = None
+        self._cva_response_buffer = None
+        self._cva_reference_buffer = None
+        self._cva_last_fit_wall_time = 0.0
+        self._cva_last_frf = None
+        self._cva_last_coherence = None
+        self._cva_last_condition = None
         if self.spectral_processing_parameters.averaging_type == AveragingTypes.LINEAR:
             self.response_fft[:] = np.nan
             self.reference_fft[:] = np.nan
@@ -551,7 +904,8 @@ def spectral_processing_process(environment_name : str,
                                environment_command_queue : VerboseMessageQueue,
                                gui_update_queue : mp.queues.Queue,
                                log_file_queue : mp.queues.Queue,
-                               process_name = None
+                               process_name = None,
+                               raw_data_in_queue : mp.queues.Queue = None
                                ):
     """Function passed to multiprocessing as the FRF computation process
     
@@ -584,5 +938,6 @@ def spectral_processing_process(environment_name : str,
         data_out_queue,
         environment_command_queue,
         gui_update_queue,
-        log_file_queue, environment_name)
+        log_file_queue, environment_name,
+        raw_data_in_queue = raw_data_in_queue)
     spectral_processing_instance.run()
