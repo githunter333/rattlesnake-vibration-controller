@@ -140,7 +140,8 @@ class RandomVibrationMetadata(AbstractSysIdMetadata):
                  output_channel_indices,
                  specification_frequency_lines,specification_cpsd_matrix,
                  specification_warning_matrix,specification_abort_matrix,
-                 response_transformation_matrix,output_transformation_matrix):
+                 response_transformation_matrix,output_transformation_matrix,
+                 control_averaging_type='Linear',control_averaging_coefficient=0.0):
         self.number_of_channels = number_of_channels
         self.sample_rate = sample_rate
         self.samples_per_frame = samples_per_frame
@@ -165,6 +166,16 @@ class RandomVibrationMetadata(AbstractSysIdMetadata):
         self.specification_warning_matrix = specification_warning_matrix
         self.specification_abort_matrix = specification_abort_matrix
         self.allow_automatic_aborts = allow_automatic_aborts
+        # Averaging used for the CONTROL-phase FRF/CPSD estimates (as
+        # distinct from AbstractSysIdMetadata's sysid_averaging_type /
+        # sysid_exponential_averaging_coefficient, which only govern the
+        # System ID phase). Added 2026-09-02: get_spectral_processing_metadata
+        # previously hardcoded Linear/0 here unconditionally, so there was no
+        # way to run the live control loop's own FRF tracking with
+        # exponential averaging even though the System ID phase supported
+        # it -- see that function for the full story.
+        self.control_averaging_type = control_averaging_type
+        self.control_averaging_coefficient = control_averaging_coefficient
     
     @property
     def sample_rate(self):
@@ -285,6 +296,8 @@ class RandomVibrationMetadata(AbstractSysIdMetadata):
         netcdf_group_handle.control_python_function_type = self.control_python_function_type
         netcdf_group_handle.control_python_function_parameters = self.control_python_function_parameters
         netcdf_group_handle.allow_automatic_aborts = 1 if self.allow_automatic_aborts else 0
+        netcdf_group_handle.control_averaging_type = self.control_averaging_type
+        netcdf_group_handle.control_averaging_coefficient = self.control_averaging_coefficient
         # Specifications
         netcdf_group_handle.createDimension('fft_lines',self.fft_lines)
         netcdf_group_handle.createDimension('two',2)
@@ -846,7 +859,10 @@ class RandomVibrationUI(AbstractSysIdUI):
             specification_cpsd_matrix = self.specification_cpsd_matrix,
             specification_warning_matrix = self.specification_warning_matrix,
             specification_abort_matrix = self.specification_abort_matrix,
-            allow_automatic_aborts = self.definition_widget.auto_abort_checkbox.isChecked())
+            allow_automatic_aborts = self.definition_widget.auto_abort_checkbox.isChecked(),
+            control_averaging_type=self.definition_widget.control_averaging_scheme_selector.itemText(
+                self.definition_widget.control_averaging_scheme_selector.currentIndex()),
+            control_averaging_coefficient=self.definition_widget.control_averaging_coefficient_selector.value())
     
     def initialize_environment(self) -> RandomVibrationMetadata:
         """
@@ -1317,6 +1333,14 @@ class RandomVibrationUI(AbstractSysIdUI):
         # Comboboxes
         self.definition_widget.cola_window_selector.setCurrentIndex(self.definition_widget.cola_window_selector.findText(group.cola_window))
         self.definition_widget.cpsd_computation_window_selector.setCurrentIndex(self.definition_widget.cpsd_computation_window_selector.findText(group.cpsd_window))
+        # Control-phase averaging (added 2026-09-02; older streaming files
+        # won't have these attributes, so fall back to the pre-existing
+        # hardcoded Linear/0 behavior rather than raising).
+        control_averaging_type = getattr(group,'control_averaging_type','Linear')
+        control_averaging_coefficient = getattr(group,'control_averaging_coefficient',0.0)
+        self.definition_widget.control_averaging_scheme_selector.setCurrentIndex(
+            self.definition_widget.control_averaging_scheme_selector.findText(control_averaging_type))
+        self.definition_widget.control_averaging_coefficient_selector.setValue(control_averaging_coefficient)
         # Control channels
         for i in group.variables['control_channel_indices'][...]:
             item = self.definition_widget.control_channels_selector.item(i)
@@ -1539,6 +1563,18 @@ class RandomVibrationUI(AbstractSysIdUI):
         worksheet.cell(29,2,'# Transformation matrix to apply to the response channels.  Type None if there is none.  Otherwise, make this a 2D array in the spreadsheet and move the Output Transformation Matrix line down so it will fit.  The number of columns should be the number of physical control channels.')
         worksheet.cell(30,1,'Output Transformation Matrix:')
         worksheet.cell(30,2,'# Transformation matrix to apply to the outputs.  Type None if there is none.  Otherwise, make this a 2D array in the spreadsheet.  The number of columns should be the number of physical output channels in the environment.')
+        # Control-phase averaging (added 2026-09-02). Deliberately placed at
+        # column 25/26 rather than appended as row 31+: the Response/Output
+        # Transformation Matrix fields above (rows 29-30) search downward
+        # with no fixed row limit to find their data, so any new row below
+        # 28 in a low column number could collide with transformation-matrix
+        # data on a profile with enough channels. Columns 25/26 are outside
+        # that matrix data's column range (column 2+channel_count) for any
+        # realistic channel count here, so this is safe regardless of row.
+        worksheet.cell(1,25,'Control Averaging Type:')
+        worksheet.cell(1,26,'# Averaging Type used for the CONTROL phase (live FRF/CPSD tracking while controlling). Should be Linear or Exponential. Independent of "System ID Averaging" above, which only applies during the System ID phase.')
+        worksheet.cell(2,25,'Control Averaging Coefficient:')
+        worksheet.cell(2,26,'# Averaging Coefficient for Exponential control averaging (if used)')
     
     def set_parameters_from_template(self, worksheet : openpyxl.worksheet.worksheet.Worksheet):
         """
@@ -1575,6 +1611,17 @@ class RandomVibrationUI(AbstractSysIdUI):
         self.select_python_module(None,worksheet.cell(12,2).value)
         self.definition_widget.control_function_input.setCurrentIndex(self.definition_widget.control_function_input.findText(worksheet.cell(13,2).value))
         self.definition_widget.control_parameters_text_input.setText('' if worksheet.cell(14,2).value is None else str(worksheet.cell(14,2).value))
+        # Control-phase averaging (added 2026-09-02; see create_environment_template
+        # for why this lives at column 25/26 instead of a new row). Older
+        # template files won't have these cells -- fall back to the
+        # pre-existing hardcoded Linear/0 behavior rather than raising.
+        control_averaging_type_value = worksheet.cell(1,26).value
+        control_averaging_type_value = control_averaging_type_value if isinstance(control_averaging_type_value,str) and control_averaging_type_value.strip() != '' else 'Linear'
+        self.definition_widget.control_averaging_scheme_selector.setCurrentIndex(
+            self.definition_widget.control_averaging_scheme_selector.findText(control_averaging_type_value))
+        control_averaging_coefficient_value = worksheet.cell(2,26).value
+        self.definition_widget.control_averaging_coefficient_selector.setValue(
+            0.0 if control_averaging_coefficient_value is None else float(control_averaging_coefficient_value))
         column_index = 2
         while True:
             value = worksheet.cell(15,column_index).value
@@ -1771,9 +1818,21 @@ class RandomVibrationEnvironment(AbstractSysIdEnvironment):
             self.data_acquisition_parameters.output_oversample)
     
     def get_spectral_processing_metadata(self):
-        averaging_type = AveragingTypes.LINEAR
+        # Fixed 2026-09-02: this used to hardcode AveragingTypes.LINEAR and
+        # exponential_averaging_coefficient=0 unconditionally, regardless of
+        # any averaging setting configured anywhere in the GUI -- there was
+        # simply no way to run the CONTROL-phase FRF/CPSD tracking with
+        # exponential averaging (the System ID phase's own averaging
+        # setting, sysid_averaging_type/sysid_exponential_averaging_coefficient,
+        # only ever applied during System ID, never during control). Now
+        # reads the new control_averaging_type/control_averaging_coefficient
+        # fields (see RandomVibrationMetadata, collect_environment_definition_parameters,
+        # and the control_averaging_scheme_selector/control_averaging_coefficient_selector
+        # widgets) instead.
+        averaging_type = (AveragingTypes.LINEAR if self.environment_parameters.control_averaging_type == 'Linear'
+                           else AveragingTypes.EXPONENTIAL)
         averages = self.environment_parameters.frames_in_cpsd
-        exponential_averaging_coefficient = 0
+        exponential_averaging_coefficient = self.environment_parameters.control_averaging_coefficient
         if self.environment_parameters.sysid_estimator == 'H1':
             frf_estimator = Estimator.H1
         elif self.environment_parameters.sysid_estimator == 'H2':

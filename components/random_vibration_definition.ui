@@ -419,6 +419,67 @@
             </property>
            </widget>
           </item>
+          <item row="1" column="0">
+           <layout class="QVBoxLayout" name="control_averaging_type_layout">
+            <item>
+             <widget class="QLabel" name="control_averaging_type_label">
+              <property name="text">
+               <string>Control Averaging Type</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QComboBox" name="control_averaging_scheme_selector">
+              <property name="toolTip">
+               <string>Averaging used to compute the FRF/CPSDs during CONTROL (as opposed to during System ID, which is set separately in the System ID tab). Linear averaging weights all measurement frames in the CPSD window equally. Exponential averaging weights more recent frames more heavily, which lets the loop track amplitude/nonlinearity-dependent changes in the system as the test progresses, at the cost of a noisier single-frame estimate right after a restart.</string>
+              </property>
+              <item>
+               <property name="text">
+                <string>Linear</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>Exponential</string>
+               </property>
+              </item>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item row="1" column="1">
+           <layout class="QVBoxLayout" name="control_averaging_coefficient_layout">
+            <item>
+             <widget class="QLabel" name="control_averaging_coefficient_label">
+              <property name="text">
+               <string>Control Averaging Coefficient</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QDoubleSpinBox" name="control_averaging_coefficient_selector">
+              <property name="toolTip">
+               <string>Weighting applied to the most recent frame for Exponential control averaging. Ignored if Control Averaging Type is Linear.</string>
+              </property>
+              <property name="decimals">
+               <number>3</number>
+              </property>
+              <property name="minimum">
+               <double>0.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>1.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.010000000000000</double>
+              </property>
+              <property name="value">
+               <double>0.100000000000000</double>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
           <item row="0" column="0">
            <layout class="QVBoxLayout" name="input_channels_layout">
             <item>

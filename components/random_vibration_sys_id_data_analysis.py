@@ -80,6 +80,18 @@ class RandomVibrationDataAnalysisProcess(AbstractSysIDAnalysisProcess):
         # exposed via xlsx/UI -- hardcoded defaults, open item per section 5.
         self.cva_publish_confidence_threshold = 0.5
         self.cva_publish_deadband_fraction = 0.5
+        # System-ID FRF seeding (2026-09-02): after a fresh restart, hold
+        # the sysid-seeded control_frf (see run_control's startup block)
+        # through the first few live control-phase candidates for
+        # estimators without CVA's own confidence-analog gate (H1/H2/H3/HV)
+        # -- their very first live candidate is a single raw, unaveraged
+        # frame regardless of averaging type (see spectral_processing.py),
+        # which is exactly what was driving match_trace_pseudoinverse's
+        # observed "overshoot by several decades" on control startup. Not
+        # yet exposed via xlsx/UI -- hardcoded default, same as the CVA
+        # publish-gate parameters above.
+        self.min_live_frf_frames_before_replacing_sysid_seed = 2
+        self._frf_seeded_from_sysid_pending_replacement = False
     
     def initialize_sysid_parameters(self,data : RandomVibrationMetadata):
         self.parameters : RandomVibrationMetadata
@@ -230,26 +242,42 @@ class RandomVibrationDataAnalysisProcess(AbstractSysIDAnalysisProcess):
         if self.startup:
             self.log('Starting Control')
             self.frames = 0
-            if getattr(self.parameters,'sysid_estimator',None) == 'CVA':
+            # Seed control_frf/control_coherence/control_frf_condition from
+            # the already-validated, fully-averaged system-ID-phase
+            # estimate (self.sysid_frf) rather than leaving control_frf at
+            # None (or, before this change, only doing this for CVA) and
+            # letting the very first live control-phase candidate become
+            # the FRF the control law's very first command is computed
+            # from. Originally added 2026-08-30 for CVA only (see the
+            # preserved rationale below); generalized 2026-09-02 to
+            # H1/H2/H3/HV after the same "overshoot by several decades"
+            # failure mode was observed live with match_trace_pseudoinverse
+            # under H1 -- a fresh restart's first H1 (or H2/H3/HV) estimate
+            # is exactly as unaveraged/noisy as a bad CVA refit (single raw
+            # frame, see spectral_processing.py's first-frame behavior
+            # under both EXPONENTIAL and LINEAR averaging), it just doesn't
+            # have CVA's own confidence-analog to flag it -- so it's held
+            # via self.min_live_frf_frames_before_replacing_sysid_seed in
+            # the publish block below instead. Guarded on sysid_frf
+            # actually being available so a test that somehow reaches
+            # control without a completed system ID doesn't seed from None.
+            if self.sysid_frf is not None:
                 # Item 5 hardening (2026-08-30, design doc section 13): seed
                 # control_frf/control_coherence/control_frf_condition from
                 # the already-validated system-ID-phase estimate, NOT from
-                # whatever the first live control-phase CVA refit happens to
-                # produce. A live run on 2026-08-30 showed live CVA refits
-                # under closed-loop control are consistently low-confidence
-                # and wildly inconsistent cycle to cycle -- the old
-                # unconditional-first-candidate bootstrap gave that first
-                # live candidate a free pass with no confidence check at
-                # all, and since every later refit was (correctly) rejected
-                # by the gate, nothing ever replaced it -- control ran the
-                # whole test off an unvetted FRF. Seeding from sysid_frf
-                # means the exact same well-supported+meaningfully-different
-                # gate below governs the very first live candidate too, just
-                # like every candidate after it. If sysid_frf is somehow
-                # unavailable (CVA system ID never completed), this leaves
-                # control_frf at None and the gate's existing fallback
-                # (self.control_frf is None) reverts to the old
-                # unconditional-publish behavior rather than deadlocking.
+                # whatever the first live control-phase refit happens to
+                # produce. For CVA specifically: a live run on 2026-08-30
+                # showed live CVA refits under closed-loop control are
+                # consistently low-confidence and wildly inconsistent cycle
+                # to cycle -- the old unconditional-first-candidate
+                # bootstrap gave that first live candidate a free pass with
+                # no confidence check at all, and since every later refit
+                # was (correctly) rejected by the gate, nothing ever
+                # replaced it -- control ran the whole test off an unvetted
+                # FRF. Seeding from sysid_frf means the exact same
+                # well-supported+meaningfully-different gate below governs
+                # the very first live candidate too, just like every
+                # candidate after it.
                 self.control_frf = self.sysid_frf
                 # NOTE: self.sysid_coherence (read everywhere else in this
                 # class) is a pre-existing, unrelated bug -- the inherited
@@ -265,6 +293,16 @@ class RandomVibrationDataAnalysisProcess(AbstractSysIDAnalysisProcess):
                 # silently seeding None. Worth a real fix separately.
                 self.control_coherence = getattr(self,'coherence',None)
                 self.control_frf_condition = self.sysid_condition
+                # Non-CVA estimators have no per-candidate confidence-analog
+                # to gate on (see the publish block below), so hold this
+                # seed through the first few live candidates explicitly via
+                # this flag instead, rather than letting them overwrite it
+                # immediately. CVA is unaffected -- it already gates every
+                # candidate (seeded or not) on well-supported+meaningfully-
+                # different, so this flag is simply never consulted for it.
+                self._frf_seeded_from_sysid_pending_replacement = True
+            else:
+                self._frf_seeded_from_sysid_pending_replacement = False
             self.data_out_queue.put([self.drive_cpsd_prediction])
             self.startup = False
         spectral_data = flush_queue(self.data_in_queue)
@@ -329,7 +367,28 @@ class RandomVibrationDataAnalysisProcess(AbstractSysIDAnalysisProcess):
                     self.log('CVA publish gate held: confidence={:} (need >={:0.2f}) relative_change={:0.4f} '
                              '(deadband={:0.4f}) -- keeping published FRF'.format(
                                  confidence,self.cva_publish_confidence_threshold,relative_change,deadband))
+            elif (self._frf_seeded_from_sysid_pending_replacement
+                  and candidate_frf is not None
+                  and self.frames < self.min_live_frf_frames_before_replacing_sysid_seed):
+                # Startup guard (2026-09-02): a system-ID-seeded FRF is
+                # currently in control_frf (see run_control's startup
+                # block); don't let the very first live candidate(s) --
+                # still a single raw, unaveraged frame at self.frames==1
+                # under both LINEAR and EXPONENTIAL averaging -- overwrite
+                # it before the live estimate has had a couple of real
+                # cycles to average down. self.control_frf/control_coherence
+                # /control_frf_condition are left untouched (still the
+                # sysid-seeded values) this cycle. Once self.frames reaches
+                # the threshold, this branch stops matching and normal
+                # unconditional publish-every-cycle behavior resumes below
+                # -- H1/H2/H3/HV already produce a slowly-varying,
+                # incrementally-averaged FRF from then on, which is exactly
+                # what this is meant to track as test level/amplitude
+                # changes; this guard only concerns the startup transient.
+                self.log('Holding system-ID-seeded FRF: live candidate has only {:} frame(s) '
+                         '(need >= {:})'.format(self.frames, self.min_live_frf_frames_before_replacing_sysid_seed))
             else:
+                self._frf_seeded_from_sysid_pending_replacement = False
                 self.control_frf = candidate_frf
                 self.control_coherence = candidate_coherence
                 self.control_frf_condition = candidate_frf_condition

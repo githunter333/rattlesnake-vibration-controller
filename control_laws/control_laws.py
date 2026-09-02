@@ -26,6 +26,118 @@ def match_coherence_phase(cpsd_original,cpsd_to_match):
 def trace(cpsd):
     return np.einsum('ijj->i',cpsd)
 
+def _cap_drive_coherence(cpsd, max_drive_coherence):
+    """Post-process a drive/output CPSD (shape F x N x N) to cap pairwise
+    drive-to-drive coherence at max_drive_coherence (0-1): for every bin and
+    every drive pair whose coherence exceeds the cap, shrink that cross
+    term's magnitude down to the cap (preserving phase and every
+    diagonal/auto-spectrum value), then re-project onto the PSD cone (clip
+    any negative eigenvalues the per-pair shrink can introduce) so the
+    result is still a physically valid CPSD. max_drive_coherence >= 1.0 is a
+    no-op (returns cpsd unchanged).
+
+    This is the same methodology validated in examples/sixdrive12resp/code/
+    investigate_buzz_coherence_cap.py and used by
+    control_laws/optimal_diagonal_control.py's SDP constraint
+    (max_drive_coherence, default 0.95 there), generalized here to the
+    closed-form pseudoinverse/match-trace/buzz laws in this module -- see
+    design doc notes on systematically comparing each closed-form law with
+    and without the cap as test level (and nonlinearity) increases.
+    """
+    if max_drive_coherence >= 1.0:
+        return cpsd
+    out = cpsd.copy()
+    n = out.shape[-1]
+    pair_i, pair_j = np.triu_indices(n, k=1)
+    for fi in range(out.shape[0]):
+        X = out[fi]
+        diagX = np.real(np.diag(X))
+        modified = False
+        for a, b in zip(pair_i, pair_j):
+            denom = np.sqrt(max(diagX[a] * diagX[b], 1e-30))
+            if denom <= 0:
+                continue
+            coh_ab = np.abs(X[a, b]) / denom
+            if coh_ab > max_drive_coherence:
+                limit_mag = max_drive_coherence * denom
+                scale = limit_mag / max(np.abs(X[a, b]), 1e-30)
+                X[a, b] *= scale
+                X[b, a] = np.conj(X[a, b])
+                modified = True
+        if modified:
+            w, v = np.linalg.eigh(X)
+            if np.any(w < 0):
+                w = np.clip(w, 0, None)
+                X = (v * w) @ v.conj().T
+            out[fi] = X
+    return out
+
+def _parse_rcond_and_cap(extra_parameters):
+    """Shared extra_parameters parsing for pseudoinverse_control,
+    match_trace_pseudoinverse, and buzz_control: 'rcond' (unchanged,
+    backward-compatible single-value usage) or 'rcond,max_drive_coherence'
+    (new -- e.g. '1e-15,0.95' caps pairwise drive-to-drive coherence at
+    0.95; omit the second value, or leave it >= 1.0, for the original
+    uncapped behavior). Matches optimal_diagonal_control.py's
+    max_drive_coherence naming/default (0.95) for consistency."""
+    parts = extra_parameters.split(',') if extra_parameters else []
+    try:
+        rcond = float(parts[0]) if len(parts) >= 1 and parts[0].strip() != '' else 1e-15
+    except ValueError:
+        rcond = 1e-15
+    try:
+        max_drive_coherence = float(parts[1]) if len(parts) >= 2 and parts[1].strip() != '' else 1.0
+    except ValueError:
+        max_drive_coherence = 1.0
+    return rcond, max_drive_coherence
+
+def _parse_match_trace_parameters(extra_parameters, default_startup_test_level_cap_db=-9.0):
+    """extra_parameters parsing for match_trace_pseudoinverse and
+    buzz_control (both apply a startup guard on their first, otherwise-
+    unguarded pseudoinverse solve -- see each function's own comments for
+    how the guard is applied to its particular control loop structure).
+    Same
+    'rcond' / 'rcond,max_drive_coherence' as _parse_rcond_and_cap, plus an
+    optional third value -- 'rcond,max_drive_coherence,startup_test_level_cap_db'
+    -- that caps the very first control command (last_output_cpsd is None)
+    so it can't imply more than startup_test_level_cap_db dB relative to
+    the specification's own trace (0 dB == full spec-match, the same
+    reference the steady-state trace_ratio feedback below converges
+    toward). Defaults to -9.0 dB if the third value is omitted/empty.
+
+    Added 2026-09-02: on the very first control cycle there is no prior
+    measured response to correct against, so match_trace_pseudoinverse
+    falls back to a raw, unguarded pseudoinverse solve straight from
+    whatever FRF estimate spectral_processing has computed so far --
+    which on the very first frame is a single noisy, unaveraged estimate
+    under BOTH exponential and linear averaging (there is no minimum-
+    frames gate before an FRF gets published and handed to the control
+    law). A poorly-conditioned first-frame FRF can make that pseudoinverse
+    solve wildly ill-conditioned, commanding an output far beyond
+    anything the loop would ever settle at -- observed on real hardware
+    as the control level "overshoot by several decades" before the
+    trace_ratio feedback (next iteration onward, once there's a real
+    measured response) brings it back down. This cap is a hard safety
+    ceiling on that one otherwise-unguarded first command; it does not
+    change anything about the loop after last_output_cpsd is no longer
+    None. Pass a large value (e.g. 100) for the third parameter to
+    effectively disable it.
+    """
+    parts = extra_parameters.split(',') if extra_parameters else []
+    try:
+        rcond = float(parts[0]) if len(parts) >= 1 and parts[0].strip() != '' else 1e-15
+    except ValueError:
+        rcond = 1e-15
+    try:
+        max_drive_coherence = float(parts[1]) if len(parts) >= 2 and parts[1].strip() != '' else 1.0
+    except ValueError:
+        max_drive_coherence = 1.0
+    try:
+        startup_cap_db = float(parts[2]) if len(parts) >= 3 and parts[2].strip() != '' else default_startup_test_level_cap_db
+    except ValueError:
+        startup_cap_db = default_startup_test_level_cap_db
+    return rcond, max_drive_coherence, startup_cap_db
+
 def pseudoinverse_control(specification, # Specifications
                           warning_levels, # Warning levels
                           abort_levels, # Abort Levels
@@ -129,14 +241,12 @@ def pseudoinverse_control(specification, # Specifications
         (num_frequencies x num_excitation_channels x num_excitation_channels)
     
     """
-    try:
-        rcond = float(extra_parameters)
-    except ValueError:
-        rcond = 1e-15
+    rcond, max_drive_coherence = _parse_rcond_and_cap(extra_parameters)
     # Invert the transfer function using the pseudoinverse
     tf_pinv = np.linalg.pinv(transfer_function,rcond)
     # Return the least squares solution for the new output CPSD
     output = tf_pinv@specification@tf_pinv.conjugate().transpose(0,2,1)
+    output = _cap_drive_coherence(output, max_drive_coherence)
     return output
 
 def match_trace_pseudoinverse(specification, # Specifications
@@ -222,6 +332,11 @@ def match_trace_pseudoinverse(specification, # Specifications
         A string containing any optional parameters the control law may need to
         use. It is up to the control law to parse this string to extract the
         required information that it needs.  The default is ''.
+        Format: 'rcond', 'rcond,max_drive_coherence', or
+        'rcond,max_drive_coherence,startup_test_level_cap_db'. The third
+        value caps the very first control command at startup_test_level_cap_db
+        dB relative to the specification (0 dB = full spec-match); it
+        defaults to -9.0 dB if omitted -- see _parse_match_trace_parameters.
     last_response_cpsd : np.ndarray, optional
         The CPSD measured from the control channels during the vibration
         control.  Can be used to identify signal to noise ratio in the
@@ -245,21 +360,42 @@ def match_trace_pseudoinverse(specification, # Specifications
         (num_frequencies x num_excitation_channels x num_excitation_channels)
     
     """
-    try:
-        rcond = float(extra_parameters)
-    except ValueError:
-        rcond = 1e-15
+    rcond, max_drive_coherence, startup_test_level_cap_db = _parse_match_trace_parameters(extra_parameters)
     # If it's the first time through, do the actual control
     if last_output_cpsd is None:
         # Invert the transfer function using the pseudoinverse
         tf_pinv = np.linalg.pinv(transfer_function,rcond)
         # Return the least squares solution for the new output CPSD
         output = tf_pinv@specification@tf_pinv.conjugate().transpose(0,2,1)
+        # Startup guard (added 2026-09-02): this branch has no prior
+        # measured response to correct against, so it's an unguarded raw
+        # pseudoinverse solve on whatever FRF estimate is available so far
+        # -- typically a single noisy, unaveraged first frame. Clamp the
+        # per-frequency-line output trace (power) so it can't imply more
+        # than startup_test_level_cap_db dB relative to the specification's
+        # own trace, as a hard ceiling on this one otherwise-unguarded
+        # command. Steady-state operation (the trace_ratio branch below,
+        # once there's a real measured response) is untouched.
+        spec_trace = np.real(trace(specification))
+        output_trace = np.real(trace(output))
+        max_power_ratio = 10.0**(startup_test_level_cap_db/10.0)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            scale = np.minimum(1.0, max_power_ratio*spec_trace/output_trace)
+        scale[~np.isfinite(scale)] = 1.0
+        scale[output_trace <= 0] = 1.0
+        output = output*scale[:,np.newaxis,np.newaxis]
     else:
         # Scale the last output cpsd by the trace ratio between spec and last response
         trace_ratio = trace(specification)/trace(last_response_cpsd)
         trace_ratio[np.isnan(trace_ratio)] = 0
         output =  last_output_cpsd*trace_ratio[:,np.newaxis,np.newaxis]
+    # Note: a uniform per-bin real scalar (the trace_ratio branch, and the
+    # startup guard above) leaves pairwise coherence ratios unchanged, so
+    # this cap is only ever "doing work" on the raw pseudoinverse itself --
+    # but it's applied unconditionally here too so a mid-test law switch
+    # (or any other path that reaches this point with an uncapped
+    # last_output_cpsd) can't silently skip the cap.
+    output = _cap_drive_coherence(output, max_drive_coherence)
     return output
 
 def buzz_control(specification, # Specifications
@@ -344,6 +480,12 @@ def buzz_control(specification, # Specifications
         A string containing any optional parameters the control law may need to
         use. It is up to the control law to parse this string to extract the
         required information that it needs.  The default is ''.
+        Format: 'rcond', 'rcond,max_drive_coherence', or
+        'rcond,max_drive_coherence,startup_test_level_cap_db' (shared with
+        match_trace_pseudoinverse -- see _parse_match_trace_parameters). The
+        third value caps only the very first control command at
+        startup_test_level_cap_db dB relative to the specification (0 dB =
+        full spec-match); it defaults to -9.0 dB if omitted.
     last_response_cpsd : np.ndarray, optional
         The CPSD measured from the control channels during the vibration
         control.  Can be used to identify signal to noise ratio in the
@@ -367,17 +509,40 @@ def buzz_control(specification, # Specifications
         (num_frequencies x num_excitation_channels x num_excitation_channels)
     
     """
-    try:
-        rcond = float(extra_parameters)
-    except ValueError:
-        rcond = 1e-15
+    rcond, max_drive_coherence, startup_test_level_cap_db = _parse_match_trace_parameters(extra_parameters)
     # Create a new specification using the autospectra from the original and
     # phase and coherence of the buzz_cpsd
     modified_spec = match_coherence_phase(specification,sysid_response_cpsd)
     # Invert the transfer function using the pseudoinverse
     tf_pinv = np.linalg.pinv(transfer_function,rcond)
     # Return the least squares solution for the new output CPSD
-    return tf_pinv@modified_spec@tf_pinv.conjugate().transpose(0,2,1)
+    output = tf_pinv@modified_spec@tf_pinv.conjugate().transpose(0,2,1)
+    if last_output_cpsd is None:
+        # Startup guard (added 2026-09-02, mirroring match_trace_pseudoinverse's):
+        # unlike match_trace_pseudoinverse, buzz_control has no separate
+        # steady-state branch at all -- it always recomputes this same raw
+        # pseudoinverse solve every single cycle, using whatever FRF is
+        # currently published as control_frf (see
+        # random_vibration_sys_id_data_analysis.py's FRF-seeding logic,
+        # which now governs what transfer_function actually is here on the
+        # very first call too). So there's no way to guard "steady state"
+        # differently from "startup" the way match_trace_pseudoinverse does
+        # -- instead, only the very first call (last_output_cpsd is None,
+        # i.e. no prior measured response/output exists yet) gets clamped
+        # here; every later call is completely unaffected, so
+        # buzz_control's normal steady-state behavior is unchanged from
+        # before this fix. Clamp the per-frequency-line output trace
+        # (power) so it can't imply more than startup_test_level_cap_db dB
+        # relative to the specification's own trace.
+        spec_trace = np.real(trace(specification))
+        output_trace = np.real(trace(output))
+        max_power_ratio = 10.0**(startup_test_level_cap_db/10.0)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            scale = np.minimum(1.0, max_power_ratio*spec_trace/output_trace)
+        scale[~np.isfinite(scale)] = 1.0
+        scale[output_trace <= 0] = 1.0
+        output = output*scale[:,np.newaxis,np.newaxis]
+    return _cap_drive_coherence(output, max_drive_coherence)
 
 def buzz_control_generator():
     output_cpsd = None
