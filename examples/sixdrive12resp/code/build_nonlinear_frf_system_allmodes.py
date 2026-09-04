@@ -55,7 +55,7 @@ FREQ_SHIFT_CEIL = -0.005              # keep it a genuine (if sometimes small) s
 RNG_SEED = 42
 
 DRIVE_DOF_INDICES = [0, 2, 4, 6, 8, 10]   # nodes 1-6, X-direction (see build_sdynpy_demo_frame6x12.py's dofs())
-REFERENCE_DRIVE_LEVEL_VRMS = 20.0
+REFERENCE_DRIVE_LEVEL_VRMS = 2.5   # rescaled to match observed closed-loop drive RMS (~1.7-5.6 V across -12 dB to 0 dB), was 20.0
 
 rng = np.random.default_rng(RNG_SEED)
 
