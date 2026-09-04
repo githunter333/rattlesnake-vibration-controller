@@ -19,9 +19,17 @@ help: ## List available recipes with descriptions
 launch-rattlesnake: ## Launch the Rattlesnake GUI (Random env), stdout/stderr -> gui_debug.log
 	cd $(REPO_ROOT) && $(RATTLESNAKE_PY) rattlesnake.py RANDOM > $(GUI_LOG) 2>&1
 
-kill-rattlesnake: ## Kill any stray rattlesnake.py / multiprocessing child processes
-	-pkill -f "rattlesnake.py"
-	-pkill -f "anaconda3/envs/rattlesnake.*multiprocessing"
+kill-rattlesnake: ## Kill any stray rattlesnake.py / multiprocessing child processes (SIGKILL -- see note below)
+	# Plain SIGTERM (pkill's default) isn't reliable here: a child blocked in a
+	# hardware/DAQ call won't see the signal until it returns from that call,
+	# and the old second pattern only matched workers whose command line
+	# literally contained "multiprocessing", which isn't guaranteed. Match
+	# every process running via this env's interpreter (main GUI + any
+	# fork/spawn child all share that interpreter path in `ps`, whatever
+	# their own argv looks like) and use -9 (SIGKILL, can't be caught or
+	# deferred), matching restart_rattlesnake.sh's proven approach.
+	-pkill -9 -f "$(RATTLESNAKE_PY)"
+	-pkill -9 -f "rattlesnake.py"
 
 build-demo: ## Rebuild the sdynpy system + Rattlesnake profile (sdynpy env)
 	cd $(DEMO_CODE_DIR) && $(SDYNPY_PY) build_sdynpy_demo_frame6x12.py
