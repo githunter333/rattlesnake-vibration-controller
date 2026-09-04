@@ -412,17 +412,20 @@ def _parse_match_trace_pi_parameters(extra_parameters, default_startup_test_leve
     match_trace_pseudoinverse behavior exactly, cap and all.
 
     Two more optional values after that -- 'rcond,max_drive_coherence,
-    startup_test_level_cap_db,Kp,Ki,resonance_sensitivity,resonance_window'
-    -- control per-frequency-line adaptive gain (see
-    match_trace_pseudoinverse_pi's docstring for why: live testing
-    2026-09-03 found that a single global Kp/Ki can't be both fast on flat
-    lines and stable on a resonant one, since a resonance carries real
-    dynamical phase lag a uniform gain can't account for).
-    resonance_sensitivity defaults to 0.0 -- fully OFF, so leaving it
-    (and resonance_window) off entirely changes nothing about the Kp/Ki
-    behavior above. resonance_window is the number of frequency bins
-    (odd, >=3) used to estimate each line's local non-resonant FRF-
-    magnitude baseline; default 21.
+    startup_test_level_cap_db,Kp,Ki,resonance_sensitivity,max_step_db' --
+    control per-frequency-line adaptive gain and a global safety cap (see
+    match_trace_pseudoinverse_pi's docstring). Both default to 0.0 --
+    fully OFF -- so leaving them off entirely changes nothing about the
+    Kp/Ki behavior above.
+
+    NOTE (2026-09-04): the 7th value used to be resonance_window, a
+    manually-tuned bin count for a fixed-width local-median baseline.
+    That's been replaced by a self-scaling half-power-bandwidth baseline
+    that needs no window to tune at all (see
+    _half_power_resonance_baseline) -- an old parameter string that
+    specified a 7th value will now have it parsed as max_step_db (a dB
+    figure) instead of a bin count, which is a real behavior change if
+    you reuse an old string verbatim.
     """
     parts = extra_parameters.split(',') if extra_parameters else []
     def _get(i, default):
@@ -436,33 +439,122 @@ def _parse_match_trace_pi_parameters(extra_parameters, default_startup_test_leve
     Kp = _get(3, 0.0)
     Ki = _get(4, 1.0)
     resonance_sensitivity = _get(5, 0.0)
-    resonance_window = _get(6, 21)
-    return rcond, max_drive_coherence, startup_cap_db, Kp, Ki, resonance_sensitivity, resonance_window
+    max_step_db = _get(6, 0.0)
+    return rcond, max_drive_coherence, startup_cap_db, Kp, Ki, resonance_sensitivity, max_step_db
 
 
-def _local_median_baseline(x, window):
-    """Sliding-window median of 1-D array x (edge-padded), used as a
-    per-frequency-line 'what would this look like if it weren't a
-    resonant peak' baseline. Pure numpy (no scipy dependency, so this
-    stays self-contained to match_trace_pseudoinverse_pi and can't affect
-    any other control law's loadability). window is coerced to an odd
-    integer >= 3.
+def _find_local_maxima(x):
+    """Indices of strict interior local maxima in 1-D array x (x[i] >
+    both neighbors). Plateaus aren't flagged -- keeps this simple and
+    avoids pathological repeats on near-flat data. Pure numpy.
+    """
+    if len(x) < 3:
+        return np.array([], dtype=int)
+    return np.flatnonzero((x[1:-1] > x[:-2]) & (x[1:-1] > x[2:])) + 1
+
+
+def _half_power_resonance_baseline(x, min_peak_ratio=1.15, max_half_width=None):
+    """Self-scaling 'what would this line look like if it weren't sitting
+    on a resonant peak' baseline for a per-frequency-line magnitude array
+    x (e.g. Frobenius norm of transfer_function). Replaces an earlier
+    fixed-bin-count sliding-window version (2026-09-03): live testing
+    found a 21-bin window badly understated peakiness at a real resonance
+    that turned out to be 40-60 Hz wide, and widening the window as a
+    fixed number required re-tuning per system/per mode. This version
+    instead measures each detected peak's own half-power (-3dB, i.e.
+    1/sqrt(2) amplitude) width directly from the data, so it self-scales
+    to a narrow high-Q resonance or a broad well-damped one without any
+    window-size parameter at all.
+
+    Algorithm:
+      1. Find every interior local maximum in x (_find_local_maxima), and
+         for each, its flanking local minima (walking outward from the
+         peak in both directions while x keeps not-increasing).
+      2. Keep only maxima at least min_peak_ratio times their lower
+         flanking local minimum -- filters out noise-level bumps that
+         aren't real resonant humps. min_peak_ratio is an internal
+         robustness constant, not meant to be user-tuned.
+      3. Process surviving peaks tallest-first (so a smaller shoulder
+         peak's zone can't steal bins a taller neighboring peak needs),
+         and for each, walk outward from the peak in both directions
+         until x falls to peak_value/sqrt(2) (bounded by the flanking
+         local minima found in step 1, a taller peak's already-claimed
+         zone, or max_half_width bins -- a generous hardcoded safety cap,
+         not user-tunable, that only matters for a pathological
+         non-decaying curve) -- this defines how many bins are "in the
+         resonance" and get de-peaked.
+      4. Baseline = x itself outside every peak's zone; inside a zone,
+         linear interpolation between the two FLANKING LOCAL MINIMA
+         values from step 1 (not the near-threshold values right at the
+         zone's own edge, which are by construction always close to
+         peak_value/sqrt(2) regardless of how prominent the peak truly
+         is -- anchoring there would cap peakiness near sqrt(2) for
+         every resonance no matter how sharp, defeating the point).
+         Interpolating using the true background level on either side
+         instead lets peakiness reflect the actual peak-to-background
+         ratio. At an array boundary with no interior local minimum, the
+         single available edge value is held flat.
+
+    Pure numpy (no scipy dependency), so this stays self-contained to
+    match_trace_pseudoinverse_pi and can't affect any other control
+    law's loadability.
     """
     n = len(x)
-    window = int(window)
-    if window < 3:
-        window = 3
-    if window % 2 == 0:
-        window += 1
-    if window >= 2*n - 1:
-        # Degenerate case (very short frequency axis, e.g. a unit test) --
-        # fall back to the array's own median as a single global baseline.
-        return np.full_like(x, np.median(x))
-    half = window//2
-    padded = np.pad(x, half, mode='edge')
-    windows = np.lib.stride_tricks.as_strided(
-        padded, shape=(n, window), strides=(padded.strides[0], padded.strides[0]))
-    return np.median(windows, axis=1)
+    x = np.asarray(x, dtype=float)
+    baseline = x.copy()
+    if n < 5:
+        return baseline
+    if max_half_width is None:
+        max_half_width = max(10, n // 2)
+
+    claimed = np.zeros(n, dtype=bool)
+    maxima = _find_local_maxima(x)
+    if maxima.size == 0:
+        return baseline
+
+    peak_info = []  # (peak index, flanking left-min index, flanking right-min index)
+    for i in maxima:
+        left_min = i
+        while left_min > 0 and x[left_min - 1] <= x[left_min]:
+            left_min -= 1
+        right_min = i
+        while right_min < n - 1 and x[right_min + 1] <= x[right_min]:
+            right_min += 1
+        lower_flank = min(x[left_min], x[right_min])
+        if lower_flank <= 0 or x[i]/lower_flank >= min_peak_ratio:
+            peak_info.append((i, left_min, right_min))
+
+    # Tallest first, so overlapping zones resolve in favor of the taller peak.
+    peak_info.sort(key=lambda t: -x[t[0]])
+
+    sqrt2 = np.sqrt(2.0)
+    for i, left_min, right_min in peak_info:
+        if claimed[i]:
+            continue
+        threshold = x[i]/sqrt2
+
+        left = i
+        steps = 0
+        while (left > left_min and not claimed[left - 1] and x[left - 1] >= threshold
+               and steps < max_half_width):
+            left -= 1
+            steps += 1
+
+        right = i
+        steps = 0
+        while (right < right_min and not claimed[right + 1] and x[right + 1] >= threshold
+               and steps < max_half_width):
+            right += 1
+            steps += 1
+
+        claimed[left:right + 1] = True
+        left_edge_val = x[left_min]
+        right_edge_val = x[right_min]
+        span = right - left
+        baseline[left:right + 1] = (np.linspace(left_edge_val, right_edge_val, span + 1)
+                                     if span > 0 else np.array([left_edge_val]))
+
+    return baseline
 
 
 class match_trace_pseudoinverse_pi:
@@ -513,21 +605,29 @@ class match_trace_pseudoinverse_pi:
     drive-coherence cap.
 
     Optional adaptive per-frequency-line gain (resonance_sensitivity,
-    resonance_window, both off/default by default): live testing
-    (2026-09-03) on the real hardware showed that a single global (Kp,Ki)
-    pair that's fast and stable on flat/non-resonant lines can badly
-    overshoot at a resonance (observed: Kp=0.1,Ki=1.0 drove one resonant
-    line to ~100x/~20dB over spec while every flat line converged
-    cleanly) -- a resonance carries real mechanical phase lag on top of
-    whatever the CPSD averaging contributes, which a uniform gain can't
-    account for. When resonance_sensitivity > 0, each frequency line's
-    FRF magnitude (Frobenius norm of transfer_function at that line) is
-    compared each cycle against a local baseline (the running median over
-    a resonance_window-wide neighborhood of frequency lines -- a proxy
-    for "what this line would look like if it weren't a resonant peak"),
-    and both the Kp and Ki terms are scaled down together at lines whose
-    FRF magnitude stands out above that baseline:
-        peakiness   = line_gain / local_median_baseline(line_gain)
+    off/default by default): live testing (2026-09-03) on the real
+    hardware showed that a single global (Kp,Ki) pair that's fast and
+    stable on flat/non-resonant lines can badly overshoot at a resonance
+    (observed: Kp=0.1,Ki=1.0 drove one resonant line to ~100x/~20dB over
+    spec while every flat line converged cleanly) -- a resonance carries
+    real mechanical phase lag on top of whatever the CPSD averaging
+    contributes, which a uniform gain can't account for. When
+    resonance_sensitivity > 0, each frequency line's FRF magnitude
+    (Frobenius norm of transfer_function at that line) is compared each
+    cycle against a local baseline computed by
+    _half_power_resonance_baseline -- a proxy for "what this line would
+    look like if it weren't a resonant peak", built by measuring each
+    detected peak's own half-power (-3dB) width directly from the data
+    rather than assuming a fixed neighborhood size (see that function's
+    docstring; this replaced an earlier fixed-bin-count sliding-median
+    version on 2026-09-04 after live testing showed a 21-bin window badly
+    understated peakiness at a resonance that turned out to be 40-60 Hz
+    wide, and that a wider window had to be hand-picked per system to fix
+    it -- the half-power version self-scales to each peak's own measured
+    width instead, with nothing to tune per system). Both the Kp and Ki
+    terms are scaled down together at lines whose FRF magnitude stands
+    out above that baseline:
+        peakiness   = line_gain / half_power_resonance_baseline(line_gain)
         gain_scale  = 1 / (1 + resonance_sensitivity * max(0, peakiness-1))
     Flat lines (peakiness <= 1) are unaffected (gain_scale = 1); a line
     sitting right on a sharp resonance peak gets its Kp and Ki both
@@ -535,6 +635,20 @@ class match_trace_pseudoinverse_pi:
     call for. resonance_sensitivity=0.0 (the default) makes gain_scale
     exactly 1.0 everywhere -- fully backward compatible with the
     fixed-gain behavior above.
+
+    Optional global safety cap (max_step_db, off/default by default): a
+    hard ceiling on the log-power correction applied to any single
+    specified line in one cycle, independent of Kp, Ki, or the resonance
+    gain scaling above -- "never let any specified line's drive change by
+    more than max_step_db dB in one control cycle", applied after
+    resonance-adaptive scaling as a final backstop. Unlike
+    resonance_sensitivity, it needs no knowledge of the FRF shape at all
+    and so needs no per-system tuning either; the tradeoff is that it
+    caps every specified line uniformly (flat lines included), not just
+    resonant ones, so it trades a bit of best-case settling speed for a
+    universal bound on how bad any single bad cycle can get.
+    max_step_db=0.0 (the default) leaves corrections uncapped -- fully
+    backward compatible.
 
     Frequency lines where the specification (or measured response) makes
     the correction undefined -- e.g. an unspecified line outside the
@@ -548,8 +662,9 @@ class match_trace_pseudoinverse_pi:
     'rcond,max_drive_coherence,startup_test_level_cap_db',
     'rcond,max_drive_coherence,startup_test_level_cap_db,Kp,Ki', or
     'rcond,max_drive_coherence,startup_test_level_cap_db,Kp,Ki,
-    resonance_sensitivity,resonance_window'. See
-    _parse_match_trace_pi_parameters.
+    resonance_sensitivity,max_step_db'. See
+    _parse_match_trace_pi_parameters (note the 7th value's meaning
+    changed 2026-09-04, from a bin-count window to a dB step cap).
     """
 
     def __init__(self,
@@ -573,7 +688,7 @@ class match_trace_pseudoinverse_pi:
         self.abort_levels = abort_levels
         (self.rcond, self.max_drive_coherence, self.startup_test_level_cap_db,
          self.Kp, self.Ki, self.resonance_sensitivity,
-         self.resonance_window) = _parse_match_trace_pi_parameters(extra_parameters)
+         self.max_step_db) = _parse_match_trace_pi_parameters(extra_parameters)
         # Allocated (to the per-frequency-line shape) on the first call --
         # we don't know the frequency-line count until then.
         self.prev_error = None
@@ -663,7 +778,7 @@ class match_trace_pseudoinverse_pi:
             # reduces to the fixed-gain behavior above, unchanged.
             if self.resonance_sensitivity > 0 and transfer_function is not None:
                 line_gain = np.linalg.norm(transfer_function, axis=(1, 2))
-                baseline = _local_median_baseline(line_gain, self.resonance_window)
+                baseline = _half_power_resonance_baseline(line_gain)
                 peakiness = line_gain/np.maximum(baseline, np.finfo(float).tiny)
                 gain_scale = 1.0/(1.0 + self.resonance_sensitivity
                                    *np.maximum(0.0, peakiness - 1.0))
@@ -675,6 +790,15 @@ class match_trace_pseudoinverse_pi:
             correction = np.zeros_like(spec_trace)
             correction[normal] = gain_scale[normal]*(self.Ki*log_error[normal]
                                    + self.Kp*(log_error[normal] - self.prev_error[normal]))
+
+            # Global safety cap (2026-09-04), independent of resonance
+            # gain scaling: needs no FRF-shape knowledge and so needs no
+            # per-system tuning, unlike resonance_sensitivity -- a flat
+            # ceiling on how much any specified line's drive can move in
+            # one cycle. max_step_db=0.0 (default) leaves this uncapped.
+            if self.max_step_db > 0:
+                max_step_nat = self.max_step_db*np.log(10.0)/10.0
+                correction[normal] = np.clip(correction[normal], -max_step_nat, max_step_nat)
             # transient_bad lines get correction=0 (held at last_output_cpsd,
             # not zeroed) via the zeros-initialized correction array above;
             # their prev_error is left untouched below so a later good
