@@ -121,8 +121,26 @@ extra_parameters (comma separated, all optional):
 
 import numpy as np
 
-from .control_laws import (trace, cpsd_autospectra, _cap_drive_coherence,
-                           _half_power_resonance_baseline)
+# Rattlesnake loads a control-law file with importlib.spec_from_file_location
+# (see random_vibration_sys_id_data_analysis.py), i.e. as a standalone module
+# with NO package context, so a relative import raises ImportError and the law
+# cannot be loaded at all.  Import the helpers by explicit path in that case,
+# without touching sys.path -- putting control_laws/ on the path would shadow
+# the package of the same name for everything else in the process.
+try:
+    from .control_laws import (trace, cpsd_autospectra, _cap_drive_coherence,
+                               _half_power_resonance_baseline)
+except ImportError:
+    import importlib.util as _ilu
+    import os as _os
+    _sib = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'control_laws.py')
+    _spec = _ilu.spec_from_file_location('_rattlesnake_control_laws_helpers', _sib)
+    _mod = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    trace = _mod.trace
+    cpsd_autospectra = _mod.cpsd_autospectra
+    _cap_drive_coherence = _mod._cap_drive_coherence
+    _half_power_resonance_baseline = _mod._half_power_resonance_baseline
 
 __all__ = ['match_diagonal_congruence', 'parse_diagonal_congruence_parameters']
 
