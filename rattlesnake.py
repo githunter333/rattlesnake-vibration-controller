@@ -59,29 +59,66 @@ if __name__ == '__main__':
     # Create the user interface application
     app = QtWidgets.QApplication(sys.argv)
     
-    # Check to see if the arguments have specified the control strategy
-    upper_args = [arg.upper() for arg in sys.argv]
-    control_type = None
-    for ct in ControlTypes:
-        if ct.name in upper_args:
-            control_type = ct
-            print('Using Control Type {:} from command line'.format(ct.name))
+    # A --profile <path> (or --profile=<path>) argument fully specifies the
+    # test from a saved Combined Environments Profile spreadsheet (see
+    # ui_utilities.save_combined_environments_profile_template /
+    # EnvironmentSelect.load_profile for how these are created/loaded from
+    # the GUI). When given, this skips BOTH the initial control-type dialog
+    # and the environment-select dialog entirely -- added 2026-09-04 for
+    # fully unattended/scripted launches (e.g. `make launch-rattlesnake-
+    # profile PROFILE=path/to/profile.xlsx`); previously a saved profile
+    # could only be loaded by hand through Combined -> "Load Profile" at
+    # every single startup, even though the profile itself already fully
+    # specified hardware, channel table, and every environment's settings.
+    profile_path = None
+    for i, arg in enumerate(sys.argv):
+        if arg == '--profile' and i + 1 < len(sys.argv):
+            profile_path = sys.argv[i + 1]
             break
-    if control_type is None:
-        control_type,close_flag = ControlSelect.select_control()
-        if close_flag == False:
-            sys.exit()
-    
-    loaded_profile = None
-    if control_type == ControlTypes.COMBINED:
-        environment_select_results = EnvironmentSelect.select_environment()
-        if environment_select_results[0] == 0:
-            sys.exit()
-        environments = environment_select_results[1]
-        if environment_select_results[0] == -1:
-            loaded_profile = environment_select_results[2]
+        elif arg.startswith('--profile='):
+            profile_path = arg.split('=', 1)[1]
+            break
+
+    if profile_path is not None:
+        import openpyxl
+        print('Using Profile {:} from command line (Combined Environments, no dialogs)'.format(profile_path))
+        control_type = ControlTypes.COMBINED
+        workbook = openpyxl.load_workbook(profile_path)
+        # Same sheet-scanning logic as EnvironmentSelect.select_environment's
+        # "profile was loaded" branch, kept in sync with that by hand since
+        # duplicating it here is what lets this skip constructing the dialog
+        # (and therefore the QApplication event loop) entirely.
+        environment_sheets = [sheet for sheet in workbook
+                               if (not sheet.title in ['Channel Table', 'Hardware', 'Test Profile'])
+                               and sheet.cell(1, 1).value == 'Control Type']
+        environments = [(ControlTypes[sheet.cell(1, 2).value.upper()], sheet.title)
+                         for sheet in environment_sheets]
+        workbook.close()
+        loaded_profile = profile_path
     else:
-        environments = [[control_type,control_type.name.title()]]
+        # Check to see if the arguments have specified the control strategy
+        upper_args = [arg.upper() for arg in sys.argv]
+        control_type = None
+        for ct in ControlTypes:
+            if ct.name in upper_args:
+                control_type = ct
+                print('Using Control Type {:} from command line'.format(ct.name))
+                break
+        if control_type is None:
+            control_type,close_flag = ControlSelect.select_control()
+            if close_flag == False:
+                sys.exit()
+
+        loaded_profile = None
+        if control_type == ControlTypes.COMBINED:
+            environment_select_results = EnvironmentSelect.select_environment()
+            if environment_select_results[0] == 0:
+                sys.exit()
+            environments = environment_select_results[1]
+            if environment_select_results[0] == -1:
+                loaded_profile = environment_select_results[2]
+        else:
+            environments = [[control_type,control_type.name.title()]]
         
     # Create the processes
     # Set up the log file process

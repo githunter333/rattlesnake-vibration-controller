@@ -32,11 +32,14 @@ work with.
 
 The generated profile pre-fills the "Random" environment tab with a
 complete, ready-to-run configuration:
-  * Control law = control_laws/control_laws.py :: buzz_control_class
-    (the standard pseudo-inverse MIMO Random law). To compare a different
-    control law, either edit the "Control Python Script" / "Control
-    Python Function" cells on the environment sheet before loading, or
-    change them in the GUI after loading -- e.g. point at
+  * Control law = control_laws/control_laws.py :: match_trace_pseudoinverse_pi
+    (2026-09-04: switched from buzz_control_class to the PI law with
+    live-validated resonance-aware gain scheduling -- half-power baseline
+    + global step cap; parameters "1e-15,0.95,-12,0.2,0.8,1.0,8"). Control-
+    phase averaging is Exponential at coefficient 0.05. To compare a
+    different control law, either edit the "Control Python Script" /
+    "Control Python Function" cells on the environment sheet before
+    loading, or change them in the GUI after loading -- e.g. point at
     control_laws/optimal_diagonal_control.py to compare against the SDP-
     based optimal diagonal law.
   * Control channels = the first 8 of the 12 response channels (all 6 of
@@ -231,8 +234,8 @@ rattlesnake_directory = os.path.expanduser(
 )
 control_law_script = os.path.join(rattlesnake_directory, "control_laws", "control_laws.py")
 
-sample_rate = 5120          # Hz -- ~5.7x the ~900 Hz top flexible mode
-samples_per_frame = 5120    # 1 s frames -> 1 Hz frequency resolution
+sample_rate = 4096          # Hz -- ~4.5x the ~900 Hz top flexible mode (2026-09-04: was 5120)
+samples_per_frame = 4096    # 1 s frames -> 1 Hz frequency resolution
 time_per_read = 1.0
 time_per_write = 1.0
 
@@ -271,14 +274,16 @@ env_ws.cell(9, 2, "Hann")       # CPSD Window
 env_ws.cell(10, 2, 50.0)        # CPSD Overlap %
 env_ws.cell(11, 2, "N")         # Allow Automatic Aborts
 env_ws.cell(12, 2, control_law_script)     # Control Python Script
-env_ws.cell(13, 2, "buzz_control_class")   # Control Python Function
-env_ws.cell(14, 2, "")          # Control Parameters
+env_ws.cell(13, 2, "match_trace_pseudoinverse_pi")   # Control Python Function (2026-09-04)
+env_ws.cell(14, 2, "1e-15,0.95,-12,0.2,0.8,1.0,8")   # Control Parameters (2026-09-04, live-validated)
 for col_offset, channel_index in enumerate(range(1, n_control_channels + 1)):
     env_ws.cell(15, 2 + col_offset, channel_index)  # Control Channels (1-based)
 env_ws.cell(16, 2, "Linear")    # System ID Averaging
 env_ws.cell(17, 2, 0)           # Noise Averages
 env_ws.cell(18, 2, 5)           # System ID Averages
 env_ws.cell(19, 2, 0.1)         # Exponential Averaging Coefficient
+env_ws.cell(1, 26, "Exponential")  # Control Averaging Type (2026-09-04)
+env_ws.cell(2, 26, 0.05)           # Control Averaging Coefficient (2026-09-04)
 env_ws.cell(20, 2, "H1")        # System ID Estimator
 env_ws.cell(21, 2, 1.0)         # System ID Level (V RMS)
 env_ws.cell(22, 2, "Random")    # System ID Signal Type
