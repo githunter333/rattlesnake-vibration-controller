@@ -71,7 +71,11 @@ raw specification.  Supply it as the last extra_parameters field:
     np.savez('projected_target.npz', target_diag=t)     # shape (F, M)
 
 The projection is computed OFFLINE on purpose: it costs ~2 minutes for a
-900-line band, which does not fit a control frame.  Without it the law still
+900-line band, which does not fit a control frame.  It is therefore tied to
+the FRF it was computed from: REGENERATE IT AFTER A NEW SYSTEM ID.  What is
+reachable is a property of the structure, so if the structure changes -- a
+fixture reworked, damping altered -- a stale projection aims at the wrong
+place.  Nothing detects this automatically.  Without it the law still
 runs, aiming at the raw specification; it simply has no way to know which
 lines are hopeless.
 
@@ -83,8 +87,10 @@ SAFETY
                    the gains: bounded gains do not imply a bounded response
                    move, because the sensitivity rows sum to 2 but individual
                    entries can be large and opposite in sign.
-  * ceiling_db  -- the PREDICTED response may not exceed target by more than
-                   this, a physically meaningful anti-windup rather than an
+  * ceiling_db  -- the response may not exceed target by more than this,
+                   judged from the MEASURED level extrapolated over one
+                   bounded step rather than from the model alone, so the limit
+                   survives a wrong or drifting FRF; a physically meaningful anti-windup rather than an
                    arbitrary integrator limit.  It is deliberately NOT subject
                    to max_step_db: coming down from an overshoot is a safety
                    action and happens in one cycle, not over the many cycles a
@@ -121,6 +127,21 @@ from .control_laws import (trace, cpsd_autospectra, _cap_drive_coherence,
 __all__ = ['match_diagonal_congruence', 'parse_diagonal_congruence_parameters']
 
 _TINY = 1e-300
+
+# How much looser the model-based ceiling is than the measurement-based one.
+# Not a tuning knob.  It is the amount of FRF error the law will tolerate
+# before it stops trying to reach specification and starts protecting instead.
+#
+# The boundary is real and unavoidable: "the FRF is wrong by 30 dB" and "a
+# control accelerometer has failed low" produce IDENTICAL evidence -- the
+# model says far too hot, the measurement says far too cold -- and no amount
+# of cleverness distinguishes them from these two signals alone.  So a choice
+# is forced.  Within the margin the measurement is believed and the test
+# reaches level.  Beyond it the law limits drive and the test will sit below
+# specification, which is the correct response to evidence that something is
+# fundamentally wrong: an FRF that far off is a system-ID problem, not
+# something a control law should push through.
+MODEL_MARGIN_DB = 20.0
 
 
 def parse_diagonal_congruence_parameters(extra_parameters,
@@ -281,7 +302,8 @@ class match_diagonal_congruence:
 
         D = np.exp(u)
         output = X*D[:, :, None]*D[:, None, :]                       # congruence
-        output = self._apply_ceiling(H, output)
+        move = self._predicted_move(H, X, u, y_pred)
+        output = self._apply_ceiling(H, output, achieved, good, move)
         output = self._floor_and_silence(output)
         return _cap_drive_coherence(output, self.max_drive_coherence)
 
@@ -320,18 +342,59 @@ class match_diagonal_congruence:
         return _cap_drive_coherence(self._floor_and_silence(output),
                                     self.max_drive_coherence)
 
-    def _apply_ceiling(self, H, output):
-        """The PREDICTED response may not exceed the target by more than
-        ceiling_db.  Enforced as a per-line real scalar, which is itself a
-        congruence and so cannot break positive semidefiniteness."""
+    def _apply_ceiling(self, H, output, achieved=None, good=None, move=None):
+        """The response may not exceed the target by more than ceiling_db.
+        Enforced as a per-line real scalar, which is itself a congruence and
+        so cannot break positive semidefiniteness.
+
+        Two estimates of the response are used and the more restrictive wins:
+
+          measured-anchored -- achieved * exp(move).  The ABSOLUTE level comes
+              from the measurement and is therefore model-free; only the small,
+              already-bounded step is extrapolated with H.  Even a badly wrong
+              FRF can only distort this by at most max_step_db.
+          model-predicted   -- diag(H X H^H).  Used where this cycle's
+              measurement cannot be trusted, and as a floor of last resort.
+
+        Anchoring on the measurement matters when 'Update Transfer Function
+        During Control' is on, or whenever H has drifted: a purely model-based
+        ceiling is only as good as the model, which is precisely the thing that
+        cannot be relied on in the regime this limit exists to protect against.
+        """
         if not (self.ceiling_db > 0):
             return output
-        Y = np.einsum('fmn,fnk,flk->fml', H, output, H.conjugate())
-        y = np.real(np.einsum('fmm->fm', Y))
         lim = self.target_diag*10.0**(self.ceiling_db/10.0)
+        valid = ~self.unspecified & (lim > 0)
+
+        # The model net sits MODEL_MARGIN_DB looser than the measured one.  A
+        # mildly wrong model must not hold the drive down (that would stop the
+        # test ever reaching specification), but a model insisting the response
+        # is orders of magnitude over must still be able to intervene -- that
+        # is the protection against a measurement that has failed low, e.g. a
+        # dead accelerometer, which would otherwise invite unbounded push.
+        Y = np.einsum('fmn,fnk,flk->fml', H, output, H.conjugate())
+        y_model = np.real(np.einsum('fmm->fm', Y))
+        lim_model = lim*10.0**(MODEL_MARGIN_DB/10.0)
         with np.errstate(divide='ignore', invalid='ignore'):
-            over = np.where(~self.unspecified & (lim > 0), y/lim, 0.0)
-        worst = np.max(np.where(np.isfinite(over), over, 0.0), axis=1)
+            over = np.where(valid, y_model/lim_model, 0.0)
+        over = np.where(np.isfinite(over), over, 0.0)
+
+        if achieved is not None and move is not None and good is not None:
+            y_meas = achieved*np.exp(move)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                over_m = np.where(valid & good, y_meas/lim, 0.0)
+            over_m = np.where(np.isfinite(over_m), over_m, 0.0)
+            # Where this cycle's measurement is trustworthy it REPLACES the
+            # model estimate rather than being combined with it.  The measured
+            # level is the actual level; the model's is a guess.  Taking the
+            # stricter of the two looks conservative but is not: a model that
+            # OVERestimates the response then holds the drive down forever and
+            # the test never reaches specification -- a functional failure
+            # dressed up as caution.  The model is used only where the
+            # measurement cannot be trusted.
+            over = np.maximum(over, np.where(valid & good, over_m, 0.0))
+
+        worst = np.max(over, axis=1)
         scale = np.where(worst > 1.0, 1.0/np.maximum(worst, _TINY), 1.0)
         return output*scale[:, np.newaxis, np.newaxis]
 
