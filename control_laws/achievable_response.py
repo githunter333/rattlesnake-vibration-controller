@@ -246,6 +246,7 @@ def _solve_bin(Hb, y, K, n_restarts, rng, rcond, do_minimax,
 # ----------------------------------------------------------------------
 def achievable_diagonal(transfer_function, y_target, line_indices=None,
                         rank=None, n_restarts=2, seed=0, rcond=1e-8,
+                        restrict_rcond=None,
                         compute_minimax=True, exact_tol_db=0.01,
                         max_nfev=3000, betas=(10.0, 40.0, 160.0),
                         return_drives=False, progress=None):
@@ -275,7 +276,27 @@ def achievable_diagonal(transfer_function, y_target, line_indices=None,
         re-run with a different `seed` and compare.
     rcond : float
         Conditioning cutoff for the pseudoinverse STARTING POINT only.  It does
-        not constrain the answer.
+        NOT constrain the answer -- see `restrict_rcond` for that.
+    restrict_rcond : float, optional
+        Confine the drive to the well-conditioned subspace, the way a control
+        law using pinv(H, rcond) implicitly does.  Only the right singular
+        directions of H with singular value >= restrict_rcond * sigma_max are
+        allowed to carry drive; the rest are forbidden outright.  This is a
+        genuine CONSTRAINT on the answer, unlike `rcond` above.
+
+        Use it to separate two things that are otherwise conflated when a
+        pinv-based law underperforms: how much accuracy is lost by discarding
+        near-singular drive directions (a deliberate, safety-motivated choice
+        -- those directions cost enormous drive for almost no response), versus
+        how much the law is simply leaving on the table.  Running with
+        restrict_rcond=1e-3 gives the floor that a law truncating at 1e-3 is
+        actually entitled to; the gap to the unrestricted floor is the price
+        of the truncation itself.
+
+        Implemented exactly, not by penalty: with V_r the retained right
+        singular vectors, X = V_r X_r V_r^H, so the problem is re-solved in the
+        reduced drive space and lifted back.  trace(X) is unchanged by the
+        lift since V_r has orthonormal columns.  Default None = unrestricted.
     exact_tol_db : float
         Threshold below which a line is reported as exactly achievable.
 
@@ -311,6 +332,7 @@ def achievable_diagonal(transfer_function, y_target, line_indices=None,
         'exactly_achievable': np.zeros(F, dtype=bool),
         'restart_spread_db': np.full(F, np.nan),
         'solved': np.zeros(F, dtype=bool),
+        'retained_rank': np.zeros(F, dtype=int),
         'n_lines_solved': 0,
         'rank': K,
     }
@@ -320,14 +342,30 @@ def achievable_diagonal(transfer_function, y_target, line_indices=None,
     rng = np.random.default_rng(seed)
     for count, f in enumerate(idx):
         yf = np.maximum(y[f], _TINY)
+        Hb = H[f]
+        if restrict_rcond is not None and restrict_rcond > 0:
+            # Confine the drive to the retained right-singular subspace.
+            # diag(H V_r X_r V_r^H H^H) == diag((H V_r) X_r (H V_r)^H), so the
+            # restricted problem IS the unrestricted problem on H V_r.
+            sv, Vh = np.linalg.svd(Hb)[1:]
+            r_keep = int(np.count_nonzero(sv >= restrict_rcond*sv[0])) if sv[0] > 0 else 0
+            if r_keep == 0:
+                continue
+            Vr = Vh.conj().T[:, :r_keep]
+            Hs = Hb @ Vr
+        else:
+            Vr, r_keep, Hs = None, N, Hb
+        Ks = min(K, Hs.shape[1])
         vv, rms_db, mm_db, spread = _solve_bin(
-            H[f], yf, K, n_restarts, rng, rcond, compute_minimax, max_nfev, betas)
+            Hs, yf, Ks, n_restarts, rng, rcond, compute_minimax, max_nfev, betas)
         if vv is None:
             continue
         v_rms, v_mm = vv
-        L = _unpack(v_rms, N, K)
-        a, _ = _diag_response(H[f], L)
-        X = L @ L.conj().T
+        L = _unpack(v_rms, Hs.shape[1], Ks)
+        a, _ = _diag_response(Hs, L)
+        Xr = L @ L.conj().T
+        X = Vr @ Xr @ Vr.conj().T if Vr is not None else Xr
+        out['retained_rank'][f] = r_keep
         out['best_rms_db'][f] = rms_db
         out['best_minimax_db'][f] = mm_db
         out['achieved'][f] = a
