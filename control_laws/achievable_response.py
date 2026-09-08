@@ -66,6 +66,17 @@ different `seed` is the test for that.
 
 Only numpy and scipy are required.
 
+TIMING (measured, 8 responses x 6 drives, per frequency line solved)
+  restarts=2 nfev=400  minimax on   ~125 ms/line   -> ~2 min for a 901-line band
+  restarts=2 nfev=300  minimax off   ~68 ms/line   -> ~1 min
+  restarts=2 nfev=1200 minimax off  ~266 ms/line   -> ~4 min
+Cost is per line and lines are independent, so it scales linearly and
+parallelises trivially.  The defaults target the ~2 minute mark.  Against a
+fully converged reference (restarts=3, nfev=4000) the default settings were
+0.02 dB worse at the median and 0.5 dB worse at the very worst line, so the
+expensive settings buy little; raise `max_nfev` only if you care about the
+last few tenths on the hardest lines.
+
 USAGE
 -----
     import numpy as np
@@ -248,7 +259,7 @@ def achievable_diagonal(transfer_function, y_target, line_indices=None,
                         rank=None, n_restarts=2, seed=0, rcond=1e-8,
                         restrict_rcond=None,
                         compute_minimax=True, exact_tol_db=0.01,
-                        max_nfev=3000, betas=(10.0, 40.0, 160.0),
+                        max_nfev=400, betas=(10.0, 40.0, 160.0),
                         return_drives=False, progress=None):
     """Best achievable response auto-spectra, per frequency line.
 
