@@ -820,18 +820,31 @@ class match_trace_pseudoinverse_pi:
             # anything physically meaningful, but enough to keep the
             # multiplicative recursion able to correct itself back up
             # instead of getting stuck.
-            finite_positive_spec = spec_trace[np.isfinite(spec_trace) & (spec_trace > 0)]
-            spec_scale = np.max(finite_positive_spec) if finite_positive_spec.size else 0.0
-            if spec_scale > 0:
-                floor = 1e-8*spec_scale
-                output_trace = np.real(trace(output))
-                needs_floor = (~unspecified) & (output_trace < floor)
-                if np.any(needs_floor):
-                    scale = np.ones_like(output_trace)
-                    with np.errstate(divide='ignore', invalid='ignore'):
-                        scale[needs_floor] = floor/np.maximum(output_trace[needs_floor], 1e-300)
-                    scale[~np.isfinite(scale)] = 1.0
-                    output = output*scale[:,np.newaxis,np.newaxis]
+            # Per-line floor (fixed 2026-09-06): relative to THIS line's
+            # own spec target, not the single loudest line in the band. The
+            # original global-max floor (1e-8 * max spec_trace across the
+            # whole spectrum) forced every line's output up to the SAME
+            # absolute value regardless of how quiet that particular line's
+            # own target is -- on a spectrum with wide dynamic range across
+            # lines (e.g. loudest line's target ~1e8-1e9x the quietest)
+            # this spuriously inflated legitimately-quiet, correctly-
+            # converging lines (often exactly the high-plant-gain lines
+            # where a small drive is the CORRECT answer), overshooting them
+            # instead of rescuing anything -- measured as a persistent
+            # several-dB RMS regression vs. an unfloored update on a real
+            # captured FRF with ~1e8 dynamic range across lines. Scaling
+            # the floor to each line's own spec_trace keeps the same
+            # "can't get stuck at zero" protection without imposing a
+            # spectrum-wide floor on every other line.
+            output_trace = np.real(trace(output))
+            floor = 1e-8*spec_trace
+            needs_floor = (~unspecified) & (output_trace < floor)
+            if np.any(needs_floor):
+                scale = np.ones_like(output_trace)
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    scale[needs_floor] = floor[needs_floor]/np.maximum(output_trace[needs_floor], 1e-300)
+                scale[~np.isfinite(scale)] = 1.0
+                output = output*scale[:,np.newaxis,np.newaxis]
         return _cap_drive_coherence(output, self.max_drive_coherence)
 
 
@@ -1077,3 +1090,1285 @@ class buzz_control_class:
         phs = self.cpsd_phase(cpsd_to_match)
         asd = self.cpsd_autospectra(cpsd_original)
         return self.cpsd_from_coh_phs(asd,coh,phs)
+
+
+def _parse_buzz_feedback_parameters(extra_parameters, default_startup_test_level_cap_db=-9.0):
+    """extra_parameters format for buzz_feedback: 'rcond',
+    'rcond,max_drive_coherence', 'rcond,max_drive_coherence,
+    startup_test_level_cap_db', 'rcond,max_drive_coherence,
+    startup_test_level_cap_db,Ki', 'rcond,max_drive_coherence,
+    startup_test_level_cap_db,Ki,max_step_db', or
+    'rcond,max_drive_coherence,startup_test_level_cap_db,Ki,max_step_db,
+    min_correction_frames'. Same meaning as _parse_match_trace_parameters
+    for the first three (max_drive_coherence, startup_test_level_cap_db),
+    but NOT the same rcond default -- see below. Ki defaults to 1.0 --
+    full per-channel integral correction each cycle, matching
+    match_trace_pseudoinverse's own default closed-loop gain -- see
+    buzz_feedback's docstring for what Ki actually multiplies here (a
+    per-response-channel log-diagonal error, not one aggregate per-line
+    trace ratio). max_step_db defaults to 0.0 (uncapped, matching
+    match_trace_pseudoinverse_pi's own default for the same parameter) --
+    see buzz_feedback's docstring for why leaving it uncapped is NOT
+    recommended here despite that default (max_step_db now also rate-
+    limits the overall output trace per cycle, not just target_diag --
+    see the class docstring's 2026-09-04 update). min_correction_frames
+    defaults to 0 (disabled) -- see buzz_feedback's docstring for what it
+    gates and why, and why it's off by default despite that same
+    recommendation.
+
+    rcond default tightened 1e-15 -> 1e-5 (2026-09-04, live blowup
+    investigation): rcond=1e-15 (the value shared with
+    _parse_match_trace_parameters) leaves np.linalg.pinv essentially
+    untruncated -- any singular value more than 1e-15 times the largest
+    is kept and inverted. Checked directly against the real 8-response/
+    6-drive rig's captured FRF that day: several frequency lines (980,
+    972, 145, ~108-110 Hz) had condition numbers of 1000-7000, i.e. a
+    smallest singular value only ~1e-4 to ~1e-3 of the largest -- still
+    comfortably above 1e-15 (or even 1e-5; ratios that close to 1e-4
+    aren't touched until rcond is raised past roughly 1e-4 to 1e-3 for
+    THIS rig), so raising the default alone does not fully neutralize
+    those specific lines -- it only removes the truly-negligible tail
+    below 1e-5, which 1e-15 was letting through for no benefit. Treat
+    1e-5 as a safer floor, not a guarantee: if a specific rig's FRF has
+    worse conditioning than this one did, a larger rcond (1e-3 or more)
+    may be needed to actually truncate its worst lines -- check with
+    np.linalg.svd(H) directly rather than assuming.
+    """
+    parts = extra_parameters.split(',') if extra_parameters else []
+    def _get(i, default):
+        try:
+            return float(parts[i]) if len(parts) > i and parts[i].strip() != '' else default
+        except ValueError:
+            return default
+    rcond = _get(0, 1e-5)
+    max_drive_coherence = _get(1, 1.0)
+    startup_cap_db = _get(2, default_startup_test_level_cap_db)
+    Ki = _get(3, 1.0)
+    max_step_db = _get(4, 0.0)
+    min_correction_frames = _get(5, 0.0)
+    return rcond, max_drive_coherence, startup_cap_db, Ki, max_step_db, min_correction_frames
+
+
+class buzz_feedback:
+    """A closed-loop variant of buzz_control (2026-09-04).
+
+    Like buzz_control, this seeds the target response CPSD's cross-terms
+    (coherence and phase) from a real measurement rather than assuming
+    diagonal/uncorrelated behavior -- system ID for the very first
+    command. Unlike buzz_control, the cross-terms are then REFRESHED from
+    the live last_response_cpsd every cycle after that, so the assumed
+    correlation structure self-corrects as control progresses instead of
+    staying frozen at whatever the system-ID-level excitation happened to
+    show (relevant especially on a nonlinear system, where coherence/phase
+    measured at system-ID amplitude need not match coherence/phase at full
+    test level).
+
+    More importantly, this version actually closes the loop on tracking
+    error, which buzz_control does not: buzz_control_class.control()
+    computes one open-loop pseudoinverse solve from the system-ID-informed
+    target and then just replays that exact same solve every cycle for the
+    rest of the test -- last_response_cpsd is accepted as a parameter but
+    never referenced. Any error in that one-shot solve (most likely right
+    at a resonance, where the transfer function is worst-conditioned)
+    becomes a permanent, uncorrected steady-state error. Live testing
+    (2026-09-04) confirmed exactly this failure mode: buzz_control_class
+    showed no transient overshoot but settled with many lines persistently
+    far off spec.
+
+    Design: rather than match_trace_pseudoinverse's approach of scaling
+    the previous DRIVE (output) CPSD by a single per-frequency-line real
+    scalar -- which freezes whatever cross-terms the very first raw,
+    non-coherence/phase-matched pseudoinverse solve happened to produce,
+    and moves every channel at a line by the same ratio even when their
+    individual errors differ -- this recomputes the ENTIRE target response
+    CPSD fresh each cycle from a per-CHANNEL corrected diagonal plus the
+    latest measured coherence/phase, then re-solves the pseudoinverse from
+    scratch:
+        e_i(f)          = log(specification_ii(f) / last_response_cpsd_ii(f))
+        target_diag_i(f) <- target_diag_i(f) * exp(Ki * e_i(f))
+        Syy_target(f)   = cpsd_from_coh_phs(target_diag(f),
+                                             coherence(last_response_cpsd(f)),
+                                             phase(last_response_cpsd(f)))
+        output(f)       = H+(f) @ Syy_target(f) @ H+(f)^H
+    target_diag is *state* (self.target_diag), persisted between calls and
+    initialized from the specification's own diagonal; the pseudoinverse
+    solve itself is completely fresh every cycle, not an incremental
+    rescaling of the previous drive -- so the result is always a properly
+    formed target CPSD built from the current best estimate of achievable
+    cross-correlation, rather than an accumulation of scalar tweaks to
+    whatever the very first cycle happened to produce. A useful side
+    effect of recomputing fresh each cycle rather than multiplying the
+    previous OUTPUT: there's no way for the drive to get permanently
+    "stuck" at a degenerate value the way a purely multiplicative update
+    can (see match_trace_pseudoinverse_pi's floor-safety-net comments) --
+    each cycle's output is a fresh linear function of target_diag, which
+    is itself guarded against corruption below.
+
+    Ki=1.0 (the default) is full correction each cycle, matching
+    match_trace_pseudoinverse's own default gain, just applied per
+    response channel here instead of via one aggregate per-line trace
+    ratio.
+
+    This is a deliberate first cut, using integral action (Ki) only -- Kp
+    (proportional/derivative-style damping) and resonance-aware gain
+    scheduling both exist for match_trace_pseudoinverse_pi (see that
+    class) and could be added here the same way later if a fixed Ki alone
+    proves too aggressive near a resonance; deliberately left out for now
+    to keep this first version simple.
+
+    Optional global safety cap (max_step_db, added 2026-09-04, off/default
+    by default -- see below for why you should set it anyway): live
+    testing the Ki-only version (both at Ki=1.0 and, when that blew up, at
+    Ki=0.1) found that Ki alone cannot make this design safe, at ANY
+    setting, because the failure mode isn't gradual windup -- it's a
+    single-cycle overcorrection. The very first real correction cycle
+    (the second control() call) compares against a response measured off
+    the deliberately quiet startup-capped command; several channels can
+    still be sitting near the noise floor at that point, making
+    log(specification/achieved) enormous (tens of nepers) for perfectly
+    ordinary reasons, not a fault condition. Even a "conservative" Ki
+    multiplies that huge error by a smaller fraction, but a huge number
+    times a small fraction can still be huge -- Ki rations how much of a
+    bad error gets applied, it does not cap how bad any single error can
+    be. Confirmed live (2026-09-04): response error pegged around
+    800 dB (~1e80 power ratio), drive collapsed to 0V, at Ki=0.1 -- not a
+    slow drift, a first-cycle blowup. max_step_db fixes this the same way
+    match_trace_pseudoinverse_pi does: a hard ceiling, independent of Ki,
+    on how far log(target_diag) can move for any one channel in one
+    cycle, applied per (frequency line, response channel) here rather
+    than match_trace_pseudoinverse_pi's per-line scalar:
+        correction_i(f)   = Ki * e_i(f)
+        correction_i(f)   = clip(correction_i(f), -max_step_nat, max_step_nat)
+        target_diag_i(f) <- target_diag_i(f) * exp(correction_i(f))
+    where max_step_nat = max_step_db*ln(10)/10. max_step_db=0.0 (the
+    default, matching match_trace_pseudoinverse_pi's own convention for
+    backward compatibility) leaves this uncapped -- given the live
+    failure above, do not actually run with it left at 0; a starting
+    point in the 3-8 dB range (match_trace_pseudoinverse_pi was tuned
+    successfully at 8 dB on this same rig) is a reasonable first guess,
+    not a validated recommendation.
+
+    Optional minimum-frames gate (min_correction_frames, added
+    2026-09-04, off/default by default): complementary to max_step_db,
+    not a substitute for it. max_step_db bounds how big a correction can
+    be once it fires; min_correction_frames instead controls whether a
+    correction fires at all yet, by checking the live frame count already
+    passed into control() as `frames` (Rattlesnake's own
+    self.frames_computed, incremented once per raw measured frame
+    regardless of averaging type) against this threshold. While
+    frames < min_correction_frames, the entire per-cycle update --
+    target_diag's Ki/log-error correction AND the pseudoinverse re-solve
+    that follows it -- is skipped, and the drive is held exactly at
+    last_output_cpsd instead. This mirrors a guard Rattlesnake's own
+    startup code already applies on the FRF side
+    (min_live_frf_frames_before_replacing_sysid_seed = 2 in
+    random_vibration_sys_id_data_analysis.py, which holds the transfer
+    function at its system-ID-seeded value rather than trust an
+    immediately-noisy live estimate) but that guard does not extend to
+    last_response_cpsd, which every control law -- buzz_feedback
+    included -- otherwise receives unconditionally from the very first
+    live cycle. Both Linear and Exponential averaging (the two types this
+    codebase supports) start from a single raw, unaveraged frame on that
+    first cycle, so a low min_correction_frames (say, 1-3) buys little;
+    the user-suggested 4-8 is a reasonable starting range, not a
+    validated one. min_correction_frames=0 (the default) disables this
+    gate entirely, matching max_step_db's off-by-default convention --
+    given the live failure documented above, running with EITHER
+    max_step_db or min_correction_frames (or both) is recommended over
+    running with neither.
+
+    Output-trace rate limiter (2026-09-04, same live-blowup investigation
+    as above, added to max_step_db rather than as a separate parameter):
+    live testing with min_correction_frames=4, max_step_db=3 still blew
+    up on the very first cycle the gate released -- RMS output jumped
+    from ~0.13 to ~6.6e13 in that one cycle (confirmed directly from
+    Rattlesnake.log timestamps), even though target_diag is mathematically
+    incapable of moving by more than a factor of exp(max_step_db*ln(10)/10)
+    per cycle. The gap: this closed-loop branch does not do a bounded
+    multiplicative update on the PREVIOUS drive the way
+    match_trace_pseudoinverse_pi does (output(k) =
+    output(k-1)*exp(bounded correction)) -- it rebuilds the full target
+    CPSD from live coherence/phase and re-solves the pseudoinverse from
+    scratch every cycle, so a bounded diagonal step does not imply a
+    bounded output; a biased coherence estimate (a real, well-known
+    effect -- coherence estimated from few frames is biased toward 1,
+    maximally so at exactly 1 frame) combined with an ill-conditioned FRF
+    direction can turn a small target_diag move into an arbitrary output.
+    max_step_db, when > 0, now also rate-limits the RESULT directly:
+    after the pseudoinverse re-solve, output's trace (power) is clamped
+    to at most exp(max_step_db*ln(10)/10) times last cycle's own output
+    trace, regardless of what caused that cycle's solve to be large. This
+    is relative to the previous drive, not the specification, so it does
+    not fight the environment's own test-level ramp -- it only limits how
+    fast the drive can move, not how high it can ultimately go once
+    genuinely converging.
+
+    Channels/lines the specification doesn't cover (specification_ii <= 0
+    or non-finite) have their target_diag forced to zero, matching
+    match_trace_pseudoinverse's own behavior for out-of-band lines. A
+    channel that measures an exact/near-zero or non-finite response on
+    some cycle (plausible during a rough transient) holds its previous
+    target_diag state unchanged rather than let log(spec/~0) blow the
+    state up to inf/NaN -- mirroring match_trace_pseudoinverse_pi's
+    analogous transient-bad guard.
+
+    extra_parameters format: 'rcond', 'rcond,max_drive_coherence',
+    'rcond,max_drive_coherence,startup_test_level_cap_db',
+    'rcond,max_drive_coherence,startup_test_level_cap_db,Ki',
+    'rcond,max_drive_coherence,startup_test_level_cap_db,Ki,max_step_db',
+    or 'rcond,max_drive_coherence,startup_test_level_cap_db,Ki,
+    max_step_db,min_correction_frames'. See
+    _parse_buzz_feedback_parameters.
+    """
+
+    def __init__(self,
+                 specification, # Specifications
+                 warning_levels, # Warning levels
+                 abort_levels, # Abort Levels
+                 extra_parameters, # Extra parameters for the control law
+                 transfer_function = None, # Transfer Functions
+                 noise_response_cpsd = None, # Noise levels and correlation
+                 noise_reference_cpsd = None, # from the system identification
+                 sysid_response_cpsd = None, # Response levels and correlation
+                 sysid_reference_cpsd = None, # from the system identification
+                 multiple_coherence = None, # Coherence from the system identification
+                 frames = None, # Number of frames in the CPSD and FRF matrices
+                 total_frames = None, # Total frames that could be in the CPSD and FRF matrices
+                 last_response_cpsd = None, # Last Control Response for Error Correction
+                 last_output_cpsd = None, # Last Control Excitation for Drive-based control
+                 ):
+        self.specification = specification
+        self.warning_levels = warning_levels
+        self.abort_levels = abort_levels
+        (self.rcond, self.max_drive_coherence, self.startup_test_level_cap_db,
+         self.Ki, self.max_step_db,
+         self.min_correction_frames) = _parse_buzz_feedback_parameters(extra_parameters)
+        # Per-response-channel target diagonal: the persistent integral
+        # state this law corrects cycle to cycle. Starts at the
+        # specification's own autospectra, exactly like buzz_control's
+        # modified_spec does before any buzz-phase coherence/phase
+        # substitution.
+        self.target_diag = np.real(cpsd_autospectra(specification)).copy()
+        # Initial target CPSD (specification's diagonal + system-ID-
+        # measured coherence/phase, same as buzz_control) -- used only for
+        # the very first, startup-guarded command, before any real
+        # response measurement exists to refresh the cross-terms from.
+        if sysid_response_cpsd is None:
+            self.modified_spec = specification
+        else:
+            self.modified_spec = match_coherence_phase(specification, sysid_response_cpsd)
+
+    def system_id_update(self,
+                         transfer_function = None, # Transfer Functions
+                         noise_response_cpsd = None, # Noise levels and correlation
+                         noise_reference_cpsd = None, # from the system identification
+                         sysid_response_cpsd = None, # Response levels and correlation
+                         sysid_reference_cpsd = None, # from the system identification
+                         multiple_coherence = None, # Coherence from the system identification
+                         frames = None, # Number of frames in the CPSD and FRF matrices
+                         total_frames = None, # Total frames that could be in the CPSD and FRF matrices
+                         ):
+        # Same as buzz_control_class: once real system-ID data is
+        # available, (re-)seed the coherence/phase used for the very first
+        # control command from it.
+        self.modified_spec = match_coherence_phase(self.specification, sysid_response_cpsd)
+
+    def control(self,
+                transfer_function = None, # Transfer Functions
+                multiple_coherence = None, # Coherence from the system identification
+                frames = None, # Number of frames in the CPSD and FRF matrices
+                total_frames = None, # Total frames that could be in the CPSD and FRF matrices
+                last_response_cpsd = None, # Last Control Response for Error Correction
+                last_output_cpsd = None, # Last Control Excitation for Drive-based control
+                ) -> np.ndarray:
+        if last_output_cpsd is None:
+            # Startup guard, same structure as match_trace_pseudoinverse /
+            # match_trace_pseudoinverse_pi: no real measured response yet,
+            # so this is a raw, otherwise-unguarded pseudoinverse solve off
+            # the system-ID-informed target -- clamp its trace to
+            # startup_test_level_cap_db dB relative to the specification.
+            tf_pinv = np.linalg.pinv(transfer_function, self.rcond)
+            output = tf_pinv@self.modified_spec@tf_pinv.conjugate().transpose(0,2,1)
+            spec_trace = np.real(trace(self.specification))
+            output_trace = np.real(trace(output))
+            max_power_ratio = 10.0**(self.startup_test_level_cap_db/10.0)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                scale = np.minimum(1.0, max_power_ratio*spec_trace/output_trace)
+            scale[~np.isfinite(scale)] = 1.0
+            scale[output_trace <= 0] = 1.0
+            output = output*scale[:,np.newaxis,np.newaxis]
+        else:
+            if (self.min_correction_frames > 0
+                    and (frames is None or frames < self.min_correction_frames)):
+                # Not enough live frames yet to trust last_response_cpsd for
+                # a correction (2026-09-04 request) -- same idea as
+                # min_live_frf_frames_before_replacing_sysid_seed in
+                # random_vibration_sys_id_data_analysis.py, which gives the
+                # FRF estimate this kind of grace period but never extended
+                # it to the response CPSD any control law (including this
+                # one) otherwise receives unconditionally every cycle.
+                # Complementary to max_step_db, not a replacement for it:
+                # max_step_db bounds how large a correction that DOES fire
+                # can be; this skips the correction (and the target_diag
+                # update behind it) entirely while frames is still too thin
+                # to trust, holding the drive exactly as it was last cycle.
+                output = last_output_cpsd
+            else:
+                spec_diag = np.real(cpsd_autospectra(self.specification))
+                achieved_diag = np.real(cpsd_autospectra(last_response_cpsd))
+
+                # Same two-case split as match_trace_pseudoinverse_pi: a line
+                # outside the specified band (spec_diag <= 0, a static
+                # property of the specification) is silenced; a specified
+                # channel that merely measured ~0 or a non-finite response
+                # THIS cycle (plausible during a rough transient) must NOT be
+                # silenced -- that would be unrecoverable since target_diag is
+                # multiplicative -- so its target_diag state is simply held
+                # unchanged instead.
+                unspecified = ~np.isfinite(spec_diag) | (spec_diag <= 0)
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    raw_ratio = spec_diag/achieved_diag
+                transient_bad = (~unspecified) & (~np.isfinite(raw_ratio) | (raw_ratio <= 0))
+                normal = ~unspecified & ~transient_bad
+
+                log_error = np.zeros_like(spec_diag)
+                log_error[normal] = np.log(raw_ratio[normal])
+                correction = np.zeros_like(spec_diag)
+                correction[normal] = self.Ki*log_error[normal]
+                # Global safety cap (2026-09-04, added after a live blowup --
+                # see class docstring): caps the per-(line, channel) log-power
+                # step independent of Ki, so a single cycle's error -- however
+                # large -- can never move target_diag by more than
+                # max_step_db in one shot. max_step_db<=0 leaves this uncapped.
+                if self.max_step_db > 0:
+                    max_step_nat = self.max_step_db*np.log(10.0)/10.0
+                    correction[normal] = np.clip(correction[normal], -max_step_nat, max_step_nat)
+                self.target_diag[normal] = self.target_diag[normal]*np.exp(correction[normal])
+                self.target_diag[unspecified] = 0.0
+                # transient_bad entries: target_diag left untouched above.
+
+                # Cross-terms refreshed from the live measured response every
+                # cycle (2026-09-04 request) -- unlike buzz_control, which
+                # only ever uses the system-ID snapshot from __init__/
+                # system_id_update, this lets the assumed correlation
+                # structure track the real system as control progresses.
+                coh = cpsd_coherence(last_response_cpsd)
+                phs = cpsd_phase(last_response_cpsd)
+                syy_target = cpsd_from_coh_phs(self.target_diag, coh, phs)
+
+                tf_pinv = np.linalg.pinv(transfer_function, self.rcond)
+                output = tf_pinv@syy_target@tf_pinv.conjugate().transpose(0,2,1)
+
+                # Output-trace rate limiter (2026-09-04, added after a live
+                # blowup -- see class docstring): the target_diag cap above
+                # only bounds the DIAGONAL going into this re-solve, not the
+                # re-solved output itself -- the coherence/phase rebuild and
+                # fresh pseudoinverse each cycle can turn a small, bounded
+                # target_diag step into an arbitrarily large output if that
+                # cycle's live coherence estimate (biased by a low frame
+                # count) or the FRF's conditioning make the re-solve
+                # ill-behaved. This reuses max_step_db as a second, direct
+                # cap: whatever the fresh solve computed, its trace (power)
+                # is not allowed to exceed exp(max_step_nat) times the
+                # PREVIOUS cycle's own output trace. Unlike the startup
+                # guard's cap (relative to the specification, meant only
+                # for the deliberately-quiet first command), this is
+                # relative to last cycle's already-in-use drive level, so it
+                # does not fight the environment's own test-level ramp --
+                # it only limits how fast the drive can move, not how high
+                # it can ultimately go. max_step_db<=0 leaves this uncapped,
+                # same as the target_diag cap above.
+                if self.max_step_db > 0:
+                    max_step_nat = self.max_step_db*np.log(10.0)/10.0
+                    max_trace_ratio = np.exp(max_step_nat)
+                    prev_trace = np.real(trace(last_output_cpsd))
+                    out_trace = np.real(trace(output))
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        trace_scale = np.minimum(1.0, max_trace_ratio*prev_trace/out_trace)
+                    trace_scale[~np.isfinite(trace_scale)] = 1.0
+                    trace_scale[out_trace <= 0] = 1.0
+                    trace_scale[prev_trace <= 0] = 1.0
+                    output = output*trace_scale[:,np.newaxis,np.newaxis]
+        return _cap_drive_coherence(output, self.max_drive_coherence)
+
+
+def _parse_match_trace_pi_resolve_parameters(extra_parameters, default_startup_test_level_cap_db=-9.0):
+    """extra_parameters parsing for match_trace_pi_resolve (added
+    2026-09-05). Format, all optional and defaulted incrementally exactly
+    like the other control laws in this module (provide a prefix, the
+    rest default):
+
+        rcond, max_drive_coherence, startup_test_level_cap_db,
+        Kp, Ki, max_step_db,
+        Ki_resolve, ceiling_db,
+        stability_tol, stability_hold_cycles, min_hold_cycles,
+        max_cycles_before_resolve, avg_alpha, refreeze_enabled
+
+    rcond (default 1e-3, NOT 1e-15): tightened from the historical
+    default used elsewhere in this module. Verified 2026-09-04/05 against
+    the real captured FRF (examples/sixdrive12resp/results/cva_captures/
+    latest_h1_sysid_capture.npz, 8 responses x 6 drives): a full-band SVD
+    sweep found 579 of 2049 lines have condition number > 1000 (not just
+    the handful of resonance peaks spot-checked earlier this session) --
+    with more response channels than drive channels, this system is
+    poorly conditioned across a much wider band than a peak-picking check
+    would suggest. rcond=1e-3 truncates all of those; see the class
+    docstring for the measured cost of doing so.
+
+    max_drive_coherence (default 1.0): unchanged meaning from every other
+    law in this module.
+
+    startup_test_level_cap_db (default -9.0): unchanged meaning; applies
+    only to the very first command, identical to match_trace_pseudo-
+    inverse_pi's own startup guard, which this law reuses verbatim.
+
+    Kp, Ki (defaults 0.3, 0.5): Phase 1 (see class docstring) PI gains on
+    log(trace(spec)/trace(response)) -- identical math and identical
+    defaults to match_trace_pseudoinverse_pi's own recommended tuning.
+
+    max_step_db (default 3.0, NOT 0.0/off): a single safety cap shared by
+    every bounded step in this law -- Phase 1's per-line trace
+    correction, Phase 2's per-channel diagonal correction, and Phase 2's
+    output-trace rate limiter (see buzz_feedback's docstring/history for
+    why the output-trace limiter is needed in addition to a diagonal-only
+    cap: without it, a bounded diagonal step does not bound the actual
+    re-solved output). This defaults ON here -- every other law in this
+    module defaults it OFF, for backward compatibility with pre-existing
+    tuned setups -- because this is a new law with no such history, and
+    every real blowup diagnosed this session happened with it disabled.
+
+    Ki_resolve (default 0.5): Phase 2's own integral gain on
+    log(spec_diag/achieved_diag), independent of Phase 1's Ki -- Phase 2
+    corrects a fundamentally different, per-channel quantity against a
+    frozen cross-term structure, so there's no reason it should have to
+    share a gain with Phase 1's scalar trace correction.
+
+    ceiling_db (default 30.0): Phase 2 anti-windup -- target_diag is
+    clamped to never exceed spec_diag * 10**(ceiling_db/10), independent
+    of max_step_db's per-cycle RATE limit (a bounded rate does not bound
+    an asymptotic value over unlimited cycles -- see this session's
+    diag_windup.py reproduction, which is exactly what motivated this).
+    Verified 2026-09-05 in simulation against the real FRF: this ceiling
+    engaged on 0.04% of (line, channel) cells at convergence -- a
+    backstop for a genuinely unfixable channel, not something that costs
+    accuracy under normal operation.
+
+    stability_tol, stability_hold_cycles (defaults 0.02, 5): Phase 1 ->
+    Phase 2 transition (and later re-freezes) trigger once the cycle-to-
+    cycle change in an exponentially-averaged coherence estimate
+    (avg_alpha below) stays under stability_tol for stability_hold_cycles
+    consecutive cycles. These are the two parameters most likely to need
+    retuning per system -- there's no way to derive a universally correct
+    threshold, only a validated starting point (see class docstring).
+
+    min_hold_cycles (default 10): floor before the very FIRST resolve is
+    eligible, and also the cooldown floor before any later re-freeze --
+    prevents acting on a stability read that's only stable because
+    nothing has happened yet.
+
+    max_cycles_before_resolve (default 100): fallback ceiling -- forces
+    the first resolve even if the stability check never latches (e.g.
+    stability_tol tuned too tight for this system's real noise floor), so
+    this law can't get stuck running Phase 1 forever. Also doubles as the
+    knob for "just use a fixed cycle count instead of auto-detection":
+    set stability_hold_cycles=1 and a very loose stability_tol (e.g.
+    10.0) so the auto-check trivially passes immediately, and the resolve
+    then fires as soon as min_hold_cycles/max_cycles_before_resolve is
+    reached -- effectively fixed-cycle behavior using the same machinery.
+
+    avg_alpha (default 0.1): exponential-averaging coefficient (~10-cycle
+    effective window) for the coherence tracker that feeds the stability
+    check AND becomes coh_frozen/phs_frozen at the moment of a resolve.
+    Separate from whatever CPSD averaging the environment itself is
+    configured with.
+
+    refreeze_enabled (default 1.0, i.e. True): after the first resolve,
+    keep monitoring the same stability check; if the coherence estimate
+    moves away from stable (delta > stability_tol at least once -- e.g.
+    from a test-level change altering the real cross-coupling through
+    amplitude-dependent nonlinearity) and then re-settles, re-freeze
+    coh_frozen/phs_frozen from the new stable estimate rather than
+    continuing to correct against a stale snapshot. Set to 0.0 to freeze
+    exactly once and never again.
+    """
+    parts = extra_parameters.split(',') if extra_parameters else []
+    def _get(i, default):
+        try:
+            return float(parts[i]) if len(parts) > i and parts[i].strip() != '' else default
+        except ValueError:
+            return default
+    rcond = _get(0, 1e-3)
+    max_drive_coherence = _get(1, 1.0)
+    startup_cap_db = _get(2, default_startup_test_level_cap_db)
+    Kp = _get(3, 0.3)
+    Ki = _get(4, 0.5)
+    max_step_db = _get(5, 3.0)
+    Ki_resolve = _get(6, 0.5)
+    ceiling_db = _get(7, 30.0)
+    stability_tol = _get(8, 0.02)
+    stability_hold_cycles = int(_get(9, 5))
+    min_hold_cycles = int(_get(10, 10))
+    max_cycles_before_resolve = int(_get(11, 100))
+    avg_alpha = _get(12, 0.1)
+    refreeze_enabled = _get(13, 1.0) > 0
+    return (rcond, max_drive_coherence, startup_cap_db, Kp, Ki, max_step_db,
+            Ki_resolve, ceiling_db, stability_tol, stability_hold_cycles,
+            min_hold_cycles, max_cycles_before_resolve, avg_alpha, refreeze_enabled)
+
+
+class match_trace_pi_resolve:
+    """Two-phase control law (added 2026-09-05) combining
+    match_trace_pseudoinverse_pi's safe, bounded trace-based PI
+    correction with a one-time (or periodic) full per-channel resolve
+    once the measured coherence/phase have stabilized -- built to answer
+    a direct question raised this session: "if match_trace_pseudoinverse
+    _pi has equalized to its best response, is there a way to decrease
+    the error?"
+
+    Why there's error left for match_trace_pseudoinverse_pi to leave
+    behind: that law corrects a SINGLE SCALAR per frequency line --
+    log(trace(spec)/trace(response)) -- and multiplies the ENTIRE
+    previous drive matrix (diagonal and cross-terms alike) by
+    exp(correction). Total power at each line converges to spec, but the
+    cross-term SHAPE is whatever the very first startup pseudoinverse
+    solve produced (pinv(H) @ specification @ pinv(H)^H, using the
+    specification's own assumed coherence) and is never touched again --
+    if the plant's real cross-coupling differs from what the spec
+    assumed (it generally will; a real structure's coupling isn't
+    dictated by the test spec), individual channels can sit off-target
+    indefinitely even while total power is exactly right.
+
+    Phase 1 (below, until a resolve triggers) is match_trace_pseudo-
+    inverse_pi's exact update law, verbatim -- same math, same defaults,
+    same startup guard, same near-zero-lock floor safety net. It exists
+    to get the loop to a safe, converged operating point using ONLY the
+    well-tested trace-scalar correction, while passively building up an
+    exponentially-averaged estimate of the measured response CPSD (see
+    avg_alpha) for later use.
+
+    Phase 2 triggers once that averaged coherence estimate has stopped
+    changing cycle-to-cycle (stability_tol/stability_hold_cycles) -- not
+    on a fixed frame count -- specifically because live coherence
+    estimated from only a few frames is a known-biased estimator (a
+    single frame's own outer product has coherence exactly 1 between
+    every channel pair, always; see this session's live blowup #2,
+    caused by exactly this). At that point it freezes the averaged
+    coherence/phase (coh_frozen/phs_frozen) and switches to a bounded,
+    ceiling-clamped PER-CHANNEL diagonal correction (target_diag_i *=
+    exp(clip(Ki_resolve*log(spec_i/achieved_i)))) rebuilt against that
+    FROZEN cross-term structure each cycle via cpsd_from_coh_phs, with
+    the same output-trace rate limiter buzz_feedback uses (a bounded
+    diagonal step does not bound the re-solved output on its own) and an
+    absolute ceiling on target_diag (ceiling_db) that buzz_feedback never
+    got -- the anti-windup fix identified but not implemented there (see
+    diag_windup.py from this session). Cross-terms are only ever
+    refreshed at a resolve event, never rebuilt from a fresh live
+    snapshot mid-cycle -- this is the structural difference from
+    buzz_feedback that makes Phase 2 safe to run continuously.
+
+    If refreeze_enabled (default on), the same stability check keeps
+    running after the first resolve: a genuine disturbance (e.g. the
+    environment ramping test level, which can shift a real structure's
+    amplitude-dependent coupling) will push the tracked coherence away
+    from stable, and once it settles again -- at whatever new structure
+    applies -- coh_frozen/phs_frozen are refreshed. The per-channel
+    diagonal correction itself (Phase 2's Ki_resolve term) is never
+    suspended during this -- it keeps tracking spec_i/achieved_i every
+    cycle regardless of freeze state, so ordinary level changes are
+    handled by that alone; refreeze exists for when the CROSS-TERM shape
+    itself needs to change, not the levels.
+
+    Verified 2026-09-05 against the real captured FRF (examples/
+    sixdrive12resp/results/cva_captures/latest_h1_sysid_capture.npz) with
+    a synthetic diagonal-only specification (each channel's level taken
+    from replaying the real system-ID drive through the real FRF, but
+    with NO cross-terms specified -- the common real-world case, and
+    deliberately not what this 8-response/6-drive system will naturally
+    produce, so the reachability gap this law targets is genuine, not
+    contrived): Phase 1 alone converged to 12.3 dB RMS per-channel error
+    (max 28.8 dB, 1555 of 2049 lines off by >3 dB) despite total power
+    matching spec almost exactly throughout. Adding Phase 2 dropped that
+    to 1.4 dB RMS (max 17.1 dB, 323 of 2049 lines >3 dB) -- roughly a 9x
+    RMS reduction, improving 79% of all (line, channel) error cells.
+    Phase 2 plateaus by ~10-20 cycles (not still improving at 40), and
+    the ceiling clamp engaged on only 0.04% of cells -- the 1.4 dB
+    residual is a real floor (rcond truncation on the worst-conditioned
+    579 lines, plus measurement noise), not the anti-windup clamp costing
+    accuracy. Separately verified the coherence-bias claim numerically: a
+    4-frame estimate (matching the live blowup's frame count) differs
+    from a 3000-frame near-ground-truth reference by 0.235 mean absolute
+    coherence; a 640-frame running average (what Phase 2 actually uses)
+    differs by 0.009 -- about 26x tighter, which is why waiting for
+    stability before resolving is safe where reconstructing every cycle
+    was not.
+
+    extra_parameters format and every default: see
+    _parse_match_trace_pi_resolve_parameters.
+    """
+
+    def __init__(self,
+                 specification,
+                 warning_levels,
+                 abort_levels,
+                 extra_parameters,
+                 transfer_function=None,
+                 noise_response_cpsd=None,
+                 noise_reference_cpsd=None,
+                 sysid_response_cpsd=None,
+                 sysid_reference_cpsd=None,
+                 multiple_coherence=None,
+                 frames=None,
+                 total_frames=None,
+                 last_response_cpsd=None,
+                 last_output_cpsd=None,
+                 ):
+        self.specification = specification
+        self.warning_levels = warning_levels
+        self.abort_levels = abort_levels
+        (self.rcond, self.max_drive_coherence, self.startup_test_level_cap_db,
+         self.Kp, self.Ki, self.max_step_db,
+         self.Ki_resolve, self.ceiling_db,
+         self.stability_tol, self.stability_hold_cycles, self.min_hold_cycles,
+         self.max_cycles_before_resolve, self.avg_alpha,
+         self.refreeze_enabled) = _parse_match_trace_pi_resolve_parameters(extra_parameters)
+        # All allocated to the per-frequency-line shape on the first real
+        # call, once we know the frequency-line count.
+        self.prev_pi_error = None
+        self.avg_response = None
+        self.coh_prev = None
+        self.stable_count = 0
+        self.cycles_since_start = 0
+        self.cycles_since_last_resolve = 0
+        self.has_resolved = False
+        self.instability_seen_since_freeze = True
+        self.coh_frozen = None
+        self.phs_frozen = None
+        self.target_diag = None
+
+    def system_id_update(self,
+                         transfer_function=None,
+                         noise_response_cpsd=None,
+                         noise_reference_cpsd=None,
+                         sysid_response_cpsd=None,
+                         sysid_reference_cpsd=None,
+                         multiple_coherence=None,
+                         frames=None,
+                         total_frames=None,
+                         ):
+        # Like match_trace_pseudoinverse_pi, this law doesn't use the
+        # system-ID-phase CPSDs for anything -- Phase 1's startup guard is
+        # a raw pseudoinverse-of-specification solve, and Phase 2 only
+        # ever seeds its cross-term structure from LIVE, stability-gated
+        # coherence -- so there's nothing to do here.
+        pass
+
+    def control(self,
+                transfer_function=None,
+                multiple_coherence=None,
+                frames=None,
+                total_frames=None,
+                last_response_cpsd=None,
+                last_output_cpsd=None,
+                ) -> np.ndarray:
+        if last_output_cpsd is None:
+            # Startup guard: identical to match_trace_pseudoinverse_pi's.
+            tf_pinv = np.linalg.pinv(transfer_function, self.rcond)
+            output = tf_pinv@self.specification@tf_pinv.conjugate().transpose(0,2,1)
+            spec_trace = np.real(trace(self.specification))
+            output_trace = np.real(trace(output))
+            max_power_ratio = 10.0**(self.startup_test_level_cap_db/10.0)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                scale = np.minimum(1.0, max_power_ratio*spec_trace/output_trace)
+            scale[~np.isfinite(scale)] = 1.0
+            scale[output_trace <= 0] = 1.0
+            output = output*scale[:,np.newaxis,np.newaxis]
+            # Reset all persistent state for a fresh run.
+            self.prev_pi_error = np.zeros(output.shape[0])
+            self.avg_response = None
+            self.coh_prev = None
+            self.stable_count = 0
+            self.cycles_since_start = 0
+            self.cycles_since_last_resolve = 0
+            self.has_resolved = False
+            self.instability_seen_since_freeze = True
+            self.coh_frozen = None
+            self.phs_frozen = None
+            self.target_diag = None
+            return _cap_drive_coherence(output, self.max_drive_coherence)
+
+        # ------------------------------------------------------------
+        # Coherence/stability tracker: runs every cycle regardless of
+        # phase, off the environment's own last_response_cpsd (never off
+        # the possibly-stale frozen snapshot).
+        # ------------------------------------------------------------
+        if (self.avg_response is None
+                or self.avg_response.shape != last_response_cpsd.shape):
+            self.avg_response = last_response_cpsd.copy()
+        else:
+            self.avg_response = (self.avg_alpha*last_response_cpsd
+                                  + (1.0 - self.avg_alpha)*self.avg_response)
+        coh_now = cpsd_coherence(self.avg_response)
+        n_ch = coh_now.shape[-1]
+        off_diag = ~np.eye(n_ch, dtype=bool)
+        if self.coh_prev is not None and self.coh_prev.shape == coh_now.shape:
+            delta = np.mean(np.abs(coh_now[:, off_diag] - self.coh_prev[:, off_diag]))
+        else:
+            delta = np.inf
+        self.coh_prev = coh_now
+        self.cycles_since_start += 1
+        self.cycles_since_last_resolve += 1
+        if delta > self.stability_tol:
+            self.stable_count = 0
+            self.instability_seen_since_freeze = True
+        else:
+            self.stable_count += 1
+
+        ready_first = (not self.has_resolved) and (
+            self.cycles_since_start >= self.min_hold_cycles
+            and (self.stable_count >= self.stability_hold_cycles
+                 or self.cycles_since_start >= self.max_cycles_before_resolve))
+        ready_refreeze = (self.has_resolved and self.refreeze_enabled
+                           and self.instability_seen_since_freeze
+                           and self.cycles_since_last_resolve >= self.min_hold_cycles
+                           and (self.stable_count >= self.stability_hold_cycles
+                                or self.cycles_since_last_resolve >= self.max_cycles_before_resolve))
+
+        if ready_first or ready_refreeze:
+            self.coh_frozen = cpsd_coherence(self.avg_response)
+            self.phs_frozen = cpsd_phase(self.avg_response)
+            if self.target_diag is None:
+                self.target_diag = np.real(cpsd_autospectra(self.avg_response)).copy()
+            self.has_resolved = True
+            self.cycles_since_last_resolve = 0
+            self.instability_seen_since_freeze = False
+            self.stable_count = 0
+
+        if not self.has_resolved:
+            # ---- Phase 1: match_trace_pseudoinverse_pi's own update, verbatim. ----
+            spec_trace = np.real(trace(self.specification))
+            resp_trace = np.real(trace(last_response_cpsd))
+            if self.prev_pi_error is None or self.prev_pi_error.shape[0] != spec_trace.shape[0]:
+                self.prev_pi_error = np.zeros_like(spec_trace)
+            unspecified = ~np.isfinite(spec_trace) | (spec_trace <= 0)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                raw_ratio = spec_trace/resp_trace
+            transient_bad = (~unspecified) & (~np.isfinite(raw_ratio) | (raw_ratio <= 0))
+            normal = ~unspecified & ~transient_bad
+            log_error = np.zeros_like(spec_trace)
+            log_error[normal] = np.log(raw_ratio[normal])
+            correction = np.zeros_like(spec_trace)
+            correction[normal] = (self.Ki*log_error[normal]
+                                   + self.Kp*(log_error[normal] - self.prev_pi_error[normal]))
+            if self.max_step_db > 0:
+                max_step_nat = self.max_step_db*np.log(10.0)/10.0
+                correction[normal] = np.clip(correction[normal], -max_step_nat, max_step_nat)
+            output = last_output_cpsd*np.exp(correction)[:,np.newaxis,np.newaxis]
+            output[unspecified] = 0.0
+            new_prev_error = self.prev_pi_error.copy()
+            new_prev_error[normal] = log_error[normal]
+            self.prev_pi_error = new_prev_error
+
+            # Per-line floor (fixed 2026-09-06): relative to THIS line's
+            # own spec target, not the single loudest line in the band. The
+            # original global-max floor (1e-8 * max spec_trace across the
+            # whole spectrum) forced every line's output up to the SAME
+            # absolute value regardless of how quiet that particular line's
+            # own target is -- on a spectrum with wide dynamic range across
+            # lines (e.g. loudest line's target ~1e8-1e9x the quietest)
+            # this spuriously inflated legitimately-quiet, correctly-
+            # converging lines (often exactly the high-plant-gain lines
+            # where a small drive is the CORRECT answer), overshooting them
+            # instead of rescuing anything -- measured as a persistent
+            # several-dB RMS regression vs. an unfloored update on a real
+            # captured FRF with ~1e8 dynamic range across lines. Scaling
+            # the floor to each line's own spec_trace keeps the same
+            # "can't get stuck at zero" protection without imposing a
+            # spectrum-wide floor on every other line.
+            output_trace = np.real(trace(output))
+            floor = 1e-8*spec_trace
+            needs_floor = (~unspecified) & (output_trace < floor)
+            if np.any(needs_floor):
+                scale = np.ones_like(output_trace)
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    scale[needs_floor] = floor[needs_floor]/np.maximum(output_trace[needs_floor], 1e-300)
+                scale[~np.isfinite(scale)] = 1.0
+                output = output*scale[:,np.newaxis,np.newaxis]
+        else:
+            # ---- Phase 2: bounded, ceiling-clamped per-channel diagonal
+            #      correction against the FROZEN cross-term structure. ----
+            spec_diag = np.real(cpsd_autospectra(self.specification))
+            achieved_diag = np.real(cpsd_autospectra(last_response_cpsd))
+            unspecified = ~np.isfinite(spec_diag) | (spec_diag <= 0)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                raw_ratio = spec_diag/achieved_diag
+            transient_bad = (~unspecified) & (~np.isfinite(raw_ratio) | (raw_ratio <= 0))
+            normal = ~unspecified & ~transient_bad
+            log_error = np.zeros_like(spec_diag)
+            log_error[normal] = np.log(raw_ratio[normal])
+            correction = np.zeros_like(spec_diag)
+            correction[normal] = self.Ki_resolve*log_error[normal]
+            if self.max_step_db > 0:
+                max_step_nat = self.max_step_db*np.log(10.0)/10.0
+                correction[normal] = np.clip(correction[normal], -max_step_nat, max_step_nat)
+            ceiling = spec_diag*10.0**(self.ceiling_db/10.0)
+            self.target_diag[normal] = np.minimum(
+                self.target_diag[normal]*np.exp(correction[normal]), ceiling[normal])
+
+            # Per-(line, channel) floor (fixed 2026-09-06): same reasoning
+            # as the Phase-1 floor fix -- relative to each entry's own
+            # spec_diag target, not the single loudest (line, channel)
+            # entry in the whole band.
+            diag_floor = 1e-8*spec_diag
+            self.target_diag[normal] = np.maximum(self.target_diag[normal], diag_floor[normal])
+            self.target_diag[unspecified] = 0.0
+            # transient_bad entries: target_diag left untouched, same
+            # reasoning as buzz_feedback -- don't trust this cycle's
+            # measurement enough to move the integrator either way.
+
+            S_target = cpsd_from_coh_phs(self.target_diag, self.coh_frozen, self.phs_frozen)
+            tf_pinv = np.linalg.pinv(transfer_function, self.rcond)
+            output = tf_pinv@S_target@tf_pinv.conjugate().transpose(0,2,1)
+
+            if self.max_step_db > 0:
+                max_step_nat = self.max_step_db*np.log(10.0)/10.0
+                max_trace_ratio = np.exp(max_step_nat)
+                prev_trace = np.real(trace(last_output_cpsd))
+                out_trace = np.real(trace(output))
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    trace_scale = np.minimum(1.0, max_trace_ratio*prev_trace/out_trace)
+                trace_scale[~np.isfinite(trace_scale)] = 1.0
+                trace_scale[out_trace <= 0] = 1.0
+                trace_scale[prev_trace <= 0] = 1.0
+                output = output*trace_scale[:,np.newaxis,np.newaxis]
+
+        return _cap_drive_coherence(output, self.max_drive_coherence)
+
+def _parse_match_trace_resolve_parameters(extra_parameters, default_startup_test_level_cap_db=-9.0):
+    """extra_parameters parsing for match_trace_resolve (added
+    2026-09-05, same day as match_trace_pi_resolve). Format, all optional
+    and defaulted incrementally exactly like every other control law in
+    this module (provide a prefix, the rest default):
+
+        rcond, max_drive_coherence, startup_test_level_cap_db,
+        max_step_db,
+        Ki_resolve, ceiling_db,
+        frf_stability_tol, stability_hold_cycles, min_hold_cycles,
+        max_cycles_before_resolve, avg_alpha, refreeze_enabled
+
+    This is match_trace_pi_resolve with two changes, both requested
+    directly after live use of that law found its 14-parameter Kp/Ki/
+    Ki_resolve/max_step_db interaction confusing (and, combined with an
+    unclamped rcond, caused a real overshoot on hardware on 2026-09-05):
+
+    1. Phase 1 is match_trace_pseudoinverse's own plain trace_ratio
+       update (log_error = log(trace(spec)/trace(response)), output =
+       last_output_cpsd*exp(log_error)) -- NOT match_trace_pseudoinverse
+       _pi's PI update. No Kp, no Ki: two fewer parameters, and no
+       proportional/integral interaction to mistune. max_step_db is
+       still applied to Phase 1 (clamping the per-line log correction,
+       identical mechanics to match_trace_pseudoinverse_pi's own cap) --
+       this is the "safety clamp" added on top of the plain law, which
+       had none before.
+
+    2. The Phase 1 -> Phase 2 (and later re-freeze) trigger is FRF
+       stability, not response-coherence stability. Rattlesnake's live
+       control loop keeps re-estimating transfer_function every cycle as
+       more frames accumulate (H1/H2/H3/HV averaging) -- the very first
+       cycles' FRF is the noisiest, and it is what the Phase 2 resolve's
+       pinv(transfer_function) is built from. Freezing cross-term
+       structure off a still-moving FRF estimate freezes it against a
+       moving target; gating on "has the incoming transfer_function
+       itself stopped changing" ties the trigger to the thing the resolve
+       actually depends on, and doubles as the same signal for a later
+       test-level-driven re-freeze (a real amplitude-dependent
+       nonlinearity shifts the live FRF estimate, not just the response
+       coherence). FRF stability is measured each cycle as a single
+       global Frobenius-norm-relative change,
+       ||transfer_function - previous_transfer_function||_F /
+       ||previous_transfer_function||_F, compared against
+       frf_stability_tol.
+
+    Phase 2 itself (the per-channel diagonal correction against a frozen
+    coherence/phase, Ki_resolve/ceiling_db/the output-trace rate
+    limiter) is unchanged from match_trace_pi_resolve -- see that
+    class's docstring for the full mechanics and the real-FRF
+    verification numbers, which apply here identically since Phase 2's
+    code is shared logic, not reimplemented.
+
+    rcond (default 1e-3, NOT 1e-15): same rationale and same measured
+    conditioning sweep as match_trace_pi_resolve (579 of 2049 lines on
+    the real captured 8-response/6-drive FRF have condition number >
+    1000). Do not leave this blank on this law; unlike plain
+    match_trace_pseudoinverse (whose own historical default is 1e-15,
+    i.e. no truncation), this law defaults to the validated 1e-3.
+
+    max_drive_coherence (default 1.0), startup_test_level_cap_db
+    (default -9.0): unchanged meaning from every other law here.
+
+    max_step_db (default 3.0, NOT 0.0/off): shared safety cap for Phase
+    1's per-line trace correction, Phase 2's per-channel diagonal
+    correction, and Phase 2's output-trace rate limiter -- identical
+    role to match_trace_pi_resolve's own max_step_db. Defaults ON here
+    for the same reason: this is a new law, and the one live blowup
+    diagnosed this session happened with an equivalent cap effectively
+    disabled (rcond loosened to 1e-4 at the same time as raising gains).
+
+    Ki_resolve (default 0.5), ceiling_db (default 30.0): Phase 2's
+    integral gain and anti-windup ceiling, identical meaning and
+    defaults to match_trace_pi_resolve.
+
+    frf_stability_tol (default 0.02): the Frobenius-norm-relative
+    cycle-to-cycle FRF change below which the FRF counts as "not moving
+    this cycle" -- see mechanism description above. Along with
+    stability_hold_cycles, this is the parameter most likely to need
+    retuning per system's own live-averaging noise floor.
+
+    stability_hold_cycles (default 5): consecutive stable cycles
+    required before a resolve is eligible.
+
+    min_hold_cycles (default 10): floor before the very first resolve is
+    eligible, and cooldown floor before any later re-freeze -- prevents
+    acting on a stability read that's only stable because nothing has
+    happened yet.
+
+    max_cycles_before_resolve (default 100): fallback ceiling forcing
+    the first resolve even if FRF stability never latches, so this law
+    cannot get stuck in Phase 1 forever. Also doubles as the "just use a
+    fixed cycle count" knob: set stability_hold_cycles=1 and a very
+    loose frf_stability_tol (e.g. 10.0) so the check trivially passes,
+    and the resolve fires at min_hold_cycles/max_cycles_before_resolve
+    on a fixed schedule instead.
+
+    avg_alpha (default 0.1): exponential-averaging coefficient (~10-cycle
+    effective window) for the response-CPSD average that Phase 2's
+    coh_frozen/phs_frozen are drawn from at the moment of a resolve --
+    unrelated to the FRF-stability trigger itself, which looks at
+    transfer_function directly rather than this average.
+
+    refreeze_enabled (default 1.0, i.e. True): after the first resolve,
+    keep watching for the FRF to move away from stable and then
+    re-settle (e.g. a test-level change shifting a real amplitude-
+    dependent nonlinearity), and re-freeze coh_frozen/phs_frozen from
+    the newly stable operating point when it does. Set to 0.0 to freeze
+    exactly once.
+    """
+    parts = extra_parameters.split(',') if extra_parameters else []
+    def _get(i, default):
+        try:
+            return float(parts[i]) if len(parts) > i and parts[i].strip() != '' else default
+        except ValueError:
+            return default
+    rcond = _get(0, 1e-3)
+    max_drive_coherence = _get(1, 1.0)
+    startup_cap_db = _get(2, default_startup_test_level_cap_db)
+    max_step_db = _get(3, 3.0)
+    Ki_resolve = _get(4, 0.5)
+    ceiling_db = _get(5, 30.0)
+    frf_stability_tol = _get(6, 0.02)
+    stability_hold_cycles = int(_get(7, 5))
+    min_hold_cycles = int(_get(8, 10))
+    max_cycles_before_resolve = int(_get(9, 100))
+    avg_alpha = _get(10, 0.1)
+    refreeze_enabled = _get(11, 1.0) > 0
+    return (rcond, max_drive_coherence, startup_cap_db, max_step_db,
+            Ki_resolve, ceiling_db, frf_stability_tol, stability_hold_cycles,
+            min_hold_cycles, max_cycles_before_resolve, avg_alpha, refreeze_enabled)
+
+
+class match_trace_resolve:
+    """match_trace_pseudoinverse (the plain, non-PI trace-matching law)
+    plus match_trace_pi_resolve's Phase 2 per-channel resolve, with the
+    Phase 1 -> Phase 2 trigger changed to FRF stability instead of
+    response-coherence stability. Added 2026-09-05, directly after live
+    hardware use of match_trace_pi_resolve found its 14-parameter
+    Kp/Ki/Ki_resolve/max_step_db surface confusing to tune, and after a
+    real overshoot caused by loosening rcond and raising gains together.
+    See _parse_match_trace_resolve_parameters for the full parameter
+    list and every default's rationale.
+
+    Phase 1 (until a resolve triggers): match_trace_pseudoinverse's own
+    steady-state update, output = last_output_cpsd *
+    exp(clip(log(trace(spec)/trace(response)), +-max_step_db)) -- no
+    Kp, no Ki. This is deliberately the simplest possible correction:
+    match_trace_pi_resolve's Kp/Ki PI gains are dropped entirely, and
+    the only addition relative to plain match_trace_pseudoinverse is the
+    max_step_db safety clamp (previously match_trace_pseudoinverse had
+    no per-cycle step limit at all) and the same near-zero-lock floor
+    safety net match_trace_pseudoinverse_pi uses. Startup guard (the
+    very first call, last_output_cpsd is None) is the same raw
+    pseudoinverse-of-specification solve, capped at
+    startup_test_level_cap_db dB, that every law in this module uses.
+
+    Trigger: unlike match_trace_pi_resolve (which gates on the measured
+    RESPONSE coherence settling), this law gates the resolve on the
+    incoming transfer_function argument itself settling -- Rattlesnake's
+    live control loop keeps re-estimating the FRF every cycle as more
+    frames accumulate (H1/H2/H3/HV averaging), and Phase 2's resolve is
+    built directly from pinv(transfer_function); resolving before that
+    estimate has itself converged freezes cross-term structure against a
+    moving target regardless of how good the response-coherence estimate
+    is. FRF stability each cycle is a single global Frobenius-norm-
+    relative change, ||H_now - H_prev||_F / ||H_prev||_F, compared
+    against frf_stability_tol; stability_hold_cycles consecutive stable
+    cycles (plus the min_hold_cycles floor, plus the
+    max_cycles_before_resolve fallback ceiling) triggers a resolve
+    exactly as in match_trace_pi_resolve, just off this signal instead.
+    If refreeze_enabled, the same FRF-stability check continues after
+    the first resolve and re-freezes coh_frozen/phs_frozen if the FRF
+    moves away from stable (e.g. a test-level change shifting a real
+    amplitude-dependent nonlinearity) and then re-settles.
+
+    The response-CPSD average (avg_response, avg_alpha) is still tracked
+    every cycle -- it is what coh_frozen/phs_frozen (the actual
+    cross-term coherence and phase applied at a resolve) are drawn from
+    at the moment the FRF-stability trigger fires. The FRF-stability
+    check and the response-coherence average are two separate signals:
+    one decides WHEN to resolve, the other decides WHAT to resolve to.
+
+    Phase 2 (once resolved) is match_trace_pi_resolve's Phase 2 verbatim
+    -- bounded, ceiling-clamped per-channel diagonal correction
+    (Ki_resolve, ceiling_db) against the frozen coherence/phase,
+    rebuilt via cpsd_from_coh_phs and pinv(transfer_function) every
+    cycle, with the same output-trace rate limiter and diagonal floor.
+    See match_trace_pi_resolve's docstring for the full real-FRF
+    verification numbers for this half of the law -- that code path is
+    shared, not reimplemented, so those results apply here identically
+    once resolved.
+    """
+
+    def __init__(self,
+                 specification,
+                 warning_levels,
+                 abort_levels,
+                 extra_parameters,
+                 transfer_function=None,
+                 noise_response_cpsd=None,
+                 noise_reference_cpsd=None,
+                 sysid_response_cpsd=None,
+                 sysid_reference_cpsd=None,
+                 multiple_coherence=None,
+                 frames=None,
+                 total_frames=None,
+                 last_response_cpsd=None,
+                 last_output_cpsd=None,
+                 ):
+        self.specification = specification
+        self.warning_levels = warning_levels
+        self.abort_levels = abort_levels
+        (self.rcond, self.max_drive_coherence, self.startup_test_level_cap_db,
+         self.max_step_db, self.Ki_resolve, self.ceiling_db,
+         self.frf_stability_tol, self.stability_hold_cycles, self.min_hold_cycles,
+         self.max_cycles_before_resolve, self.avg_alpha,
+         self.refreeze_enabled) = _parse_match_trace_resolve_parameters(extra_parameters)
+        self.prev_error = None
+        self.avg_response = None
+        self.frf_prev = None
+        self.stable_count = 0
+        self.cycles_since_start = 0
+        self.cycles_since_last_resolve = 0
+        self.has_resolved = False
+        self.instability_seen_since_freeze = True
+        self.coh_frozen = None
+        self.phs_frozen = None
+        self.target_diag = None
+
+    def system_id_update(self,
+                         transfer_function=None,
+                         noise_response_cpsd=None,
+                         noise_reference_cpsd=None,
+                         sysid_response_cpsd=None,
+                         sysid_reference_cpsd=None,
+                         multiple_coherence=None,
+                         frames=None,
+                         total_frames=None,
+                         ):
+        # No use for the system-ID-phase CPSDs, same as match_trace_pi_resolve.
+        pass
+
+    def control(self,
+                transfer_function=None,
+                multiple_coherence=None,
+                frames=None,
+                total_frames=None,
+                last_response_cpsd=None,
+                last_output_cpsd=None,
+                ) -> np.ndarray:
+        if last_output_cpsd is None:
+            # Startup guard: identical to every other law in this module.
+            tf_pinv = np.linalg.pinv(transfer_function, self.rcond)
+            output = tf_pinv@self.specification@tf_pinv.conjugate().transpose(0,2,1)
+            spec_trace = np.real(trace(self.specification))
+            output_trace = np.real(trace(output))
+            max_power_ratio = 10.0**(self.startup_test_level_cap_db/10.0)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                scale = np.minimum(1.0, max_power_ratio*spec_trace/output_trace)
+            scale[~np.isfinite(scale)] = 1.0
+            scale[output_trace <= 0] = 1.0
+            output = output*scale[:,np.newaxis,np.newaxis]
+            # Reset all persistent state for a fresh run.
+            self.prev_error = np.zeros(output.shape[0])
+            self.avg_response = None
+            self.frf_prev = transfer_function.copy() if transfer_function is not None else None
+            self.stable_count = 0
+            self.cycles_since_start = 0
+            self.cycles_since_last_resolve = 0
+            self.has_resolved = False
+            self.instability_seen_since_freeze = True
+            self.coh_frozen = None
+            self.phs_frozen = None
+            self.target_diag = None
+            return _cap_drive_coherence(output, self.max_drive_coherence)
+
+        # ------------------------------------------------------------
+        # FRF-stability tracker (decides WHEN to resolve): runs every
+        # cycle regardless of phase, off the live transfer_function
+        # argument.
+        # ------------------------------------------------------------
+        if (transfer_function is not None and self.frf_prev is not None
+                and self.frf_prev.shape == transfer_function.shape):
+            prev_norm = np.linalg.norm(self.frf_prev)
+            if prev_norm > 0:
+                frf_delta = np.linalg.norm(transfer_function - self.frf_prev)/prev_norm
+            else:
+                frf_delta = np.inf
+        else:
+            frf_delta = np.inf
+        if transfer_function is not None:
+            self.frf_prev = transfer_function.copy()
+
+        # ------------------------------------------------------------
+        # Response-CPSD average (decides WHAT to resolve to): runs every
+        # cycle regardless of phase, off the environment's own
+        # last_response_cpsd.
+        # ------------------------------------------------------------
+        if (self.avg_response is None
+                or self.avg_response.shape != last_response_cpsd.shape):
+            self.avg_response = last_response_cpsd.copy()
+        else:
+            self.avg_response = (self.avg_alpha*last_response_cpsd
+                                  + (1.0 - self.avg_alpha)*self.avg_response)
+
+        self.cycles_since_start += 1
+        self.cycles_since_last_resolve += 1
+        if frf_delta > self.frf_stability_tol:
+            self.stable_count = 0
+            self.instability_seen_since_freeze = True
+        else:
+            self.stable_count += 1
+
+        ready_first = (not self.has_resolved) and (
+            self.cycles_since_start >= self.min_hold_cycles
+            and (self.stable_count >= self.stability_hold_cycles
+                 or self.cycles_since_start >= self.max_cycles_before_resolve))
+        ready_refreeze = (self.has_resolved and self.refreeze_enabled
+                           and self.instability_seen_since_freeze
+                           and self.cycles_since_last_resolve >= self.min_hold_cycles
+                           and (self.stable_count >= self.stability_hold_cycles
+                                or self.cycles_since_last_resolve >= self.max_cycles_before_resolve))
+
+        if ready_first or ready_refreeze:
+            self.coh_frozen = cpsd_coherence(self.avg_response)
+            self.phs_frozen = cpsd_phase(self.avg_response)
+            if self.target_diag is None:
+                self.target_diag = np.real(cpsd_autospectra(self.avg_response)).copy()
+            self.has_resolved = True
+            self.cycles_since_last_resolve = 0
+            self.instability_seen_since_freeze = False
+            self.stable_count = 0
+
+        if not self.has_resolved:
+            # ---- Phase 1: match_trace_pseudoinverse's plain trace_ratio
+            #      update, plus the max_step_db safety clamp and the
+            #      near-zero-lock floor. ----
+            spec_trace = np.real(trace(self.specification))
+            resp_trace = np.real(trace(last_response_cpsd))
+            if self.prev_error is None or self.prev_error.shape[0] != spec_trace.shape[0]:
+                self.prev_error = np.zeros_like(spec_trace)
+            unspecified = ~np.isfinite(spec_trace) | (spec_trace <= 0)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                raw_ratio = spec_trace/resp_trace
+            transient_bad = (~unspecified) & (~np.isfinite(raw_ratio) | (raw_ratio <= 0))
+            normal = ~unspecified & ~transient_bad
+            log_error = np.zeros_like(spec_trace)
+            log_error[normal] = np.log(raw_ratio[normal])
+            correction = np.zeros_like(spec_trace)
+            correction[normal] = log_error[normal]
+            if self.max_step_db > 0:
+                max_step_nat = self.max_step_db*np.log(10.0)/10.0
+                correction[normal] = np.clip(correction[normal], -max_step_nat, max_step_nat)
+            output = last_output_cpsd*np.exp(correction)[:,np.newaxis,np.newaxis]
+            output[unspecified] = 0.0
+            new_prev_error = self.prev_error.copy()
+            new_prev_error[normal] = log_error[normal]
+            self.prev_error = new_prev_error
+
+            # Per-line floor (fixed 2026-09-06): relative to THIS line's
+            # own spec target, not the single loudest line in the band. The
+            # original global-max floor (1e-8 * max spec_trace across the
+            # whole spectrum) forced every line's output up to the SAME
+            # absolute value regardless of how quiet that particular line's
+            # own target is -- on a spectrum with wide dynamic range across
+            # lines (e.g. loudest line's target ~1e8-1e9x the quietest)
+            # this spuriously inflated legitimately-quiet, correctly-
+            # converging lines (often exactly the high-plant-gain lines
+            # where a small drive is the CORRECT answer), overshooting them
+            # instead of rescuing anything -- measured as a persistent
+            # several-dB RMS regression vs. an unfloored update on a real
+            # captured FRF with ~1e8 dynamic range across lines. Scaling
+            # the floor to each line's own spec_trace keeps the same
+            # "can't get stuck at zero" protection without imposing a
+            # spectrum-wide floor on every other line.
+            output_trace = np.real(trace(output))
+            floor = 1e-8*spec_trace
+            needs_floor = (~unspecified) & (output_trace < floor)
+            if np.any(needs_floor):
+                scale = np.ones_like(output_trace)
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    scale[needs_floor] = floor[needs_floor]/np.maximum(output_trace[needs_floor], 1e-300)
+                scale[~np.isfinite(scale)] = 1.0
+                output = output*scale[:,np.newaxis,np.newaxis]
+        else:
+            # ---- Phase 2: identical to match_trace_pi_resolve's Phase 2. ----
+            spec_diag = np.real(cpsd_autospectra(self.specification))
+            achieved_diag = np.real(cpsd_autospectra(last_response_cpsd))
+            unspecified = ~np.isfinite(spec_diag) | (spec_diag <= 0)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                raw_ratio = spec_diag/achieved_diag
+            transient_bad = (~unspecified) & (~np.isfinite(raw_ratio) | (raw_ratio <= 0))
+            normal = ~unspecified & ~transient_bad
+            log_error = np.zeros_like(spec_diag)
+            log_error[normal] = np.log(raw_ratio[normal])
+            correction = np.zeros_like(spec_diag)
+            correction[normal] = self.Ki_resolve*log_error[normal]
+            if self.max_step_db > 0:
+                max_step_nat = self.max_step_db*np.log(10.0)/10.0
+                correction[normal] = np.clip(correction[normal], -max_step_nat, max_step_nat)
+            ceiling = spec_diag*10.0**(self.ceiling_db/10.0)
+            self.target_diag[normal] = np.minimum(
+                self.target_diag[normal]*np.exp(correction[normal]), ceiling[normal])
+
+            # Per-(line, channel) floor (fixed 2026-09-06): same reasoning
+            # as the Phase-1 floor fix -- relative to each entry's own
+            # spec_diag target, not the single loudest (line, channel)
+            # entry in the whole band.
+            diag_floor = 1e-8*spec_diag
+            self.target_diag[normal] = np.maximum(self.target_diag[normal], diag_floor[normal])
+            self.target_diag[unspecified] = 0.0
+
+            S_target = cpsd_from_coh_phs(self.target_diag, self.coh_frozen, self.phs_frozen)
+            tf_pinv = np.linalg.pinv(transfer_function, self.rcond)
+            output = tf_pinv@S_target@tf_pinv.conjugate().transpose(0,2,1)
+
+            if self.max_step_db > 0:
+                max_step_nat = self.max_step_db*np.log(10.0)/10.0
+                max_trace_ratio = np.exp(max_step_nat)
+                prev_trace = np.real(trace(last_output_cpsd))
+                out_trace = np.real(trace(output))
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    trace_scale = np.minimum(1.0, max_trace_ratio*prev_trace/out_trace)
+                trace_scale[~np.isfinite(trace_scale)] = 1.0
+                trace_scale[out_trace <= 0] = 1.0
+                trace_scale[prev_trace <= 0] = 1.0
+                output = output*trace_scale[:,np.newaxis,np.newaxis]
+
+        return _cap_drive_coherence(output, self.max_drive_coherence)
