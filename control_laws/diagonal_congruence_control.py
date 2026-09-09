@@ -70,6 +70,15 @@ raw specification.  Supply it as the last extra_parameters field:
     t = spec_diag.copy(); s = r['solved']; t[s] = r['achieved'][s]
     np.savez('projected_target.npz', target_diag=t)     # shape (F, M)
 
+The file is read on the FIRST CONTROL CYCLE, not at construction.  That is
+deliberate: Rattlesnake builds the control law before system identification
+runs, so a projection cannot exist yet at that point.  The working order is
+    enter the path -> run system ID -> regenerate the projection -> start
+    control
+and the path may point at a file that does not exist, or is stale, when the
+parameters are entered.  The startup message reports the path; a second
+message on the first control cycle reports whether it was actually adopted.
+
 The projection is computed OFFLINE on purpose: it costs ~2 minutes for a
 900-line band, which does not fit a control frame.  It is therefore tied to
 the FRF it was computed from: REGENERATE IT AFTER A NEW SYSTEM ID.  What is
@@ -239,17 +248,37 @@ class match_diagonal_congruence:
 
         self.spec_diag = np.real(cpsd_autospectra(specification))
         self.unspecified = ~np.isfinite(self.spec_diag) | (self.spec_diag <= 0)
-        target, msg = _load_projected_target(self.target_path, self.spec_diag.shape)
-        self.target_diag = self.spec_diag.copy() if target is None else target.copy()
-        # never aim above the specification itself, whatever the file says
-        both = ~self.unspecified & np.isfinite(self.target_diag) & (self.target_diag > 0)
-        self.target_diag[~both] = self.spec_diag[~both]
+        # The projected target is loaded LAZILY, on the first control cycle,
+        # not here.  Rattlesnake constructs the control law at
+        # INITIALIZE_PARAMETERS -- before system identification runs -- so at
+        # this moment the FRF the projection must be derived from does not
+        # exist yet.  Deferring the read lets the operator run system ID,
+        # regenerate the projection from the FRF it just measured, and then
+        # start control, which is the only ordering that yields a projection
+        # matching the FRF actually in use.
+        self.target_diag = self.spec_diag.copy()
+        self._target_loaded = False
         self.n_cycles = 0
         print(f'[match_diagonal_congruence] rcond={self.rcond:g} '
               f'max_drive_coherence={self.max_drive_coherence:g} '
               f'Ki={self.Ki:g} max_step_db={self.max_step_db:g} ridge={self.ridge:g} '
               f'resonance_sensitivity={self.resonance_sensitivity:g} '
-              f'ceiling_db={self.ceiling_db:g}; {msg}', flush=True)
+              f'ceiling_db={self.ceiling_db:g}; projected target='
+              f'{self.target_path if self.target_path else "none"} '
+              f'(read on the first control cycle, after system ID)', flush=True)
+
+    def _ensure_target(self):
+        """Read the projected target once, on the first control cycle."""
+        if self._target_loaded:
+            return
+        self._target_loaded = True
+        target, msg = _load_projected_target(self.target_path, self.spec_diag.shape)
+        if target is not None:
+            t = target.copy()
+            both = ~self.unspecified & np.isfinite(t) & (t > 0)
+            t[~both] = self.spec_diag[~both]
+            self.target_diag = t
+        print(f'[match_diagonal_congruence] {msg}', flush=True)
 
     def system_id_update(self, transfer_function=None, noise_response_cpsd=None,
                          noise_reference_cpsd=None, sysid_response_cpsd=None,
@@ -260,6 +289,7 @@ class match_diagonal_congruence:
     def control(self, transfer_function=None, multiple_coherence=None, frames=None,
                 total_frames=None, last_response_cpsd=None, last_output_cpsd=None):
         H = transfer_function
+        self._ensure_target()
         if last_output_cpsd is None:
             return self._startup(H)
 
