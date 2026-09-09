@@ -52,8 +52,8 @@ from scipy.integrate import solve_ivp
 from scipy.optimize import brentq
 
 RESULTS_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results"))
-BASELINE_FILE = os.path.join(RESULTS_DIR, "sdynpy_frame6x12_system.npz")
-OUTPUT_FILE = os.path.join(RESULTS_DIR, "sdynpy_frame6x12_system_nonlinear.npz")
+BASELINE_FILE = os.path.join(RESULTS_DIR, "case", "sdynpy_frame6x12_system.npz")
+OUTPUT_FILE = os.path.join(RESULTS_DIR, "case", "sdynpy_frame6x12_system_nonlinear.npz")
 
 N_RIGID = 3
 TARGET_MODE = 1  # 1-based, among flexible modes -- mode 1 is ~120 Hz

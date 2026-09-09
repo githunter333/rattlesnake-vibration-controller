@@ -48,7 +48,7 @@ cpsd[diag_idx, diag_idx, :] = psd_level * in_band[np.newaxis, :]
 
 # ---- Save (-v7 equivalent: scipy default is v5, also loadmat-compatible) ----
 output_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results"))
-out_file = os.path.join(output_dir, "flat_spec_frame6x12.mat")
+out_file = os.path.join(output_dir, "case", "flat_spec_frame6x12.mat")
 savemat(out_file, {"f": f, "cpsd": cpsd})
 
 print(f"Wrote {out_file}")

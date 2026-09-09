@@ -40,11 +40,11 @@ import openpyxl as opxl
 # runs (it was written by build_sdynpy_demo_frame6x12.py running natively
 # there) -- swap only the filename, keep that directory.
 RESULTS_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results"))
-LINEAR_PROFILE = os.path.join(RESULTS_DIR, "sdynpy_frame6x12_profile.xlsx")
-NONLINEAR_PROFILE = os.path.join(RESULTS_DIR, "sdynpy_frame6x12_profile_nonlinear.xlsx")
+LINEAR_PROFILE = os.path.join(RESULTS_DIR, "case", "sdynpy_frame6x12_profile.xlsx")
+NONLINEAR_PROFILE = os.path.join(RESULTS_DIR, "case", "sdynpy_frame6x12_profile_nonlinear.xlsx")
 NONLINEAR_SYSTEM_FILENAME = "sdynpy_frame6x12_system_nonlinear_allmodes.npz"
 # Local (this-filesystem-view) path, used only for the existence check below.
-NONLINEAR_SYSTEM_FILE_LOCAL = os.path.join(RESULTS_DIR, NONLINEAR_SYSTEM_FILENAME)
+NONLINEAR_SYSTEM_FILE_LOCAL = os.path.join(RESULTS_DIR, "case", NONLINEAR_SYSTEM_FILENAME)
 
 NONLINEAR_HARDWARE_INDEX = 7  # SDynPy Nonlinear System Integration (index 6 = linear)
 

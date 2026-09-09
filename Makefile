@@ -6,8 +6,8 @@ DEMO_RESULTS_DIR := $(REPO_ROOT)/examples/sixdrive12resp/results
 RATTLESNAKE_PY := /opt/anaconda3/envs/rattlesnake/bin/python
 SDYNPY_PY      := /opt/anaconda3/envs/sdynpy/bin/python
 GUI_LOG        := $(REPO_ROOT)/gui_debug.log
-FRF_SWITCH_FILE    := $(DEMO_RESULTS_DIR)/sdynpy_frame6x12_system_shifted.npz
-FRF_SWITCH_FILE_ALLMODES := $(DEMO_RESULTS_DIR)/sdynpy_frame6x12_system_shifted_allmodes.npz
+FRF_SWITCH_FILE    := $(DEMO_RESULTS_DIR)/case/sdynpy_frame6x12_system_shifted.npz
+FRF_SWITCH_FILE_ALLMODES := $(DEMO_RESULTS_DIR)/case/sdynpy_frame6x12_system_shifted_allmodes.npz
 FRF_SWITCH_TRIGGER := /tmp/rattlesnake_frf_switch
 
 .PHONY: help launch-rattlesnake kill-rattlesnake build-demo build-spec frf compare log-tail log-drift log-summary build-shifted-system build-shifted-system-allmodes launch-rattlesnake-frf-study launch-rattlesnake-frf-study-allmodes switch-frf log-frf-switch launch-rattlesnake-profile launch-rattlesnake-frame6x12-linear launch-rattlesnake-frame6x12-nonlinear build-profile-nonlinear-frame6x12
@@ -49,10 +49,10 @@ launch-rattlesnake-profile: ## Launch Rattlesnake fully configured from a saved 
 	cd $(REPO_ROOT) && $(RATTLESNAKE_PY) rattlesnake.py --profile "$(PROFILE)" > $(GUI_LOG) 2>&1
 
 launch-rattlesnake-frame6x12-linear: ## Launch Rattlesnake on the frame6x12 LINEAR system profile (match_trace_pseudoinverse_pi, 4096 Hz, control channels 7-14), no dialogs
-	cd $(REPO_ROOT) && $(RATTLESNAKE_PY) rattlesnake.py --profile "$(DEMO_RESULTS_DIR)/sdynpy_frame6x12_profile.xlsx" > $(GUI_LOG) 2>&1
+	cd $(REPO_ROOT) && $(RATTLESNAKE_PY) rattlesnake.py --profile "$(DEMO_RESULTS_DIR)/case/sdynpy_frame6x12_profile.xlsx" > $(GUI_LOG) 2>&1
 
 launch-rattlesnake-frame6x12-nonlinear: ## Launch Rattlesnake on the frame6x12 NONLINEAR (all modes) system profile, same control law/channels, no dialogs
-	cd $(REPO_ROOT) && $(RATTLESNAKE_PY) rattlesnake.py --profile "$(DEMO_RESULTS_DIR)/sdynpy_frame6x12_profile_nonlinear.xlsx" > $(GUI_LOG) 2>&1
+	cd $(REPO_ROOT) && $(RATTLESNAKE_PY) rattlesnake.py --profile "$(DEMO_RESULTS_DIR)/case/sdynpy_frame6x12_profile_nonlinear.xlsx" > $(GUI_LOG) 2>&1
 
 build-profile-nonlinear-frame6x12: ## Derive sdynpy_frame6x12_profile_nonlinear.xlsx from the linear profile (openpyxl only, no sdynpy needed -- run after build-demo)
 	cd $(DEMO_CODE_DIR) && python3 build_profile_nonlinear_frame6x12.py

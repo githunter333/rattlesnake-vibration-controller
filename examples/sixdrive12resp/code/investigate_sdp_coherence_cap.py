@@ -33,7 +33,7 @@ RESULTS_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__fi
 # ---------------------------------------------------------------------
 # 0. Load FRF + build the same flat spec + survey CPSD used throughout
 # ---------------------------------------------------------------------
-H_FILE = os.path.join(RESULTS_DIR, "frf_frame6x12_H.npz")
+H_FILE = os.path.join(RESULTS_DIR, "analysis", "frf_frame6x12_H.npz")
 data = np.load(H_FILE)
 f = data["f"]
 H = data["H"]
@@ -136,7 +136,7 @@ print(f"\nOverall drive RMS (RSS): capped={total_capped:.4f}  uncapped={total_un
       f"ratio={total_capped/total_uncapped:.3f}")
 
 np.savez(
-    os.path.join(RESULTS_DIR, "sdp_coherence_cap_investigation.npz"),
+    os.path.join(RESULTS_DIR, "analysis", "sdp_coherence_cap_investigation.npz"),
     f=f, resp_nodes=resp_nodes, drive_nodes=drive_nodes,
     err_capped=err_capped, err_uncapped=err_uncapped,
     rms_capped=rms_capped, rms_uncapped=rms_uncapped,
@@ -169,8 +169,8 @@ for r in range(nrows):
     axes[r * ncols].set_ylabel("dB error")
 fig.suptitle("SDP diagonal error: uncapped vs. drive-coherence-capped (0.95)")
 fig.tight_layout()
-plot1 = os.path.join(RESULTS_DIR, "sdp_coherence_cap_per_dof_error.png")
+plot1 = os.path.join(RESULTS_DIR, "figures", "sdp_coherence_cap_per_dof_error.png")
 fig.savefig(plot1, dpi=150)
 
-print(f"\nData written to: {os.path.join(RESULTS_DIR, 'sdp_coherence_cap_investigation.npz')}")
+print(f"\nData written to: {os.path.join(RESULTS_DIR, 'analysis', 'sdp_coherence_cap_investigation.npz')}")
 print(f"Plot written to: {plot1}")

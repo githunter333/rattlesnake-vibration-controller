@@ -38,8 +38,8 @@ from scipy.linalg import eigh
 import sdynpy as sdpy
 
 RESULTS_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results"))
-NOMINAL_FILE = os.path.join(RESULTS_DIR, "sdynpy_frame6x12_system.npz")
-SHIFTED_FILE = os.path.join(RESULTS_DIR, "sdynpy_frame6x12_system_shifted.npz")
+NOMINAL_FILE = os.path.join(RESULTS_DIR, "case", "sdynpy_frame6x12_system.npz")
+SHIFTED_FILE = os.path.join(RESULTS_DIR, "case", "sdynpy_frame6x12_system_shifted.npz")
 
 N_RIGID = 3
 # (0-based flexible-mode index) -> (target frequency Hz, target damping ratio)

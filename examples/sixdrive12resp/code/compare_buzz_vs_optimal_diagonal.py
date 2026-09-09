@@ -163,7 +163,7 @@ print(f"\nOverall RMS dB error:  buzz={overall_buzz_rms:.3f}  optimal-diagonal={
 print(f"Overall max |dB error|: buzz={overall_buzz_max:.3f}  optimal-diagonal={overall_opt_max:.3f}")
 
 np.savez(
-    os.path.join(RESULTS_DIR, "buzz_vs_optimal_diagonal_comparison.npz"),
+    os.path.join(RESULTS_DIR, "analysis", "buzz_vs_optimal_diagonal_comparison.npz"),
     f=f, resp_nodes=resp_nodes, drive_nodes=drive_nodes,
     err_buzz=err_buzz, err_opt=err_opt,
     buzz_cpsd=buzz_cpsd, opt_cpsd=opt_cpsd,
@@ -195,7 +195,7 @@ for r in range(nrows):
     axes[r * ncols].set_ylabel("dB error")
 fig.suptitle(f"Per-DOF diagonal error: buzz vs optimal-diagonal (M={M}, N={N}, tall)")
 fig.tight_layout()
-plot1 = os.path.join(RESULTS_DIR, "buzz_vs_optimal_diagonal_per_dof_error.png")
+plot1 = os.path.join(RESULTS_DIR, "figures", "buzz_vs_optimal_diagonal_per_dof_error.png")
 fig.savefig(plot1, dpi=150)
 
 # Summary table figure
@@ -224,9 +224,9 @@ for j in range(len(col_labels)):
 for j in range(len(col_labels)):
     table[len(rows), j].set_text_props(weight='bold')
 fig2.suptitle("Mean / max |dB error| summary: buzz vs optimal-diagonal")
-plot2 = os.path.join(RESULTS_DIR, "buzz_vs_optimal_diagonal_summary_table.png")
+plot2 = os.path.join(RESULTS_DIR, "figures", "buzz_vs_optimal_diagonal_summary_table.png")
 fig2.savefig(plot2, dpi=150, bbox_inches='tight')
 
-print(f"\nData written to:  {os.path.join(RESULTS_DIR, 'buzz_vs_optimal_diagonal_comparison.npz')}")
+print(f"\nData written to:  {os.path.join(RESULTS_DIR, 'analysis', 'buzz_vs_optimal_diagonal_comparison.npz')}")
 print(f"Plot written to:  {plot1}")
 print(f"Table written to: {plot2}")

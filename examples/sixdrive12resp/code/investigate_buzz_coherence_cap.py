@@ -52,7 +52,7 @@ MAX_DRIVE_COHERENCE = 0.95
 #    current system damping) and build the same flat spec + survey CPSD
 #    used throughout this session's comparisons.
 # ---------------------------------------------------------------------
-H_FILE = os.path.join(RESULTS_DIR, "frf_frame6x12_H.npz")
+H_FILE = os.path.join(RESULTS_DIR, "analysis", "frf_frame6x12_H.npz")
 data = np.load(H_FILE)
 f = data["f"]
 H = data["H"]                      # (F, M, N)
@@ -174,7 +174,7 @@ print(f"\nOverall drive RMS (RSS): natural={total_natural:.4f}  capped={total_ca
       f"ratio={total_capped/total_natural:.3f}")
 
 np.savez(
-    os.path.join(RESULTS_DIR, "buzz_coherence_cap_investigation.npz"),
+    os.path.join(RESULTS_DIR, "analysis", "buzz_coherence_cap_investigation.npz"),
     f=f, resp_nodes=resp_nodes, drive_nodes=drive_nodes,
     err_natural=err_natural, err_capped=err_capped,
     rms_natural=rms_natural, rms_capped=rms_capped,
@@ -207,7 +207,7 @@ for r in range(nrows):
     axes[r * ncols].set_ylabel("dB error")
 fig.suptitle(f"Buzz diagonal error: natural vs. drive-coherence-capped ({MAX_DRIVE_COHERENCE})")
 fig.tight_layout()
-plot1 = os.path.join(RESULTS_DIR, "buzz_coherence_cap_per_dof_error.png")
+plot1 = os.path.join(RESULTS_DIR, "figures", "buzz_coherence_cap_per_dof_error.png")
 fig.savefig(plot1, dpi=150)
 
 fig2, ax2 = plt.subplots(figsize=(7, 5))
@@ -219,9 +219,9 @@ ax2.set_title("Distribution of natural buzz drive-to-drive coherence")
 ax2.legend()
 ax2.grid(True, alpha=0.3)
 fig2.tight_layout()
-plot2 = os.path.join(RESULTS_DIR, "buzz_coherence_distribution.png")
+plot2 = os.path.join(RESULTS_DIR, "figures", "buzz_coherence_distribution.png")
 fig2.savefig(plot2, dpi=150)
 
-print(f"\nData written to:  {os.path.join(RESULTS_DIR, 'buzz_coherence_cap_investigation.npz')}")
+print(f"\nData written to:  {os.path.join(RESULTS_DIR, 'analysis', 'buzz_coherence_cap_investigation.npz')}")
 print(f"Plot written to:  {plot1}")
 print(f"Plot written to:  {plot2}")

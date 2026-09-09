@@ -29,7 +29,7 @@ import numpy as np
 import sdynpy as sdpy
 
 RESULTS_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results"))
-SYSTEM_FILE = os.path.join(RESULTS_DIR, "sdynpy_frame6x12_system.npz")
+SYSTEM_FILE = os.path.join(RESULTS_DIR, "case", "sdynpy_frame6x12_system.npz")
 
 # ---- Control locations: match the "Control Channels" row in the profile ----
 # All 6 shaker drives, and the first 8 of the 12 response channels
@@ -48,7 +48,7 @@ f = np.arange(f_low, f_high + df / 2, df)
 frf = system.frequency_response(f, responses=resp, references=exc, displacement_derivative=2)
 H = np.moveaxis(frf.ordinate, -1, 0)  # (F, M, N)
 
-out_file = os.path.join(RESULTS_DIR, "frf_frame6x12_H.npz")
+out_file = os.path.join(RESULTS_DIR, "analysis", "frf_frame6x12_H.npz")
 np.savez(out_file, f=f, H=H, drive_nodes=np.array(drive_nodes), resp_nodes=np.array(resp_nodes))
 
 print(f"H shape (F,M,N): {H.shape}  (M={len(resp_nodes)} responses, N={len(drive_nodes)} drives)")

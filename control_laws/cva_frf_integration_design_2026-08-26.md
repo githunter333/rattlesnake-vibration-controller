@@ -533,7 +533,7 @@ The core wiring from section 8 and the `octave_band_switching_control`
 law from section 6 were run for real against the sixdrive12resp example,
 closing out the "not yet tested against a live Rattlesnake run" item.
 
-**Setup.** `examples/sixdrive12resp/results/sdynpy_frame6x12_profile.xlsx`
+**Setup.** `examples/sixdrive12resp/results/case/sdynpy_frame6x12_profile.xlsx`
 was updated (backup kept as `sdynpy_frame6x12_profile_backup_before_octave.xlsx`)
 so its Control Python Script/Function/Parameters point at
 `octave_band_switching_control.py`, function `octave_band_switching_control`,
@@ -1392,7 +1392,7 @@ case says the opposite, matching the original validation.
 
 Checked the actual live sys-ID/control excitation spec next:
 `examples/sixdrive12resp/code/build_flat_spec_large.py` /
-`results/flat_spec_frame6x12.mat`, loaded via
+`results/case/flat_spec_frame6x12.mat`, loaded via
 `random_vibration_sys_id_utilities.load_specification`. Confirmed
 (`scipy.io.loadmat`, checked the diagonal directly): flat 0.001 g^2/Hz on
 each of the 8 control channels, but strictly **band-limited to 100-1000

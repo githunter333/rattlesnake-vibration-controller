@@ -225,9 +225,9 @@ n_control_channels = 8  # first 8 of the 12 response channels; adjustable in the
 system = sdpy.System(full_coordinate, mass=M, stiffness=K, damping=C_damp)
 
 output_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results"))
-system_filename = os.path.join(output_dir, "sdynpy_frame6x12_system.npz")
-spreadsheet_file_name = os.path.join(output_dir, "sdynpy_frame6x12_profile.xlsx")
-spec_filename = os.path.join(output_dir, "flat_spec_frame6x12.mat")
+system_filename = os.path.join(output_dir, "case", "sdynpy_frame6x12_system.npz")
+spreadsheet_file_name = os.path.join(output_dir, "case", "sdynpy_frame6x12_profile.xlsx")
+spec_filename = os.path.join(output_dir, "case", "flat_spec_frame6x12.mat")
 
 rattlesnake_directory = os.path.expanduser(
     "~/Documents/Code/python/rattlesnake-vibration-controller"
