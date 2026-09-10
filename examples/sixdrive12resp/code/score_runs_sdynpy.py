@@ -44,6 +44,25 @@ import argparse
 import os
 import warnings
 
+# This is a batch tool that never needs an interactive window.  It must be
+# said BEFORE sdynpy is imported, because sdynpy pulls in pyvista and hence
+# Qt: on an Anaconda env carrying both PyQt5 and Qt6 the two register the
+# same Objective-C classes and the process segfaults the moment matplotlib
+# tries to open a Qt canvas.  Agg avoids the canvas entirely.
+os.environ.setdefault('MPLBACKEND', 'Agg')
+
+# sdynpy imports pyvista, which initializes Qt at import time.  On a headless
+# machine that aborts the process before any of our code runs, so ask Qt for
+# the offscreen platform there.  A Mac or an X/Wayland session has a real
+# display and is left alone.
+import sys
+if sys.platform not in ('darwin', 'win32') and not (
+        os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+
+import matplotlib
+matplotlib.use('Agg', force=True)
+
 import netCDF4 as nc4
 import numpy as np
 
@@ -57,12 +76,25 @@ _TINY = np.finfo(float).tiny
 # --------------------------------------------------------------------------
 # Loading a spectral-only run
 # --------------------------------------------------------------------------
+# A controlled random run and a system-identification run share most of their
+# variables; the discriminator is that control writes drive_cpsd_* while system
+# ID writes reference_cpsd_* instead.  Require everything
+# read_random_spectral_data actually dereferences, or the file fails deep
+# inside SDynPy rather than being skipped cleanly.
+REQUIRED_VARIABLES = ('response_cpsd_real', 'response_cpsd_imag',
+                      'specification_cpsd_matrix_real',
+                      'specification_cpsd_matrix_imag',
+                      'specification_frequency_lines',
+                      'drive_cpsd_real', 'drive_cpsd_imag')
+
+
 def _band_psd(matrix, frequencies, control_coordinate):
     """Build the (2, n_control) lower/upper band array SDynPy expects.
 
     Mirrors ``RattlesnakeRandomEnvironmentData.specification_warning_psd``.
     Returns None when the band is absent or entirely zero/NaN, which is how
-    an unpopulated profile column shows up.
+    an unpopulated profile column shows up -- and is the case for every
+    profile in this study.
     """
     if matrix is None:
         return None
@@ -81,15 +113,38 @@ def _band_psd(matrix, frequencies, control_coordinate):
     return np.concatenate((low[np.newaxis, :], high[np.newaxis, :]))
 
 
+def describe_dataset(dataset):
+    """Return (is_scorable, reason) for an already-open Dataset.
+
+    Takes an open handle rather than a path deliberately.  HDF5 does not
+    tolerate the same file being open through several netCDF4 handles while
+    one of them is closed -- doing so segfaults the interpreter on the NEXT
+    file, which is exactly what a directory sweep does.  Every read in this
+    module therefore shares one handle per file, closed once by score_run.
+    """
+    groups = [g for g in dataset.groups if g != 'channels']
+    if not groups:
+        return False, 'no environment group'
+    group = dataset[groups[0]]
+    missing = [v for v in REQUIRED_VARIABLES if v not in group.variables]
+    if missing:
+        kind = ('system-identification run'
+                if 'reference_cpsd_real' in group.variables
+                else 'not a controlled random run')
+        return False, (f'{kind}; environment {groups[0]!r} has no '
+                       + ', '.join(missing))
+    return True, groups[0]
+
+
 def bands_from_spec(specification, tolerance_db):
     """Build a (2, n_control) lower/upper band array at +/-tolerance_db.
 
     Rattlesnake writes the warning and abort matrices as all-NaN when the
     profile's warning/abort columns were never filled in, which is the case
     for every run in this study.  SDynPy's plotting routines dereference both
-    bands unconditionally, so they are synthesized here from the specification
-    itself.  Same arithmetic as RandomVibTest.set_tolerance_limit_psd, applied
-    to whichever specification is currently being scored against.
+    bands unconditionally, so they are synthesized here from whichever
+    specification is currently being scored against.  Same arithmetic as
+    RandomVibTest.set_tolerance_limit_psd.
     """
     asd = specification.get_asd()
     low = asd / 10.0 ** (tolerance_db / 10.0)
@@ -97,7 +152,7 @@ def bands_from_spec(specification, tolerance_db):
     return np.concatenate((low[np.newaxis, :], high[np.newaxis, :]))
 
 
-def load_spectral_run(nc4_path, coordinate_override_column=None, default_unit='EU'):
+def load_spectral_run(dataset, coordinate_override_column=None, default_unit='EU'):
     """Build a RandomVibTest from a Rattlesnake spectral-only nc4 file.
 
     Returns
@@ -111,11 +166,12 @@ def load_spectral_run(nc4_path, coordinate_override_column=None, default_unit='E
     """
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
+        # Hand SDynPy the open handle; given a path it would open its own and
+        # never close it, leaving two live handles on one file.
         response_cpsd, spec_cpsd, drive_cpsd = read_random_spectral_data(
-            nc4_path, coordinate_override_column)
+            dataset, coordinate_override_column)
 
-    dataset = nc4.Dataset(nc4_path, 'r')
-    try:
+    if True:
         environment = [g for g in dataset.groups if g != 'channels'][0]
         group = dataset[environment]
         frequencies = np.array(group['specification_frequency_lines'][:], dtype=float)
@@ -140,8 +196,6 @@ def load_spectral_run(nc4_path, coordinate_override_column=None, default_unit='E
         units = all_units[active][control_indices]
         units = np.array([u if str(u).strip() else default_unit for u in units],
                          dtype='<U32')
-    finally:
-        dataset.close()
 
     control_coordinate = response_cpsd.get_asd().response_coordinate.flatten()
 
@@ -196,7 +250,7 @@ def _load_achievable_diagonal():
 
 
 
-def read_run_frf(nc4_path):
+def read_run_frf(dataset):
     """Return (frequencies, H) where H is (F, M, N) from the run file itself.
 
     Every Rattlesnake random run stores the FRF it was actually controlling
@@ -205,21 +259,17 @@ def read_run_frf(nc4_path):
     which matters because the rig's damping has changed measurably between
     test campaigns.
     """
-    dataset = nc4.Dataset(nc4_path, 'r')
-    try:
-        environment = [g for g in dataset.groups if g != 'channels'][0]
-        group = dataset[environment]
-        frequencies = np.array(group['specification_frequency_lines'][:], dtype=float)
-        frf = (np.array(group['frf_data_real'][:], dtype=float)
-               + 1j * np.array(group['frf_data_imag'][:], dtype=float))
-        spec = np.array(group['specification_cpsd_matrix_real'][:], dtype=float)
-        target = np.einsum('fmm->fm', spec)
-    finally:
-        dataset.close()
+    environment = [g for g in dataset.groups if g != 'channels'][0]
+    group = dataset[environment]
+    frequencies = np.array(group['specification_frequency_lines'][:], dtype=float)
+    frf = (np.array(group['frf_data_real'][:], dtype=float)
+           + 1j * np.array(group['frf_data_imag'][:], dtype=float))
+    spec = np.array(group['specification_cpsd_matrix_real'][:], dtype=float)
+    target = np.einsum('fmm->fm', spec)
     return frequencies, frf, target
 
 
-def achievable_floor_from_run(nc4_path, achievable_diagonal, band=None,
+def achievable_floor_from_run(dataset, achievable_diagonal, band=None,
                               decimate=1, **kwargs):
     """Compute the achievable diagonal response for a run from its own FRF.
 
@@ -240,7 +290,7 @@ def achievable_floor_from_run(nc4_path, achievable_diagonal, band=None,
     PowerSpectralDensityArray on the run's frequency lines (NaN off-band),
     plus the raw predictor result dict.
     """
-    frequencies, frf, target = read_run_frf(nc4_path)
+    frequencies, frf, target = read_run_frf(dataset)
     valid = np.isfinite(target).all(axis=1) & (np.max(target, axis=1) > 0)
     if band is not None:
         valid &= (frequencies >= band[0]) & (frequencies <= band[1])
@@ -395,9 +445,29 @@ def score_run(nc4_path, projected_npz=None, tolerance_db=6.0,
     the same system identification; the rig's damping has changed measurably
     between campaigns, so a stale target quietly biases the comparison.
     """
-    test, extras = load_spectral_run(nc4_path)
-    coords = extras['control_coordinate']
     name = os.path.splitext(os.path.basename(nc4_path))[0]
+    try:
+        dataset = nc4.Dataset(nc4_path, 'r')
+    except OSError as exc:
+        return dict(name=name, path=nc4_path, skipped=f'cannot open ({exc})')
+    try:
+        return _score_open_run(dataset, nc4_path, name, projected_npz,
+                               tolerance_db, figure_dir, verbose,
+                               recompute_floor, floor_band, floor_kwargs)
+    finally:
+        dataset.close()
+
+
+def _score_open_run(dataset, nc4_path, name, projected_npz, tolerance_db,
+                    figure_dir, verbose, recompute_floor, floor_band,
+                    floor_kwargs):
+    """Body of score_run, with the file's single Dataset handle supplied."""
+    scorable, reason = describe_dataset(dataset)
+    if not scorable:
+        return dict(name=name, path=nc4_path, skipped=reason)
+
+    test, extras = load_spectral_run(dataset)
+    coords = extras['control_coordinate']
 
     flat_spec = test.specification_cpsd
     result = dict(name=name, path=nc4_path, coordinate=coords,
@@ -410,7 +480,7 @@ def score_run(nc4_path, projected_npz=None, tolerance_db=6.0,
     if recompute_floor:
         achievable_diagonal = _load_achievable_diagonal()
         floor_result, floor_frequencies = achievable_floor_from_run(
-            nc4_path, achievable_diagonal, band=floor_band, **(floor_kwargs or {}))
+            dataset, achievable_diagonal, band=floor_band, **(floor_kwargs or {}))
         n_solved = floor_result.get('interpolated_from_n_lines')
         projected = achieved_to_psd(floor_result, floor_frequencies, coords)
         result['floor_result'] = floor_result
@@ -519,12 +589,27 @@ def main():
     floor_kwargs = dict(n_restarts=args.n_restarts, decimate=args.floor_decimate)
     if args.restrict_rcond is not None:
         floor_kwargs['restrict_rcond'] = args.restrict_rcond
-    results = [score_run(r, args.projected, args.tolerance_db, args.figures,
-                         recompute_floor=args.recompute_floor,
-                         floor_band=tuple(args.floor_band),
-                         floor_kwargs=floor_kwargs)
-               for r in args.runs]
+    results = []
+    for run in args.runs:
+        try:
+            outcome = score_run(run, args.projected, args.tolerance_db,
+                                args.figures,
+                                recompute_floor=args.recompute_floor,
+                                floor_band=tuple(args.floor_band),
+                                floor_kwargs=floor_kwargs)
+        except Exception as exc:                       # noqa: BLE001
+            print(f'\n=== {os.path.basename(run)}\n'
+                  f'  [failed] {type(exc).__name__}: {exc}')
+            continue
+        if outcome.get('skipped'):
+            print(f'\n=== {os.path.basename(run)}\n'
+                  f'  [skipped] {outcome["skipped"]}')
+            continue
+        results.append(outcome)
 
+    if not results:
+        print('\nNo scorable runs.')
+        return results
     if len(results) > 1:
         print('\n=== SUMMARY (overall rms dB / percent lines out) ===')
         header = f'{"run":42s} {"flat":>14s}'
