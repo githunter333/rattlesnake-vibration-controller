@@ -17,7 +17,7 @@ then run the comparison script in the `rattlesnake` env.
 Run (from the `sdynpy` conda environment):
 
     conda activate sdynpy
-    cd ~/Documents/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/code
+    cd ~/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/code
     python compute_frf_frame6x12.py
 
 Output: ../results/frf_frame6x12_H.npz, with f, H (F,M,N complex),

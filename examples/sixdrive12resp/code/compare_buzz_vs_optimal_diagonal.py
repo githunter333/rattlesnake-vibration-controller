@@ -48,7 +48,7 @@ for both baseline and optimal-diagonal drive CPSDs Sxx.
 Run (from the `rattlesnake` conda env, which has cvxpy):
 
     conda activate rattlesnake
-    cd ~/Documents/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/code
+    cd ~/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/code
     python compare_buzz_vs_optimal_diagonal.py
 
 Outputs are written to ../results/.
@@ -62,7 +62,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-REPO_ROOT = os.path.expanduser("~/Documents/Code/python/rattlesnake-vibration-controller")
+REPO_ROOT = os.path.expanduser("~/Code/python/rattlesnake-vibration-controller")
 sys.path.insert(0, REPO_ROOT)
 from control_laws.optimal_diagonal_control import optimal_diagonal_control
 

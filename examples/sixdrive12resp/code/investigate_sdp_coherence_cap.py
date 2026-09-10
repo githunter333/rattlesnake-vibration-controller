@@ -12,7 +12,7 @@ convergence twice on the same system -- once with the cap at its default
 Run (rattlesnake env, needs cvxpy):
 
     conda activate rattlesnake
-    cd ~/Documents/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/code
+    cd ~/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/code
     python investigate_sdp_coherence_cap.py
 """
 
@@ -24,7 +24,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-REPO_ROOT = os.path.expanduser("~/Documents/Code/python/rattlesnake-vibration-controller")
+REPO_ROOT = os.path.expanduser("~/Code/python/rattlesnake-vibration-controller")
 sys.path.insert(0, REPO_ROOT)
 from control_laws.optimal_diagonal_control import optimal_diagonal_control
 

@@ -41,7 +41,7 @@ within-band shape of H(f) to cancel in the first place.
 Run (from the `sdynpy` conda environment):
 
     conda activate sdynpy
-    cd ~/Documents/Code/python/rattlesnake-vibration-controller/siso_octave_control/code
+    cd ~/Code/python/rattlesnake-vibration-controller/siso_octave_control/code
     python build_siso_octave_control_demo.py
 
 Outputs are written to ../results/.
@@ -56,7 +56,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import sdynpy as sdpy
 
-REPO_ROOT = os.path.expanduser("~/Documents/Code/python/rattlesnake-vibration-controller")
+REPO_ROOT = os.path.expanduser("~/Code/python/rattlesnake-vibration-controller")
 sys.path.insert(0, REPO_ROOT)
 from spectral_analysis.fractional_octave import (
     octave_band_frequencies, narrowband_cross_spectra, octave_band_psd,

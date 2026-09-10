@@ -26,7 +26,7 @@ since a real broadband random test's actual per-mode excitation efficiency
 differs from a clean single-mode-shaped sine, same caveat as before).
 
 Run (sdynpy or rattlesnake env -- only needs numpy/scipy):
-    cd ~/Documents/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/code
+    cd ~/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/code
     python build_nonlinear_frf_system_allmodes.py
 
 Output: ../results/sdynpy_frame6x12_system_nonlinear_allmodes.npz

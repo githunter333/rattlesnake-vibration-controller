@@ -19,7 +19,7 @@ pyqtgraph, openpyxl -- NOT nidaqmx; that import is lazy and only
 triggered if NI-DAQmx hardware is actually selected at runtime).
 
     conda activate sdynpy
-    cd ~/Documents/Code/python/rattlesnake-vibration-controller/examples/twodrive5resp/code
+    cd ~/Code/python/rattlesnake-vibration-controller/examples/twodrive5resp/code
     python build_sdynpy_demo.py
 
 Outputs are written to ../results/. Then in Rattlesnake: File -> Open
@@ -87,7 +87,7 @@ spreadsheet_file_name = os.path.join(output_dir, "sdynpy_demo_profile.xlsx")
 # Path to the cloned rattlesnake-vibration-controller repo root (the
 # directory that directly contains the `components` package)
 rattlesnake_directory = os.path.expanduser(
-    "~/Documents/Code/python/rattlesnake-vibration-controller"
+    "~/Code/python/rattlesnake-vibration-controller"
 )
 
 sample_rate = 2560          # Hz -- well above the ~174 Hz top flexible mode

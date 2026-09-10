@@ -26,7 +26,7 @@ Run (from the `sdynpy` conda environment -- needs sdynpy, scipy,
 matplotlib):
 
     conda activate sdynpy
-    cd ~/Documents/Code/python/rattlesnake-vibration-controller/examples/octave_vs_narrowband/code
+    cd ~/Code/python/rattlesnake-vibration-controller/examples/octave_vs_narrowband/code
     python build_octave_demo.py
 
 Outputs (time series + comparison plot) are written to ../results/.
@@ -41,7 +41,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import sdynpy as sdpy
 
-REPO_ROOT = os.path.expanduser("~/Documents/Code/python/rattlesnake-vibration-controller")
+REPO_ROOT = os.path.expanduser("~/Code/python/rattlesnake-vibration-controller")
 sys.path.insert(0, REPO_ROOT)
 from spectral_analysis.fractional_octave import (
     time_series_to_octave_psd, time_series_to_octave_frf, time_series_to_octave_coherence,

@@ -24,7 +24,7 @@ Modes 3+ are left untouched.
 
 Run (sdynpy env):
     conda activate sdynpy
-    cd ~/Documents/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/code
+    cd ~/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/code
     python build_shifted_frf_system.py
 
 Output: ../results/sdynpy_frame6x12_system_shifted.npz -- same format as the
