@@ -211,9 +211,25 @@ def load_spectral_run(dataset, coordinate_override_column=None, default_unit='EU
         specification_abort_psd=abort,
         units=units,
     )
+    # The FRF the run was actually controlling with, and its conditioning over
+    # the specified band.  Conditioning turns out to predict the reachability
+    # limit better than any other quantity in the file, so it is carried
+    # alongside the spectra rather than recomputed later.
+    frf = (np.array(group['frf_data_real'][:], dtype=float)
+           + 1j * np.array(group['frf_data_imag'][:], dtype=float))
+    spec_diag = np.real(spec_cpsd.get_asd().ordinate).T          # (F, M)
+    with np.errstate(invalid='ignore'):
+        in_band = np.isfinite(spec_diag).all(axis=1) & (spec_diag > 0).any(axis=1)
+    if np.any(in_band):
+        singular = np.linalg.svd(frf[in_band], compute_uv=False)
+        frf_condition = singular[:, 0] / np.maximum(singular[:, -1], _TINY)
+    else:
+        frf_condition = np.array([])
+
     extras = dict(drive_cpsd=drive_cpsd, frequencies=frequencies,
                   control_coordinate=control_coordinate,
                   environment=environment, n_drives=n_drives,
+                  frf=frf, frf_condition=frf_condition,
                   bands_from_file=(warning is not None and abort is not None))
     return test, extras
 
@@ -377,20 +393,15 @@ def projected_target_psd(npz_path, frequencies, control_coordinate):
 # --------------------------------------------------------------------------
 # Metrics
 # --------------------------------------------------------------------------
-def score_against(test, specification, tolerance_db=6.0):
-    """Per-channel dB error of the measured response against a specification.
+def _compare(measured, target, tolerance_db):
+    """Per-channel dB comparison of two (M, F) ordinate arrays.
 
-    Only lines where the specification is finite and strictly positive are
-    scored, so the out-of-band region and any NaN-padded projected target are
-    excluded rather than counted as failures.
-
-    Returns a dict of per-channel and aggregate statistics.
+    Only lines where the target is finite and strictly positive are scored, so
+    out-of-band lines and the NaN padding on a projected target are excluded
+    rather than counted as failures.
     """
-    # get_asd() returns the CPSD diagonal, which carries a zero imaginary part
-    # as a complex dtype; take the real part explicitly so the dB arithmetic and
-    # every statistic below stay real.
-    measured = np.real(test.cpsd[0].get_asd().ordinate)   # (M, F)
-    target = np.real(specification.get_asd().ordinate)    # (M, F)
+    measured = np.real(measured)
+    target = np.real(target)
     with np.errstate(invalid='ignore'):
         band = np.isfinite(target) & (target > 0) & np.isfinite(measured)
 
@@ -406,19 +417,43 @@ def score_against(test, specification, tolerance_db=6.0):
         outside = np.nansum(np.abs(error_db) > tolerance_db, axis=1)
     percent_out = 100.0 * outside / np.maximum(n_lines, 1)
 
-    total_lines = int(band.sum())
-    all_error = error_db[band]
+    total = int(band.sum())
+    flat = error_db[band]
     return dict(
         error_db=error_db,
         mean_db=mean_db,
         rms_db=rms_db,
         percent_out=percent_out,
         n_lines=n_lines,
-        overall_rms_db=float(np.sqrt(np.mean(all_error ** 2))) if total_lines else np.nan,
-        overall_percent_out=float(100.0 * np.sum(np.abs(all_error) > tolerance_db)
-                                  / total_lines) if total_lines else np.nan,
+        overall_rms_db=float(np.sqrt(np.mean(flat ** 2))) if total else np.nan,
+        overall_percent_out=float(100.0 * np.sum(np.abs(flat) > tolerance_db)
+                                  / total) if total else np.nan,
         tolerance_db=tolerance_db,
     )
+
+
+def score_against(test, specification, tolerance_db=6.0):
+    """Per-channel dB error of the measured response against a specification."""
+    return _compare(test.cpsd[0].get_asd().ordinate,
+                    specification.get_asd().ordinate, tolerance_db)
+
+
+def reachability(projected, specification, tolerance_db=6.0):
+    """How far the BEST ACHIEVABLE response sits from the specification.
+
+    This is the reachability limit stated directly, rather than inferred from
+    the difference between two scorings.  A near-zero result means the
+    specification is essentially achievable with the drives available and
+    every bit of the measured error belongs to the control law; a large one
+    means part of the error is unreachable no matter what the law does.
+
+    Empirically this tracks the conditioning of the identified FRF far more
+    than it tracks the drive/control channel count: on this rig, runs with
+    median cond(H) around 110 come back near 0.1 dB while runs in the
+    thousands come back at 1.2-1.6 dB.
+    """
+    return _compare(projected.get_asd().ordinate,
+                    specification.get_asd().ordinate, tolerance_db)
 
 
 def _fmt_table(label, coords, stats):
@@ -436,7 +471,7 @@ def _fmt_table(label, coords, stats):
 
 def score_run(nc4_path, projected_npz=None, tolerance_db=6.0,
               figure_dir=None, verbose=True, recompute_floor=False,
-              floor_band=(100.0, 1000.0), floor_kwargs=None):
+              floor_band=(100.0, 1000.0), floor_kwargs=None, save_dir=None):
     """Score one run against the flat spec and against what is achievable.
 
     The achievable target comes either from a saved projected-target .npz
@@ -453,14 +488,15 @@ def score_run(nc4_path, projected_npz=None, tolerance_db=6.0,
     try:
         return _score_open_run(dataset, nc4_path, name, projected_npz,
                                tolerance_db, figure_dir, verbose,
-                               recompute_floor, floor_band, floor_kwargs)
+                               recompute_floor, floor_band, floor_kwargs,
+                               save_dir)
     finally:
         dataset.close()
 
 
 def _score_open_run(dataset, nc4_path, name, projected_npz, tolerance_db,
                     figure_dir, verbose, recompute_floor, floor_band,
-                    floor_kwargs):
+                    floor_kwargs, save_dir=None):
     """Body of score_run, with the file's single Dataset handle supplied."""
     scorable, reason = describe_dataset(dataset)
     if not scorable:
@@ -473,7 +509,9 @@ def _score_open_run(dataset, nc4_path, name, projected_npz, tolerance_db,
     result = dict(name=name, path=nc4_path, coordinate=coords,
                   n_drives=extras['n_drives'], n_control=len(coords),
                   environment=extras['environment'],
-                  bands_from_file=extras['bands_from_file'])
+                  bands_from_file=extras['bands_from_file'],
+                  median_cond_frf=(float(np.median(extras['frf_condition']))
+                                   if extras['frf_condition'].size else float('nan')))
     result['contractual'] = score_against(test, flat_spec, tolerance_db)
 
     projected = None
@@ -492,13 +530,15 @@ def _score_open_run(dataset, nc4_path, name, projected_npz, tolerance_db,
         result['floor_source'] = f'saved file {os.path.basename(projected_npz)}'
     if projected is not None:
         result['physical'] = score_against(test, projected, tolerance_db)
+        result['reachability'] = reachability(projected, flat_spec, tolerance_db)
         result['projected_psd'] = projected
 
     if verbose:
         print(f'\n=== {name}')
         print(f'  environment {extras["environment"]!r}, '
               f'{len(coords)} control channels, {extras["n_drives"]} drives, '
-              f'tolerance +/-{tolerance_db:g} dB')
+              f'tolerance +/-{tolerance_db:g} dB, '
+              f'median cond(H) {result["median_cond_frf"]:.0f}')
         if not extras['bands_from_file']:
             print('  note: profile carries no warning/abort levels (all NaN); '
                   'tolerance bands synthesized from the specification')
@@ -506,6 +546,19 @@ def _score_open_run(dataset, nc4_path, name, projected_npz, tolerance_db,
         if 'physical' in result:
             print(_fmt_table(f'vs ACHIEVABLE TARGET ({result["floor_source"]})',
                              coords, result['physical']))
+            print(_fmt_table('REACHABILITY: best achievable vs flat spec',
+                             coords, result['reachability']))
+            reach = result['reachability']['overall_rms_db']
+            if reach < 0.5:
+                verdict = ('the flat spec is essentially achievable here, so '
+                           'nearly all of the error above belongs to the law')
+            elif reach < 1.5:
+                verdict = 'a modest part of the error above is unreachable'
+            else:
+                verdict = ('a substantial part of the error above is '
+                           'unreachable regardless of the law')
+            print(f'    best achievable is {reach:.2f} dB rms from the flat '
+                  f'spec -- {verdict}')
             gap = (result['contractual']['overall_rms_db']
                    - result['physical']['overall_rms_db'])
             print(f'    gap (flat - projected) = {gap:.2f} dB  '
@@ -525,7 +578,86 @@ def _score_open_run(dataset, nc4_path, name, projected_npz, tolerance_db,
             test.specification_abort_psd = bands_from_spec(projected, tolerance_db)
             _save_figures(test, figure_dir, f'{name}_vs_projected')
             test.specification_cpsd = flat_spec
+
+    if save_dir is not None:
+        path = save_result(result, test, extras, save_dir)
+        if verbose:
+            print(f'    saved {os.path.relpath(path)}')
     return result
+
+
+def save_result(result, test, extras, save_dir):
+    """Write one run's scoring to <save_dir>/<run>_scoring.npz.
+
+    A --recompute-floor sweep costs ~25 minutes for this campaign, and the
+    interesting questions tend to arrive afterwards ("does the gap track FRF
+    conditioning?").  Everything needed to answer them without recomputing is
+    written here: the measured, specification and achievable spectra, all
+    three scorings per channel, the FRF, and the predictor's own diagnostics.
+
+    Loads back with np.load(path, allow_pickle=False); string arrays come back
+    as numpy unicode arrays.
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    out = {
+        'frequencies': extras['frequencies'],
+        'control_coordinate': np.array([str(c) for c in result['coordinate']]),
+        'n_drives': np.array(result['n_drives']),
+        'n_control': np.array(result['n_control']),
+        'environment': np.array(result['environment']),
+        'tolerance_db': np.array(result['contractual']['tolerance_db']),
+        'bands_from_file': np.array(result['bands_from_file']),
+        'floor_source': np.array(result.get('floor_source', '')),
+        'measured_asd': np.real(test.cpsd[0].get_asd().ordinate),
+        'spec_asd': np.real(test.specification_cpsd.get_asd().ordinate),
+        'frf': extras['frf'],
+        'frf_condition': extras['frf_condition'],
+    }
+    for scoring in ('contractual', 'physical', 'reachability'):
+        stats = result.get(scoring)
+        if stats is None:
+            continue
+        for key in ('error_db', 'mean_db', 'rms_db', 'percent_out', 'n_lines',
+                    'overall_rms_db', 'overall_percent_out'):
+            out[f'{scoring}__{key}'] = np.asarray(stats[key])
+    if 'projected_psd' in result:
+        out['achievable_asd'] = np.real(result['projected_psd'].get_asd().ordinate)
+    floor = result.get('floor_result')
+    if floor is not None:
+        for key in ('best_rms_db', 'best_minimax_db', 'drive_trace',
+                    'exactly_achievable', 'solved'):
+            if key in floor:
+                out[f'floor__{key}'] = np.asarray(floor[key])
+    path = os.path.join(save_dir, f'{result["name"]}_scoring.npz')
+    np.savez_compressed(path, **out)
+    return path
+
+
+def write_summary_csv(results, save_dir):
+    """One row per run: the three scorings side by side, for sorting in a sheet."""
+    import csv
+    path = os.path.join(save_dir, 'summary.csv')
+    with open(path, 'w', newline='') as handle:
+        writer = csv.writer(handle)
+        writer.writerow(['run', 'n_control', 'n_drives', 'median_cond_frf',
+                         'flat_rms_db', 'flat_percent_out',
+                         'achievable_rms_db', 'achievable_percent_out',
+                         'reachability_rms_db', 'reachability_percent_out',
+                         'floor_source'])
+        for r in results:
+            row = [r['name'], r['n_control'], r['n_drives'],
+                   f'{r.get("median_cond_frf", float("nan")):.1f}',
+                   f'{r["contractual"]["overall_rms_db"]:.3f}',
+                   f'{r["contractual"]["overall_percent_out"]:.2f}']
+            for key in ('physical', 'reachability'):
+                if key in r:
+                    row += [f'{r[key]["overall_rms_db"]:.3f}',
+                            f'{r[key]["overall_percent_out"]:.2f}']
+                else:
+                    row += ['', '']
+            row.append(r.get('floor_source', ''))
+            writer.writerow(row)
+    return path
 
 
 def _save_figures(test, figure_dir, name):
@@ -584,6 +716,10 @@ def main():
                              'the rest in dB (N=4 keeps the whole run near a '
                              'minute; N=1 solves every line)')
     parser.add_argument('--figures', default=None, help='directory for figures')
+    parser.add_argument('--save', default=None, metavar='DIR',
+                        help='write <run>_scoring.npz per run plus summary.csv, '
+                             'so a long sweep can be re-analysed without '
+                             'recomputing the achievable floor')
     args = parser.parse_args()
 
     floor_kwargs = dict(n_restarts=args.n_restarts, decimate=args.floor_decimate)
@@ -596,7 +732,8 @@ def main():
                                 args.figures,
                                 recompute_floor=args.recompute_floor,
                                 floor_band=tuple(args.floor_band),
-                                floor_kwargs=floor_kwargs)
+                                floor_kwargs=floor_kwargs,
+                                save_dir=args.save)
         except Exception as exc:                       # noqa: BLE001
             print(f'\n=== {os.path.basename(run)}\n'
                   f'  [failed] {type(exc).__name__}: {exc}')
@@ -611,19 +748,31 @@ def main():
         print('\nNo scorable runs.')
         return results
     if len(results) > 1:
+        has_floor = 'physical' in results[0]
         print('\n=== SUMMARY (overall rms dB / percent lines out) ===')
-        header = f'{"run":42s} {"flat":>14s}'
-        if 'physical' in results[0]:
-            header += f' {"projected":>14s}'
+        header = f'{"run":42s} {"cond(H)":>9s} {"flat":>14s}'
+        if has_floor:
+            header += f' {"achievable":>14s} {"unreachable":>14s}'
         print(header)
         for r in results:
             row = (f'{r["name"][:42]:42s} '
+                   f'{r.get("median_cond_frf", float("nan")):9.0f} '
                    f'{r["contractual"]["overall_rms_db"]:7.2f} '
                    f'{r["contractual"]["overall_percent_out"]:6.1f}')
             if 'physical' in r:
                 row += (f'  {r["physical"]["overall_rms_db"]:7.2f} '
                         f'{r["physical"]["overall_percent_out"]:6.1f}')
+                row += (f'  {r["reachability"]["overall_rms_db"]:7.2f} '
+                        f'{r["reachability"]["overall_percent_out"]:6.1f}')
             print(row)
+        if has_floor:
+            print('\n  "unreachable" is how far the BEST ACHIEVABLE response sits\n'
+                  '  from the flat spec.  Near zero means the spec is reachable and\n'
+                  '  the error is the law\'s; large means part of it is not.')
+
+    if args.save:
+        path = write_summary_csv(results, args.save)
+        print(f'\nwrote {path}')
     return results
 
 
