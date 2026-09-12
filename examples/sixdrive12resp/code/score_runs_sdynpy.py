@@ -113,6 +113,74 @@ def _band_psd(matrix, frequencies, control_coordinate):
     return np.concatenate((low[np.newaxis, :], high[np.newaxis, :]))
 
 
+# Attributes that fully describe how a run was produced.  Comparing runs that
+# differ in any of these is comparing different experiments -- the first sweep
+# of this campaign unknowingly mixed three different plants (linear, shifted
+# and nonlinear), which produced an apparent "conditioning" effect that was
+# really just the plant changing underneath.
+PROVENANCE_ROOT = ('hardware', 'hardware_file', 'sample_rate',
+                   'time_per_read', 'time_per_write', 'output_oversample')
+PROVENANCE_GROUP = ('control_python_script', 'control_python_function',
+                    'control_python_function_type',
+                    'control_python_function_parameters',
+                    'control_averaging_type', 'control_averaging_coefficient',
+                    'frames_in_cpsd', 'cpsd_window', 'cpsd_overlap',
+                    'samples_per_frame', 'update_tf_during_control',
+                    'sysid_averaging_type', 'sysid_exponential_averaging_coefficient',
+                    'sysid_averages', 'sysid_estimator', 'sysid_level')
+
+# Of those, the ones that MUST agree for a set of runs to be comparable.  The
+# control law and its parameters are deliberately absent: those are the
+# independent variable.
+MUST_MATCH = ('hardware', 'hardware_file', 'sample_rate', 'frames_in_cpsd',
+              'cpsd_window', 'cpsd_overlap', 'samples_per_frame',
+              'control_averaging_type', 'control_averaging_coefficient',
+              'update_tf_during_control')
+
+
+def read_provenance(dataset, environment):
+    """Collect how a run was produced: plant, law, parameters, averaging.
+
+    control_averaging_type / control_averaging_coefficient are absent on runs
+    predating that feature; they are reported as 'Linear' / 0.0 to match what
+    Rattlesnake itself assumes when reloading such a profile.
+    """
+    out = {}
+    for key in PROVENANCE_ROOT:
+        if key in dataset.ncattrs():
+            out[key] = dataset.getncattr(key)
+    group = dataset[environment]
+    for key in PROVENANCE_GROUP:
+        if key in group.ncattrs():
+            out[key] = group.getncattr(key)
+    out.setdefault('control_averaging_type', 'Linear')
+    out.setdefault('control_averaging_coefficient', 0.0)
+    if 'hardware_file' in out:
+        plant = os.path.basename(str(out['hardware_file']))
+        # The distinguishing part of these names is the SUFFIX
+        # (_nonlinear_allmodes, _shifted_allmodes, or nothing), so a
+        # left-truncated display keeps what actually tells them apart.
+        out['plant'] = plant
+        out['plant_short'] = plant if len(plant) <= 30 else '..' + plant[-28:]
+    params = str(out.get('control_python_function_parameters', '')).strip()
+    out['control_python_function_parameters'] = params
+    out['parameters_shown'] = params if params else '(defaults)'
+    return out
+
+
+def compare_provenance(results):
+    """Return {key: {value: [run names]}} for MUST_MATCH keys that disagree."""
+    disagreements = {}
+    for key in MUST_MATCH:
+        seen = {}
+        for r in results:
+            value = r.get('provenance', {}).get(key, '(absent)')
+            seen.setdefault(str(value), []).append(r['name'])
+        if len(seen) > 1:
+            disagreements[key] = seen
+    return disagreements
+
+
 def describe_dataset(dataset):
     """Return (is_scorable, reason) for an already-open Dataset.
 
@@ -226,7 +294,10 @@ def load_spectral_run(dataset, coordinate_override_column=None, default_unit='EU
     else:
         frf_condition = np.array([])
 
+    provenance = read_provenance(dataset, environment)
+
     extras = dict(drive_cpsd=drive_cpsd, frequencies=frequencies,
+                  provenance=provenance,
                   control_coordinate=control_coordinate,
                   environment=environment, n_drives=n_drives,
                   frf=frf, frf_condition=frf_condition,
@@ -511,7 +582,8 @@ def _score_open_run(dataset, nc4_path, name, projected_npz, tolerance_db,
                   environment=extras['environment'],
                   bands_from_file=extras['bands_from_file'],
                   median_cond_frf=(float(np.median(extras['frf_condition']))
-                                   if extras['frf_condition'].size else float('nan')))
+                                   if extras['frf_condition'].size else float('nan')),
+                  provenance=extras['provenance'])
     result['contractual'] = score_against(test, flat_spec, tolerance_db)
 
     projected = None
@@ -539,6 +611,15 @@ def _score_open_run(dataset, nc4_path, name, projected_npz, tolerance_db,
               f'{len(coords)} control channels, {extras["n_drives"]} drives, '
               f'tolerance +/-{tolerance_db:g} dB, '
               f'median cond(H) {result["median_cond_frf"]:.0f}')
+        prov = extras['provenance']
+        print(f'  plant       {prov.get("plant", "?")}  '
+              f'(hardware {prov.get("hardware", "?")})')
+        print(f'  law         {prov.get("control_python_function", "?")}  '
+              f'[{prov["parameters_shown"]}]')
+        print(f'  averaging   control {prov["control_averaging_type"]} '
+              f'coef {prov["control_averaging_coefficient"]:g}, '
+              f'{prov.get("frames_in_cpsd", "?")} frames, '
+              f'FRF update {"on" if prov.get("update_tf_during_control") else "off"}')
         if not extras['bands_from_file']:
             print('  note: profile carries no warning/abort levels (all NaN); '
                   'tolerance bands synthesized from the specification')
@@ -613,6 +694,8 @@ def save_result(result, test, extras, save_dir):
         'frf': extras['frf'],
         'frf_condition': extras['frf_condition'],
     }
+    for key, value in result.get('provenance', {}).items():
+        out[f'prov__{key}'] = np.array(value)
     for scoring in ('contractual', 'physical', 'reachability'):
         stats = result.get(scoring)
         if stats is None:
@@ -639,13 +722,24 @@ def write_summary_csv(results, save_dir):
     path = os.path.join(save_dir, 'summary.csv')
     with open(path, 'w', newline='') as handle:
         writer = csv.writer(handle)
-        writer.writerow(['run', 'n_control', 'n_drives', 'median_cond_frf',
+        writer.writerow(['run', 'plant', 'law', 'parameters',
+                         'control_averaging_type', 'control_averaging_coefficient',
+                         'frames_in_cpsd', 'sample_rate', 'update_tf_during_control',
+                         'n_control', 'n_drives', 'median_cond_frf',
                          'flat_rms_db', 'flat_percent_out',
                          'achievable_rms_db', 'achievable_percent_out',
                          'reachability_rms_db', 'reachability_percent_out',
                          'floor_source'])
         for r in results:
-            row = [r['name'], r['n_control'], r['n_drives'],
+            prov = r.get('provenance', {})
+            row = [r['name'], prov.get('plant', ''),
+                   prov.get('control_python_function', ''),
+                   prov.get('control_python_function_parameters', ''),
+                   prov.get('control_averaging_type', ''),
+                   prov.get('control_averaging_coefficient', ''),
+                   prov.get('frames_in_cpsd', ''), prov.get('sample_rate', ''),
+                   prov.get('update_tf_during_control', ''),
+                   r['n_control'], r['n_drives'],
                    f'{r.get("median_cond_frf", float("nan")):.1f}',
                    f'{r["contractual"]["overall_rms_db"]:.3f}',
                    f'{r["contractual"]["overall_percent_out"]:.2f}']
@@ -750,6 +844,15 @@ def main():
     if len(results) > 1:
         has_floor = 'physical' in results[0]
         print('\n=== SUMMARY (overall rms dB / percent lines out) ===')
+        print(f'{"run":30s} {"plant":30s} {"law":26s} {"parameters":20s} {"avg":>16s}')
+        for r in results:
+            prov = r.get('provenance', {})
+            avg = (f'{prov.get("control_averaging_type", "?")} '
+                   f'{prov.get("control_averaging_coefficient", 0.0):g}')
+            print(f'{r["name"][:30]:30s} {str(prov.get("plant_short", "?")):30s} '
+                  f'{str(prov.get("control_python_function", "?"))[:26]:26s} '
+                  f'{prov.get("parameters_shown", "?")[:20]:20s} {avg:>16s}')
+        print()
         header = f'{"run":42s} {"cond(H)":>9s} {"flat":>14s}'
         if has_floor:
             header += f' {"achievable":>14s} {"unreachable":>14s}'
@@ -769,6 +872,26 @@ def main():
             print('\n  "unreachable" is how far the BEST ACHIEVABLE response sits\n'
                   '  from the flat spec.  Near zero means the spec is reachable and\n'
                   '  the error is the law\'s; large means part of it is not.')
+
+        disagreements = compare_provenance(results)
+        if disagreements:
+            print('\n  *** THESE RUNS ARE NOT DIRECTLY COMPARABLE ***')
+            print('  The following were not held constant across the set:')
+            for key, values in disagreements.items():
+                print(f'    {key}:')
+                for value, names in values.items():
+                    if key == 'hardware_file':
+                        value = os.path.basename(value)
+                    shown = ', '.join(n[:30] for n in names[:4])
+                    more = f' (+{len(names) - 4} more)' if len(names) > 4 else ''
+                    print(f'      {value}  <- {shown}{more}')
+            print('  Differences between these runs reflect the change above at '
+                  'least as much as\n  the control law.  Compare only within a '
+                  'group that shares all of them.')
+        else:
+            print('\n  provenance check: all runs share plant, sample rate, '
+                  'averaging and\n  spectral settings -- differences are '
+                  'attributable to the law and its parameters.')
 
     if args.save:
         path = write_summary_csv(results, args.save)
