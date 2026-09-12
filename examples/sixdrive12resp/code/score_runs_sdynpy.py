@@ -127,15 +127,29 @@ PROVENANCE_GROUP = ('control_python_script', 'control_python_function',
                     'frames_in_cpsd', 'cpsd_window', 'cpsd_overlap',
                     'samples_per_frame', 'update_tf_during_control',
                     'sysid_averaging_type', 'sysid_exponential_averaging_coefficient',
-                    'sysid_averages', 'sysid_estimator', 'sysid_level')
+                    'sysid_averages', 'sysid_noise_averages', 'sysid_estimator',
+                    'sysid_level', 'sysid_level_ramp_time', 'sysid_signal_type',
+                    'sysid_window', 'sysid_overlap', 'sysid_frame_size',
+                    'sysid_burst_on', 'sysid_burst_ramp_fraction',
+                    'sysid_pretrigger')
 
 # Of those, the ones that MUST agree for a set of runs to be comparable.  The
 # control law and its parameters are deliberately absent: those are the
 # independent variable.
+# The system-ID block belongs here too: it determines the FRF every law starts
+# from.  Runs 01 and 02 of this campaign differed by a factor of 100 in
+# sysid_level (0.01 vs 1.0 V RMS) plus five other system-ID settings, because
+# one was configured in the GUI and the other loaded from a profile.  Nothing
+# downstream would have shown it.
 MUST_MATCH = ('hardware', 'hardware_file', 'sample_rate', 'frames_in_cpsd',
               'cpsd_window', 'cpsd_overlap', 'samples_per_frame',
               'control_averaging_type', 'control_averaging_coefficient',
-              'update_tf_during_control')
+              'update_tf_during_control',
+              'sysid_averaging_type', 'sysid_averages', 'sysid_noise_averages',
+              'sysid_estimator', 'sysid_level', 'sysid_level_ramp_time',
+              'sysid_signal_type', 'sysid_window', 'sysid_overlap',
+              'sysid_frame_size', 'sysid_burst_on',
+              'sysid_burst_ramp_fraction', 'sysid_pretrigger')
 
 
 def read_provenance(dataset, environment):
