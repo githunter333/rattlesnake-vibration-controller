@@ -1,0 +1,15 @@
+flowchart TD
+    A["_solve_one_bin(H, y)"] --> B{"has H changed<br/>since the last call?"}
+    B -->|"NO · nothing is<br/>re-estimating H live"| C["FAST PATH<br/>Burer-Monteiro: X = L Lᴴ,<br/>L is N×r, r = bm_rank"]
+    C --> D["L-BFGS-B on<br/>f(L) = ‖diag(HLLᴴHᴴ) − y‖² + reg‖X‖²_F<br/>analytic gradient ∇_L = 2·gX·L"]
+    D --> E["X = L Lᴴ<br/>PSD by construction,<br/>no cone constraint needed"]
+    B -->|"YES · a live H1 estimator<br/>is running"| F["SAFE PATH<br/>fall back to the base class SDP"]
+    F --> G["coherence-capped SDP<br/>as optimal_diagonal_control"]
+    E --> H["return X"]
+    G --> H
+    I["WHY: unconstrained BM drives<br/>pairwise drive coherence to exactly 1.0,<br/>which makes a live H1 reference<br/>CPSD singular"] -.-> B
+    style C fill:#fdf1e8,stroke:#eb6834
+    style D fill:#fdf1e8,stroke:#eb6834
+    style F fill:#fde8e8,stroke:#e34948
+    style G fill:#fde8e8,stroke:#e34948
+    style I fill:#fdf6ec,stroke:#eda100

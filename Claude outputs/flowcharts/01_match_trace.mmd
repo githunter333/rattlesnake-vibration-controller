@@ -1,0 +1,15 @@
+flowchart TD
+    A["control() called<br/>spec Gxx, FRF H, last drive X, last response Gyy"] --> B{"first call?<br/>last drive is None"}
+    B -->|yes| C["pseudoinverse<br/>H⁺ = pinv(H, rcond)"]
+    C --> D["open-loop solve<br/>X = H⁺ · Gxx · (H⁺)ᴴ"]
+    D --> E["startup cap<br/>s = min(1, 10^(cap/10) · tr(Gxx)/tr(HXHᴴ))<br/>X ← s·X"]
+    B -->|no| F["trace ratio<br/>c = tr(Gxx) / tr(Gyy)"]
+    F --> G["uniform rescale<br/>X ← c · X_prev"]
+    E --> H["drive-coherence cap<br/>|X_ij| ≤ ρ·√(X_ii X_jj)<br/>no-op when ρ ≥ 1"]
+    G --> H
+    H --> I["return drive CPSD X"]
+    style C fill:#dbe9fa,stroke:#2a78d6
+    style D fill:#dbe9fa,stroke:#2a78d6
+    style F fill:#dbe9fa,stroke:#2a78d6
+    style G fill:#dbe9fa,stroke:#2a78d6
+    style H fill:#fdf1e8,stroke:#eb6834

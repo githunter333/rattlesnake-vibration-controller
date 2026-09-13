@@ -1,0 +1,13 @@
+flowchart LR
+    A["control()<br/>called"] --> B["<b>STEP 1 · instant baseline</b><br/>every bin gets the closed-form<br/>buzz solve — H⁺ synthesis, cross-terms<br/>from survey or zero. Effectively free."]
+    B --> C{"SDP budget<br/>max_bins_<br/>per_update<br/>= 20"}
+    C -->|"priority,<br/>≤ half budget"| D["<b>STEP 4 · drifted bins</b><br/>already-refined bins whose H moved<br/>past frf_update_threshold"]
+    C -->|"main use"| E["<b>STEP 2 · worst-error new bins</b><br/>predicted error above<br/>error_threshold_db, worst first"]
+    C -->|"leftover only"| F["<b>STEP 5 · stale re-triage</b><br/>re-check already-refined bins<br/>against the CURRENT H"]
+    D --> G["<b>per-bin SDP</b> · CLARABEL, warm-started<br/>min ‖diag(HXHᴴ) − y‖² + reg‖X‖²_F<br/>s.t. X ⪰ 0 and |X_ij| ≤ ρ√(X_ii X_jj)"]
+    E --> G
+    F --> G
+    G --> H["replace that bin's buzz<br/>solution with the optimal X"]
+    H --> I["return drive CPSD:<br/>refined bins + buzz elsewhere"]
+    style B fill:#fdf1e8,stroke:#eb6834
+    style G fill:#fdf1e8,stroke:#eb6834

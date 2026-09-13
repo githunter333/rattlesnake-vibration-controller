@@ -1,0 +1,15 @@
+flowchart TD
+    A["achievable_diagonal(H, y_target)<br/><i>not a control law — no hardware</i>"] --> B["per frequency line, over X ⪰ 0"]
+    B --> C["Burer-Monteiro factorisation<br/>X = L Lᴴ, L is N×K<br/>PSD structural, parametrisation unconstrained"]
+    C --> D["seed: pseudoinverse solve<br/>plus n_restarts random starts"]
+    D --> E["least_squares (TRF) on the dB residual<br/>d_m = log(a_m) − log(y_m)<br/>a = diag(H X Hᴴ)"]
+    E --> F["Wirtinger Jacobian<br/>∂a_m/∂L̄ = conj(h_m) ⊗ r_m / a_m<br/>split into Re and Im blocks"]
+    F --> G["best_rms_db — best achievable<br/>RMS dB error at this line"]
+    E --> H["softmax sweep over β<br/>→ best_minimax_db<br/>the honest ± X dB floor"]
+    G --> I["achieved: the a_m that attains it<br/>drive_trace: tr(X) required"]
+    H --> I
+    I --> J["reachability = how far<br/>the best achievable sits<br/>from the flat specification"]
+    style C fill:#eeecf7,stroke:#4a3aa7
+    style E fill:#eeecf7,stroke:#4a3aa7
+    style F fill:#eeecf7,stroke:#4a3aa7
+    style J fill:#e4f6ef,stroke:#1baf7a

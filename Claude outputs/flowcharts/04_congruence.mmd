@@ -1,0 +1,18 @@
+flowchart TD
+    A["control() called"] --> B{"first call?"}
+    B -->|yes| C["startup: pseudoinverse solve,<br/>capped at startup_test_level_cap_db"]
+    B -->|no| D["predicted response<br/>C = X Hᴴ,  y_m = Re(H C)_mm"]
+    D --> E["measured log error<br/>ε_m = log(target_m / achieved_m)"]
+    E --> F["sensitivity matrix<br/>S_mi = ∂log(y_m)/∂u_i<br/>= 2·Re(H_mi (XHᴴ)_im) / y_m<br/><i>every row sums to exactly 2</i>"]
+    F --> G["regularised Gauss-Newton step<br/>u = argmin ‖S u − ε‖² + λ‖u‖²<br/>λ = ridge · tr(SᵀS)/N"]
+    G --> H["apply gain and clamp<br/>u ← Ki · u,  then iterate<br/>until predicted move ≤ max_step_db"]
+    H --> I["DIAGONAL CONGRUENCE<br/>D = diag(exp u)<br/>X ← D X D"]
+    I --> J["ceiling: anchored on MEASURED level<br/>extrapolated one bounded step"]
+    C --> K["drive-coherence cap"]
+    J --> K
+    K --> L["return drive CPSD X"]
+    M["X ⪰ 0 ⟹ D X D ⪰ 0 for ANY real D<br/>— validity is structural, not a gain choice.<br/>u_i = ε/2 for all i recovers match_trace."] -.-> I
+    style F fill:#e4f6ef,stroke:#1baf7a
+    style G fill:#e4f6ef,stroke:#1baf7a
+    style I fill:#e4f6ef,stroke:#1baf7a
+    style M fill:#fdf6ec,stroke:#eda100
