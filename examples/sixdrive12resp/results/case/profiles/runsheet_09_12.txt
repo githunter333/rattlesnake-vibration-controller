@@ -1,0 +1,110 @@
+RUNSHEET -- runs 09-12  (open-loop laws: pseudoinverse_control, buzz_control)
+Linear plant, flat spec, exponential control averaging 0.04, Update System ID = Y,
+Frames in CPSD = 20, System ID Averages = 20, sample rate 4096.
+Identical to profile_01 in every cell except the control function and parameters.
+
+-------------------------------------------------------------------------------
+LAUNCH COMMANDS  (conda activate rattlesnake; cd to repo root first)
+-------------------------------------------------------------------------------
+cd ~/Code/python/rattlesnake-vibration-controller
+
+python rattlesnake.py --profile examples/sixdrive12resp/results/case/profiles/profile_09_pseudoinv_capon.xlsx
+python rattlesnake.py --profile examples/sixdrive12resp/results/case/profiles/profile_10_pseudoinv_capoff.xlsx
+python rattlesnake.py --profile examples/sixdrive12resp/results/case/profiles/profile_11_buzz_capon.xlsx
+python rattlesnake.py --profile examples/sixdrive12resp/results/case/profiles/profile_12_buzz_capoff.xlsx
+
+-------------------------------------------------------------------------------
+SAVE FILENAMES  (all into examples/sixdrive12resp/results/runs/)
+-------------------------------------------------------------------------------
+run 09  pseudoinverse_control  cap on   1e-3,0.95
+          system id :  run09_pseudoinv_capon_sysid
+          streaming :  run09_pseudoinv_capon_stream
+          spectral  :  run09_pseudoinv_capon_spec
+
+run 10  pseudoinverse_control  cap off  1e-3,1.0
+          system id :  run10_pseudoinv_capoff_sysid
+          streaming :  run10_pseudoinv_capoff_stream
+          spectral  :  run10_pseudoinv_capoff_spec
+
+run 11  buzz_control           cap on   1e-3,0.95,-9.0
+          system id :  run11_buzz_capon_sysid
+          streaming :  run11_buzz_capon_stream
+          spectral  :  run11_buzz_capon_spec
+
+run 12  buzz_control           cap off  1e-3,1.0,-9.0
+          system id :  run12_buzz_capoff_sysid
+          streaming :  run12_buzz_capoff_stream
+          spectral  :  run12_buzz_capoff_spec
+
+-------------------------------------------------------------------------------
+AT THE RIG -- CHECK BEFORE EACH SAVE
+-------------------------------------------------------------------------------
+  Control Averaging Type = Exponential, Coefficient = 0.04   (the GUI has
+      reverted this to Linear between runs before -- confirm it every time)
+  Update System ID During Control = Y
+  System ID Averages = 20,  System ID Level = 1.0 V RMS
+  Let the level ramp finish and the trace settle BEFORE saving spectral data.
+
+After each run:
+  conda activate sdynpy
+  python examples/sixdrive12resp/code/check_run.py examples/sixdrive12resp/results/runs/run09_pseudoinv_capon_spec.nc4
+
+-------------------------------------------------------------------------------
+CAVEATS SPECIFIC TO THESE FOUR
+-------------------------------------------------------------------------------
+1. Neither law uses feedback.  Both recompute an open-loop pseudoinverse solve
+   every cycle and never read last_response_cpsd.  There is no error integrator,
+   so steady-state error is pure FRF-model mismatch and improves only as fast as
+   the FRF estimate does.  Not directly comparable to runs 01-08; report as a
+   separate family.
+
+2. pseudoinverse_control has NO startup guard.  It is the only law in the set
+   without the first-cycle clamp added 2026-09-02.  On frame one the FRF is a
+   single unaveraged estimate and the command can be decades high.  Expect a
+   possible abort on runs 09/10; that is the law's behaviour, not a rig fault.
+
+3. buzz_control DOES have the startup clamp (third parameter, -9.0 dB) and the
+   coherence cap, same form as match_trace_pseudoinverse.
+
+4. buzz_control_generator and buzz_control_class have NEITHER the coherence cap
+   nor the startup guard, and buzz_control_class ignores last_response_cpsd
+   entirely.  They are excluded from this comparison on purpose.
+
+===============================================================================
+REVISION 2026-09-14 -- THE COHERENCE CAP MEANS SOMETHING DIFFERENT HERE
+===============================================================================
+Measured on run 09 and confirmed by offline reconstruction from its own
+identification:
+
+                              rms      %out    level vs spec
+  pseudoinverse, no cap       4.54 dB   12.6    -1.5 dB
+  pseudoinverse, cap 0.95    15.73 dB   66.0   +21.5 dB   <- run 09
+  buzz,          no cap       3.87 dB    8.6    -0.4 dB   <- run 12
+  buzz,          cap 0.95    12.28 dB   57.8   +16.9 dB   <- run 11
+
+Both open-loop solves are rank-concentrated (eigenvalue participation ratio
+~1.0-1.1 of 6): the drive is essentially one eigenvector and the responses
+cancel by precise inter-drive phasing.  _cap_drive_coherence shrinks the
+off-diagonal terms while preserving the diagonal, which breaks that
+cancellation -- same drive power, but the responses now add incoherently and
+the level jumps ~20 dB.
+
+A FEEDBACK law survives the cap because the loop re-converges around it as a
+constraint (runs 01/03/05/07).  An OPEN-LOOP law has nothing to re-converge
+with, so the cap is pure damage.
+
+  => For pseudoinverse_control and buzz_control, CAP OFF (1.0) is the
+     operationally correct setting.  Cap on is the pathological case, not the
+     conservative one.  This is the reverse of the feedback-law intuition.
+
+Run 12 (buzz, cap off) is the headline run of this group.  If it lands near
+3.9 dB rms it beats run 07 congruence (5.31 dB) and is the best flat-spec
+result in the whole matrix -- from a law with no feedback at all.
+
+NOTE: the offline numbers score H X H^H with the same H the law inverted, so
+they are perfect-model estimates.  Run 09 actually measured 10.47 dB against a
+predicted 15.73, because the FRF keeps updating during control and the solve
+partly adapts.  Trust the ORDERING, not the magnitudes.
+
+check_run.py now recognises the four open-loop laws (OPEN_LOOP_LAWS) and no
+longer reports their steady-state offset as "NOT CONVERGED".

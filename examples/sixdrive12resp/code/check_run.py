@@ -24,6 +24,22 @@ import numpy as np
 
 BAND = (100.0, 1000.0)
 
+# Laws with no error feedback: each recomputes an open-loop solve from the
+# current FRF every cycle and never reads last_response_cpsd.  They have no
+# mechanism that drives total power toward the specification, so the
+# level-versus-spec test below is meaningless for them -- a steady offset is
+# the law's answer, not an unfinished ramp (run09, pseudoinverse_control,
+# sat at +13.55 dB and was flagged NOT CONVERGED in error).  For these the
+# only thing a single snapshot can show is that the drive is alive and the
+# numbers are finite; whether it had settled has to come from watching the
+# trace at the rig or from comparing two snapshots.
+OPEN_LOOP_LAWS = frozenset((
+    'pseudoinverse_control',
+    'buzz_control',
+    'buzz_control_generator',
+    'buzz_control_class',
+))
+
 
 def check(path, band=BAND):
     """Print a one-screen verdict for one run file."""
@@ -88,10 +104,24 @@ def check(path, band=BAND):
         samples = (len(dataset.dimensions['time_samples'])
                    if 'time_samples' in dataset.dimensions else 0)
 
-        # A converged run sits within a couple of dB of the specification in
-        # total power.  Far below means the snapshot predates the level ramp;
-        # far above means it was still overshooting.
-        if level_db < -6.0:
+        open_loop = str(law) in OPEN_LOOP_LAWS
+
+        # A converged FEEDBACK run sits within a couple of dB of the
+        # specification in total power.  Far below means the snapshot predates
+        # the level ramp; far above means it was still overshooting.  Neither
+        # test applies to an open-loop law -- see OPEN_LOOP_LAWS above.
+        if open_loop:
+            if level_db < -20.0:
+                verdict = ('NOT USABLE -- open-loop law, but the drive never '
+                           'came up; snapshot predates the level ramp')
+            elif not np.isfinite(rms_db):
+                verdict = 'NOT USABLE -- open-loop law, error is not finite'
+            else:
+                verdict = (f'open-loop law -- {level_db:+.2f} dB offset is the '
+                           f'law\'s own answer, not a convergence failure; '
+                           f'judge it on rms and drive, and confirm at the rig '
+                           f'that the trace was steady before the save')
+        elif level_db < -6.0:
             verdict = ('NOT CONVERGED -- saved below test level; '
                        'the level had not come up when this was written')
         elif level_db > 6.0:
@@ -110,6 +140,8 @@ def check(path, band=BAND):
         print(f'   per-channel rms      {rms_db:7.2f} dB, {percent_out:.1f}% of lines '
               f'outside +/-6 dB')
         print(f'   -> {verdict}')
+        if open_loop:
+            return bool(np.isfinite(rms_db) and level_db >= -20.0)
         return abs(level_db) <= 6.0 and rms_db <= 15.0
     finally:
         dataset.close()
@@ -123,7 +155,7 @@ def main():
     judged = [o for o in outcomes if o is not None]
     skipped = len(outcomes) - len(judged)
     note = f' ({skipped} skipped)' if skipped else ''
-    print(f'\n{sum(judged)}/{len(judged)} run(s) look converged{note}')
+    print(f'\n{sum(judged)}/{len(judged)} run(s) usable{note}')
     raise SystemExit(0 if judged and all(judged) else 1)
 
 
