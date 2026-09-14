@@ -15,9 +15,20 @@ every 5th in-band line (100-1000 Hz), log-interpolated between solved lines:
                  actually use.  This reproduces the 2026-09-12 report's
                  numbers (run01 3.91 here vs 3.87 there, the difference being
                  decimation 5 vs 4), so the column is continuous with it.
-  ideal_*        no rcond restriction.  The best achievable with full-rank
-                 drive.  The difference between the two is the price of the
-                 rcond = 1e-3 truncation, and it is not small.
+  rank_*         no rcond restriction, but computed on the measured FRF
+                 TRUNCATED to its physically real rank.  The plant is rank 5,
+                 not 6: computed analytically from M, K and C the sixth
+                 singular value is ~1e-17, and in the measured FRF it comes
+                 back at ~3e-4 of the first -- identification noise in a
+                 direction the six shakers cannot actually reach.
+
+An unrestricted floor on the raw measured FRF returns ~2.3 dB, but that number
+is the optimizer exploiting that noise direction and should not be quoted: it
+was reported as a real 1.6 dB headroom in the first draft of the 2026-09-14
+report and is wrong.  Truncated to rank 5 the same computation gives 3.97 dB,
+and the analytic rank-5 plant gives 4.07 dB, both consistent with the
+operational floor.  rcond = 1e-3 is therefore doing the right thing -- it
+rejects a direction that does not exist -- and lowering it would invert noise.
 
 Decimation was checked against every-2nd and every-20th line on run01 and
 moves the result by 0.05 dB or less.
@@ -90,12 +101,24 @@ def one(path):
         return a
 
     ach = floor(restrict_rcond=RESTRICT_RCOND)   # operational floor
-    ideal = floor()                              # full-rank-drive floor
+
+    # Physically real rank, and the floor over that subspace only.
+    U, sv, Vh = np.linalg.svd(H, full_matrices=False)
+    ratio = sv / np.maximum(sv[:, :1], 1e-300)
+    # In-band only: out-of-band lines carry a much noisier sixth direction and
+    # would wrongly report the plant as full rank.
+    numeric_rank = int(np.median((ratio[inb] > 1e-3).sum(axis=1)))
+    sv_trunc = sv.copy()
+    sv_trunc[:, numeric_rank:] = 0.0
+    H_saved = H
+    H = (U * sv_trunc[:, None, :]) @ Vh
+    ideal = floor()
+    H = H_saved
 
     flat = stats(resp[inb], tgt[inb])
     reach = stats(ach[inb], tgt[inb])          # floor vs specification
     against = stats(resp[inb], ach[inb])       # run vs floor
-    ideal_reach = stats(ideal[inb], tgt[inb])
+    ideal_reach = stats(ideal[inb], tgt[inb])   # rank-truncated floor
 
     cap = float(par[CAPPOS[law]])
     return dict(
@@ -106,7 +129,9 @@ def one(path):
         reach_rms=reach['rms'], reach_pout=reach['pout'],
         reach_mean_db=reach['mean_db'],
         ach_rms=against['rms'], ach_pout=against['pout'],
-        ideal_rms=ideal_reach['rms'], ideal_pout=ideal_reach['pout'],
+        rank_rms=ideal_reach['rms'], rank_pout=ideal_reach['pout'],
+        numeric_rank=numeric_rank,
+        sv6_ratio=float(np.median(ratio[inb, -1])),
         drive_trace=float(np.einsum('fnn->f', D)[inb].mean()),
         level=float(10 * np.log10(resp[inb].sum() / tgt[inb].sum())),
         cond=float(np.median(np.linalg.cond(H[inb]))),

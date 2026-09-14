@@ -68,7 +68,8 @@ def cap_rows():
 
 
 fl = [r['reach_rms'] for r in rows]
-idl = [r['ideal_rms'] for r in rows]
+idl = [r['rank_rms'] for r in rows]
+sv6 = [r['sv6_ratio'] for r in rows]
 cond = [r['cond'] for r in rows]
 dr = [r['drive_trace'] for r in rows]
 
@@ -104,6 +105,16 @@ from the previous revision. The achievable-floor column is unchanged in
 meaning and reproduces the earlier values (run01 3.88 here, 3.87 there — the
 difference is floor decimation 5 versus 4).</div>
 
+<div class="note"><strong>Correction to the first draft of this report</strong>
+An earlier version of this document claimed that roughly 1.6&nbsp;dB of the
+reachability floor was an artefact of the
+<span class="mono">rcond = 1e-3</span> truncation, and listed relaxing rcond as
+the cheapest available improvement. <strong>That was wrong.</strong> The
+unrestricted floor it rested on (1.96–2.37&nbsp;dB) was the optimizer
+exploiting a sixth singular direction that exists only as identification noise.
+Section 1 has the evidence. There is no headroom there, and the
+recommendation has been withdrawn.</div>
+
 <h2>1. The system under test</h2>
 
 <p>Six drives, twelve responses, eight control channels, controlled over
@@ -115,10 +126,10 @@ run as virtual hardware at 4096&nbsp;Hz.</p>
 {img('system_characterisation.png',
      'Left: modal damping for the 33 modes inside the control band — lightly '
      'damped, median 0.83 %, minimum 0.70 %. Centre: the reachability floor per '
-     'run, at the rcond the laws actually use and with full-rank drive; the gap '
-     'between the pair is the price of the rcond = 1e-3 truncation. Right: '
-     'median cond(H) per run — the same deterministic plant, identified with '
-     'identical settings, scattering by a factor of ten.')}
+     'run, at the rcond the laws actually use and unrestricted over the plant’s '
+     'real rank-5 subspace; the two agree to 0.21 dB, which is why rcond = 1e-3 '
+     'costs nothing. Right: median cond(H) per run — the same deterministic '
+     'plant, identified with identical settings, scattering by a factor of ten.')}
 
 <p><strong>The reachability limit is structural, not a control failure.</strong>
 With M&nbsp;=&nbsp;8 control channels and N&nbsp;=&nbsp;6 drives, the set of
@@ -129,13 +140,27 @@ unreachable by any law. Measured on this plant, per run, from that run's own
 FRF: <strong>{min(fl):.2f}–{max(fl):.2f}&nbsp;dB rms</strong> at
 <span class="mono">rcond = 1e-3</span>.</p>
 
-<div class="note"><strong>New: most of the floor is not fundamental</strong>
-Recomputing the same floor without the rcond restriction — that is, allowing
-full-rank drive — gives <strong>{min(idl):.2f}–{max(idl):.2f}&nbsp;dB</strong>.
-So roughly 1.6&nbsp;dB of what has been called "unreachable" is not a property
-of the plant at all; it is the <span class="mono">rcond = 1e-3</span>
-truncation every one of these laws inverts with. Nobody has tried moving it.
-That is probably the cheapest available improvement in this whole campaign.</div>
+<h3>The plant is rank 5, not 6</h3>
+
+<p>Computing H analytically from the model's mass, stiffness and damping
+matrices — validated against the measured FRF, whose magnitude it matches to a
+median of 0.21&nbsp;dB and whose first five singular values it reproduces to a
+few percent — the <strong>sixth singular value is ~1&times;10<sup>-17</sup></strong>.
+The six shakers span only a five-dimensional response subspace at these eight
+control locations. The sixth drive direction buys nothing.</p>
+
+<p>In the measured FRF that direction comes back at
+{min(sv6):.1e}–{max(sv6):.1e} of the first singular value, and the numeric rank
+over the control band is 5 in <strong>all twelve runs</strong>. That residue is
+identification noise in a direction the hardware cannot reach.</p>
+
+<div class="note"><strong>Consequence: rcond = 1e-3 is correct, and costs nothing</strong>
+Recomputing each floor with no rcond restriction but over the plant's real
+rank-5 subspace gives {min(idl):.2f}–{max(idl):.2f}&nbsp;dB, within
+<strong>0.21&nbsp;dB</strong> of the operational floor at every run. The same
+computation on the raw measured FRF returns ~2.3&nbsp;dB — but that number is
+the optimizer spending drive on the noise direction, and it is not achievable.
+Lowering rcond would invert noise, not recover headroom.</div>
 
 <h2>2. What was run</h2>
 
@@ -325,6 +350,13 @@ uncapped, near-coherent-drive cases, where the H1 re-identification is fed a
 drive with little independent content. Run 10's 7.01&nbsp;dB rests on the least
 trustworthy plant model here.</li>
 
+<li><strong>Every floor in this report is a rank-5 floor.</strong> The
+computation restricts the drive either by <span class="mono">rcond</span> or by
+explicit truncation; both land in the same place because the plant really is
+rank 5. Any floor computed on a raw measured FRF without one of those
+restrictions will come back optimistically low by about 1.6&nbsp;dB, for the
+reason given in section 1. This bit the first draft of this report.</li>
+
 <li><strong>Identification scatter is large.</strong> Median cond(H) came out
 {min(cond):,.0f}–{max(cond):,.0f} across twelve identifications of the same
 deterministic plant with identical settings — a factor of ten. Differences
@@ -374,9 +406,18 @@ every-2nd and every-20th line and moves the result by 0.05&nbsp;dB or less.</li>
 <h2>10. Next</h2>
 
 <ol>
-<li><strong>Move rcond.</strong> The floor at full-rank drive is 1.6&nbsp;dB
-below the floor at <span class="mono">rcond = 1e-3</span>. That is a larger prize
-than anything separating the six laws, and it costs one parameter sweep.</li>
+<li><strong>Find out why the plant is rank 5.</strong> If the sixth shaker is
+redundant by construction rather than by accident of this model, that matters
+for the rig and not just the simulation — it would mean one drive channel is
+doing nothing, and that the 8&times;6 problem has always been 8&times;5. The
+analytic FRF makes this cheap to investigate.</li>
+<li><strong>Higher damping, same geometry.</strong>
+<span class="mono">sdynpy_frame6x12_system_higherz.npz</span> has identical mass
+and stiffness — mode frequencies match the nominal plant to 0.0000&nbsp;Hz — with
+ζ raised from a 0.83&nbsp;% median to 3.34&nbsp;%. Its floor is 4.05&nbsp;dB
+against the nominal 4.09, so damping does not change what is reachable; it
+halves the conditioning over the real directions (68 to 33). That isolates the
+identification-quality hypothesis this report's caveats raise.</li>
 <li><strong>buzz_control with the FRF update off.</strong> That makes the law
 fully static after cycle one, so the difference against run 12 measures exactly
 what plant-model adaptation is worth with nothing else varying. One run.</li>

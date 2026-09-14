@@ -215,16 +215,16 @@ a = axes[1]
 xr = np.arange(len(rows))
 a.bar(xr - 0.19, [r['reach_rms'] for r in rows], 0.36, color=SER[0],
       edgecolor=SURF, linewidth=1.1, label='at rcond 1e-3 (what the laws use)')
-a.bar(xr + 0.19, [r['ideal_rms'] for r in rows], 0.36, color=INK3, alpha=0.45,
-      edgecolor=SURF, linewidth=1.1, label='full-rank drive (ideal)')
+a.bar(xr + 0.19, [r['rank_rms'] for r in rows], 0.36, color=INK3, alpha=0.45,
+      edgecolor=SURF, linewidth=1.1, label='unrestricted, over the real rank 5')
 a.set_xticks(xr)
 a.set_xticklabels([r['run'][3:] for r in rows], fontsize=7.4)
 a.set_ylabel('reachability floor (dB rms)'); a.set_xlabel('run')
 a.set_ylim(0, 5)
 a.grid(axis='y')
 a.legend(frameon=False, fontsize=7.2, loc='upper left')
-a.set_title('The floor is a property of the plant —\nand 1.6 dB of it is the '
-            'rcond truncation', loc='left', fontsize=9.5, pad=8)
+a.set_title('The floor is a property of the plant:\nrcond 1e-3 costs nothing '
+            '(≤0.21 dB)', loc='left', fontsize=9.5, pad=8)
 
 a = axes[2]
 a.bar(range(len(rows)), [r['cond'] for r in rows], 0.6,
