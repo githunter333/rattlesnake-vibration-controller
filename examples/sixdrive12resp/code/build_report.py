@@ -10,6 +10,9 @@ FIGS = 'figs'
 rows = json.load(open('report_data.json'))
 by = {r['run']: r for r in rows}
 STYLE = open('_style_block.html').read()
+CT = json.load(open('crossterm_data.json'))
+CTF = CT['floor']
+CTR = sorted(CT['runs'], key=lambda r: r['resp_med'])
 
 NICE = {'match_trace': 'match_trace_pseudoinverse',
         'optimal_diagonal': 'optimal_diagonal_control',
@@ -45,6 +48,22 @@ def result_rows():
 <td class="num">{r['level']:+.2f}</td>
 <td class="num">{r['cond']:,.0f}</td>
 <td class="num">{r['min_mult_coh']:.3f}</td></tr>""")
+    return '\n'.join(out)
+
+
+def crossterm_rows():
+    out = []
+    for r in CTR:
+        out.append(f"""<tr>
+<td class="mono">{r['run']}</td>
+<td>{NICE[{'match trace':'match_trace','opt diagonal':'optimal_diagonal',
+            'opt diag fast':'optimal_diagonal_fast','congruence':'congruence',
+            'pseudoinverse':'pseudoinverse','buzz':'buzz'}[r['law']]]}</td>
+<td>{r['loop']}</td><td>{r['cap']}</td>
+<td class="num">{r['resp_med']:.3f}</td><td class="num">{r['resp_p90']:.3f}</td>
+<td class="num">{r['part']:.2f}</td>
+<td class="num">{r['drive_med']:.3f}</td><td class="num">{r['drive_over_cap']:.1f}</td>
+</tr>""")
     return '\n'.join(out)
 
 
@@ -297,7 +316,88 @@ and every law undershoots them: −2.2/−2.8&nbsp;dB for congruence, −5.3/−
 buzz, −6.7/−7.3 for match_trace, −8.5/−9.2 for pseudoinverse. The laws differ
 mainly in how much drive they are willing to waste trying.</p>
 
-<h2>8. Drive power</h2>
+<h2>8. Cross-terms: the specification asked for zero</h2>
+
+<p>The flat specification is diagonal — every off-diagonal term is zero. None
+of these six laws controls the off-diagonals; every one of them matches the
+<em>diagonal</em> and lets the cross-structure fall out. It does not fall out
+small.</p>
+
+{img('cross_terms.png',
+     'Cross-channel coherence magnitude across all twelve runs. Box is the '
+     'quartile range, whisker the 10th-90th percentile, marker the median. '
+     'Left: response, 28 channel pairs over 901 in-band lines. Right: drive, '
+     '15 pairs.')}
+
+<div class="tw"><table>
+<thead><tr><th>Run</th><th>Law</th><th>Loop</th><th>Cap</th>
+<th>resp median |γ|</th><th>resp p90</th><th>eig participation</th>
+<th>drive median |γ|</th><th>drive % &gt; 0.95</th></tr></thead>
+<tbody>
+{crossterm_rows()}
+</tbody></table></div>
+
+<p>Median response coherence runs from {min(r['resp_med'] for r in CTR):.3f} to
+{max(r['resp_med'] for r in CTR):.3f}, with the 90th percentile above 0.96 for
+nine of the twelve runs. In absolute terms the off-diagonal magnitudes sit
+within a few dB of the 1&times;10<sup>-3</sup> diagonal — the same order as the
+specification itself, not a small perturbation on it.</p>
+
+<h3>Zero cross-terms is unreachable, not merely difficult</h3>
+
+<p>The plant is rank 5 (section 1), so the response CPSD
+<span class="mono">H X H<sup>H</sup></span> has rank at most 5 in an
+eight-dimensional space. A genuinely diagonal 8&times;8 CPSD has rank 8. The
+specification therefore asks for something outside the achievable set for a
+second, independent reason beyond the magnitude shortfall on 13X+ and 14X+.</p>
+
+<p>The eigenvalue participation ratios put a number on how far outside. Nine of
+the twelve runs sit between 1.15 and 1.5 <em>effective response directions out
+of eight</em> — all eight control channels riding essentially one motion
+pattern.</p>
+
+<div class="note"><strong>The optimum is the most correlated response of all</strong>
+Solving for the drive that best matches the flat diagonal magnitudes and then
+measuring <em>its</em> cross-terms gives a median coherence of
+<strong>{CTF['resp_med']:.3f}</strong> and a participation ratio of
+{CTF['part']:.2f}. The best achievable response is more correlated than almost
+every law delivered. Chasing decorrelation moves away from matching the
+specification, not toward it.</div>
+
+<p>Run 10 is the control experiment in the other direction. It is the only run
+that produced substantially independent responses — median coherence
+{CTR[0]['resp_med']:.3f}, participation {CTR[0]['part']:.2f} — and it spent
+5.38&nbsp;V² doing it, roughly seventy times the optimal-diagonal family, to
+finish at 7.01&nbsp;dB against their 5.62. Decorrelating the response is
+expensive and buys nothing here, because nothing in the acceptance criterion
+looks at it.</p>
+
+<h3>What the cap does to the drive</h3>
+
+<p>The cap acts on the drive, not the response, and it bites only the upper
+tail: median drive coherence moves 0.440 to 0.525 for congruence and 0.576 to
+0.652 for optimal diagonal, while the fraction of pairs above 0.95 goes from
+roughly 0–3&nbsp;% to 5–10&nbsp;%. For context, the optimal drive found by the
+floor solver sits above 0.95 on <strong>{CTF['drive_over_cap']:.0f}&nbsp;%</strong>
+of its pairs, median {CTF['drive_med']:.3f} — the cap constrains the solution
+away from the optimum by construction, which is section 4's result seen from
+the drive side.</p>
+
+<div class="note"><strong>Reading the cap-on runs</strong>
+Capped runs still show a few percent of measured drive pairs above 0.95. The
+cap applies to the <em>commanded</em> drive CPSD; what is saved and scored here
+is the <em>measured</em> one. A small excess is expected and is not evidence the
+cap failed.</div>
+
+<p><strong>Consequence for real tests.</strong> If response cross-terms matter
+for the article under test — and on a real structure they often do — none of
+these laws gives control over them, and no parameter setting changes that. It
+needs a law carrying off-diagonal terms in its objective and a specification
+that states them. <span class="mono">buzz_control</span> is the only law here
+that references measured coherence at all, and it copies the plant's rather
+than commanding anything.</p>
+
+<h2>9. Drive power</h2>
 
 {img('drive_power.png',
      'Mean drive trace per run, log scale, coloured by loop type. The spread '
@@ -311,7 +411,7 @@ headroom is the binding constraint rather than control accuracy, the ordering
 changes completely and <span class="mono">match_diagonal_congruence</span> with
 the cap on (0.047&nbsp;V²) wins outright.</p>
 
-<h2>9. Caveats</h2>
+<h2>10. Caveats</h2>
 
 <ul>
 <li><strong>Runs 05 and 06 did not test what they were meant to.</strong>
@@ -403,7 +503,7 @@ on each run's own control FRF, every 5th in-band line, log-interpolated,
 every-2nd and every-20th line and moves the result by 0.05&nbsp;dB or less.</li>
 </ul>
 
-<h2>10. Next</h2>
+<h2>11. Next</h2>
 
 <ol>
 <li><strong>Find out why the plant is rank 5.</strong> If the sixth shaker is
@@ -432,6 +532,12 @@ still unused. Pointing every law at a reachable target removes reachability from
 the comparison so the residual is tracking behaviour alone.</li>
 <li><strong>Add a startup level cap to both optimal-diagonal laws</strong>, and
 to <span class="mono">pseudoinverse_control</span>. Open defect.</li>
+<li><strong>Decide whether response cross-terms are in scope at all.</strong>
+Section 8 shows they are large, uncontrolled, and structurally impossible to
+zero on this plant. If they matter for a real article the campaign needs a law
+with off-diagonal terms in its objective and a specification that states them;
+if they do not, that should be written down so the diagonal-only comparison is
+understood as deliberate rather than accidental.</li>
 </ol>
 
 <p class="foot">Generated from <span class="mono">report_data.json</span> by
