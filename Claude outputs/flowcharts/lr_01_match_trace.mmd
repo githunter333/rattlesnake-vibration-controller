@@ -1,4 +1,4 @@
-flowchart TD
+flowchart LR
     A["control() called<br/>spec Gxx, FRF H, last drive X, last response Gyy"] --> B{"first call?<br/>last drive is None"}
     B -->|yes| C["pseudoinverse<br/>H⁺ = pinv(H, rcond)"]
     C --> D["open-loop solve<br/>X = H⁺ · Gxx · (H⁺)ᴴ"]

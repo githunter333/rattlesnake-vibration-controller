@@ -1,13 +1,16 @@
-flowchart LR
-    A["control() called<br/><i>every cycle, identically</i>"] --> B["BUZZ SUBSTITUTION<br/>spec autospectra +<br/>MEASURED coherence and phase"]
-    B --> C["pseudoinverse solve<br/>X = H⁺ · modified_spec · (H⁺)ᴴ"]
-    C --> D{"first call?"}
-    D -->|yes| E["startup clamp"]
-    D -->|no| F["unchanged"]
-    E --> G["drive-coherence cap"]
-    F --> G
-    G --> H["return drive CPSD X"]
-    I["sysid_response_cpsd is frozen at system ID.<br/>Only the FRF adapts. No error feedback."] -.-> B
-    style B fill:#e9e6f5,stroke:#4a3aa7
-    style C fill:#fdece5,stroke:#eb6834
-    style I fill:#fdf6ec,stroke:#eda100
+flowchart TD
+    A["control() called<br/><i>every cycle, identically</i>"] --> B["parse extra_parameters<br/>_parse_match_trace_parameters<br/>rcond, max_drive_coherence,<br/>startup_test_level_cap_db<br/>defaults 1e-15, 1.0, −9.0"]
+    B --> C["BUZZ SUBSTITUTION<br/>modified_spec =<br/>match_coherence_phase(S, sysid_response_cpsd)<br/><i>spec autospectra, measured<br/>coherence and phase</i>"]
+    C --> D["pseudoinverse solve<br/>X = H⁺ · modified_spec · (H⁺)ᴴ"]
+    D --> E{"last_output_cpsd<br/>is None?"}
+    E -->|yes, first call only| F["startup clamp<br/>scale so tr(X) ≤<br/>10^(startup_cap_db/10) · tr(S)"]
+    E -->|no| G["unchanged"]
+    F --> H["drive-coherence cap"]
+    G --> H
+    H --> I["return drive CPSD X"]
+    J["The substituted target is REACHABLE:<br/>it carries the plant's own coherence<br/>structure rather than the spec's<br/>unreachable diagonal. Worth 1.1 dB and<br/>a third of the drive vs pseudoinverse."] -.-> C
+    K["sysid_response_cpsd is frozen at<br/>system ID — it does NOT refresh during<br/>control. Only the FRF adapts.<br/>last_response_cpsd is never read."] -.-> C
+    style C fill:#e9e6f5,stroke:#4a3aa7
+    style D fill:#fdece5,stroke:#eb6834
+    style J fill:#e4f6ef,stroke:#1baf7a
+    style K fill:#fdf6ec,stroke:#eda100

@@ -222,13 +222,13 @@ s.addNotes(
 /* ---------------------------------------------- 4-9. one slide per law */
 const LAWS = [
   { n: 4, name: 'match_trace_pseudoinverse', tag: 'function · control_laws.py',
-    flow: '01_match_trace', ar: 5.521,
+    flow: '01_match_trace', ar: 6.817,
     blurb: 'The baseline, and the only law with a long validation history. One '
       + 'open-loop solve at startup, then a single real scalar per line.',
     eq: ['# first call — open loop',
       'H⁺ = pinv(H, rcond)',
       'X  = H⁺ G_xx (H⁺)ᴴ',
-      's  = min(1, 10^(cap/10)·tr(G_xx)/tr(HXHᴴ))',
+      's  = min(1, 10^(startup_cap_db/10)·tr(G_xx)/tr(X))',
       'X ← s·X',
       '',
       '# every call after — closed loop on total power',
@@ -237,9 +237,9 @@ const LAWS = [
     params: 'rcond, max_drive_coherence, startup_test_level_cap_db\ndefaults 1e-15, 1.0, −9.0',
     rows: [['01', '0.95', '8.22', '27.5', '7.16', false, '0.120'],
            ['02', 'off', '7.21', '21.1', '5.78', true, '6.019']],
-    noteT: 'A pure integrator, gain 1',
-    noteB: 'log X(k) = log X(k−1) + e(k−1), fed a lagged error. Simulation: ~53 '
-      + 'cycles to settle, ~103 % peak overshoot.',
+    noteT: 'Startup cap ≠ coherence cap',
+    noteB: 'startup_test_level_cap_db is a level clamp on cycle one; '
+      + 'max_drive_coherence is the coherence cap. Unrelated parameters.',
     noteC: BLUE,
     notes: 'Why it is safe: a uniform positive real scalar can never turn a '
       + 'valid drive CPSD into an invalid one, and after startup the FRF is '
