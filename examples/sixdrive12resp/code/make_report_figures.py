@@ -17,7 +17,7 @@ OUT = 'figs'
 os.makedirs(OUT, exist_ok=True)
 
 LOOP = {'feedback': '#2a78d6', 'open': '#eb6834'}
-SER = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4']
+SER = ['#2a78d6', '#eb6834', '#1baf7a', '#4a3aa7', '#a8326e']
 INK, INK2, INK3, GRID, SURF = '#0b0b0b', '#52514e', '#78766f', '#d8d7d2', '#fcfcfb'
 
 plt.rcParams.update({
@@ -104,7 +104,8 @@ ax.set_xticklabels([f"{r['run'][3:]}\n{NICE[r['law']]}\ncap {r['cap']}"
                     for r in srt], fontsize=7.2)
 ax.set_ylabel('rms error (dB)')
 ax.grid(axis='y')
-ax.legend(frameon=False, fontsize=8, loc='upper left')
+ax.set_ylim(0, max(r['rms'] for r in rows) * 1.22)
+ax.legend(frameon=False, fontsize=8, loc='upper left', ncol=2)
 ax.set_title('Two separate scorings of the same run\nbar: error against what '
              'this plant can actually deliver.  diamond: error against the flat '
              'specification.\nThey are independent rms figures and do not '
@@ -177,7 +178,7 @@ for i, (fam, run) in enumerate(BEST):
     v = by[run]['mean_db']
     ax.plot(xi, v, 'o-', color=SER[i], lw=2, ms=7, markeredgecolor=SURF,
             markeredgewidth=1.4, zorder=3)
-    dy = {'optimal_diagonal': 5, 'buzz': -7}.get(fam, -2)
+    dy = {'optimal_diagonal': 7, 'buzz': -10}.get(fam, -2)
     ax.annotate(NICE[fam], (7, v[7]), textcoords='offset points',
                 xytext=(9, dy), fontsize=7.6, color=SER[i], weight='bold')
 ax.axhline(0, color=INK2, lw=1)

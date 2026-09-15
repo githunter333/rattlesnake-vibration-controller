@@ -1,0 +1,13 @@
+flowchart LR
+    A["control() called<br/><i>every cycle, identically</i>"] --> B["BUZZ SUBSTITUTION<br/>spec autospectra +<br/>MEASURED coherence and phase"]
+    B --> C["pseudoinverse solve<br/>X = H⁺ · modified_spec · (H⁺)ᴴ"]
+    C --> D{"first call?"}
+    D -->|yes| E["startup clamp"]
+    D -->|no| F["unchanged"]
+    E --> G["drive-coherence cap"]
+    F --> G
+    G --> H["return drive CPSD X"]
+    I["sysid_response_cpsd is frozen at system ID.<br/>Only the FRF adapts. No error feedback."] -.-> B
+    style B fill:#e9e6f5,stroke:#4a3aa7
+    style C fill:#fdece5,stroke:#eb6834
+    style I fill:#fdf6ec,stroke:#eda100

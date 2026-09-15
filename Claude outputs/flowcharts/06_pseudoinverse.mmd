@@ -1,0 +1,9 @@
+flowchart LR
+    A["control() called<br/><i>every cycle, identically</i>"] --> B["parse extra_parameters<br/>rcond, max_drive_coherence<br/>defaults 1e-15, 1.0"]
+    B --> C["H⁺ = pinv(H, rcond)"]
+    C --> D["open-loop solve against<br/>the RAW specification<br/>X = H⁺ S (H⁺)ᴴ"]
+    D --> E["drive-coherence cap"]
+    E --> F["return drive CPSD X"]
+    G["last_response_cpsd is accepted and NEVER read.<br/>No integrator, no error term, no startup guard."] -.-> D
+    style D fill:#fdece5,stroke:#eb6834
+    style G fill:#fdecec,stroke:#e34948

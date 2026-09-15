@@ -63,10 +63,9 @@ for i in range(5):
 a.semilogy(f, svm[:, 5], lw=1.1, color=NULLC, ls='--', label='σ6 (measured)')
 a.set_xlim(100, 1000)
 a.set_ylim(3e-5, 4e2)
-a.text(995, 5e-5,
-       'the analytic σ6 is ≈ 4×10⁻¹⁶, eleven decades below this trace:\n'
-       'the measured σ6 is identification noise, not a sixth direction',
-       fontsize=7.6, color=INK2, ha='right', va='bottom')
+a.text(0.0, -0.215, 'σ6 measured is the identification noise floor; analytically '
+       'it is ≈ 4×10⁻¹⁶ — the plant is rank 5',
+       transform=a.transAxes, fontsize=8, color=INK2, va='top')
 a.set_xlabel('frequency (Hz)')
 a.set_ylabel('singular value   (m/s²)/N')
 a.grid(True, which='major')

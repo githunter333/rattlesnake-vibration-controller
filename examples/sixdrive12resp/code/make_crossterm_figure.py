@@ -139,7 +139,7 @@ b.set_xlabel('drive cross-channel coherence |γ|   (15 pairs × 901 lines)')
 b.set_ylim(len(rows)-0.4, -1.25); b.grid(axis='x')
 h = [plt.Line2D([], [], color=LOOP['feedback'], lw=5, label='feedback law'),
      plt.Line2D([], [], color=LOOP['open'], lw=5, label='open-loop law')]
-b.legend(handles=h, frameon=False, fontsize=8, loc='lower left')
+a.legend(handles=h, frameon=False, fontsize=8, loc='lower left')
 b.set_title('Drive: the cap trims the top decile only\n(the optimal drive would '
             'breach it on half its pairs)',
             loc='left', fontsize=10, color=INK, pad=10)
