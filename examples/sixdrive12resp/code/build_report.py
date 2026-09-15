@@ -11,6 +11,7 @@ rows = json.load(open('report_data.json'))
 by = {r['run']: r for r in rows}
 STYLE = open('_style_block.html').read()
 CT = json.load(open('crossterm_data.json'))
+SV = json.load(open('singular_value_data.json'))
 CTF = CT['floor']
 CTR = sorted(CT['runs'], key=lambda r: r['resp_med'])
 
@@ -48,6 +49,19 @@ def result_rows():
 <td class="num">{r['level']:+.2f}</td>
 <td class="num">{r['cond']:,.0f}</td>
 <td class="num">{r['min_mult_coh']:.3f}</td></tr>""")
+    return '\n'.join(out)
+
+
+def sv_rows():
+    out = []
+    for a, m in zip(SV['analytic'], SV['measured']):
+        null = a['i'] == 6
+        out.append(f"""<tr>
+<td class="mono">σ{a['i']}</td>
+<td class="num">{a['lo']:.2e}</td><td class="num">{a['med']:.2e}</td>
+<td class="num">{a['hi']:.2e}</td>
+<td class="num{'' if null else ' win'}">{a['db']:.1f}</td>
+<td class="num">{m['med']:.2e}</td><td class="num">{m['db']:.1f}</td></tr>""")
     return '\n'.join(out)
 
 
@@ -160,6 +174,36 @@ FRF: <strong>{min(fl):.2f}–{max(fl):.2f}&nbsp;dB rms</strong> at
 <span class="mono">rcond = 1e-3</span>.</p>
 
 <h3>The plant is rank 5, not 6</h3>
+
+{img('singular_values.png',
+     'Singular values of the 8×6 FRF over the control band. Left: the measured '
+     'in-control FRF, the matrix every law actually inverts. Right: median and '
+     '10th-90th percentile of each singular value relative to σ1, analytic '
+     'against measured.')}
+
+<div class="tw"><table>
+<thead><tr><th></th><th colspan="4" style="text-align:center">analytic (exact, from M, K, C)</th>
+<th colspan="2" style="text-align:center">measured</th></tr>
+<tr><th></th><th>min</th><th>median</th><th>max</th><th>dB re σ1</th>
+<th>median</th><th>dB re σ1</th></tr></thead>
+<tbody>
+{sv_rows()}
+</tbody></table></div>
+
+<p>Units are (m/s²)/N over {SV['n_lines']} lines. σ1 through σ5 are genuine and
+well separated — about 10&nbsp;dB between the first two, then 8–11&nbsp;dB steps,
+spanning {abs(SV['analytic'][4]['db']):.0f}&nbsp;dB in all — and the analytic and
+measured values agree to a few tenths of a dB throughout. σ6 does not.</p>
+
+<div class="note"><strong>Quote σ1/σ5, not σ1/σ6</strong>
+The useful conditioning of this plant is
+<strong>σ1/σ5 = {SV['cond_15_analytic']:.0f}</strong> analytic,
+{SV['cond_15_measured']:.0f} measured — benign for inversion. The
+<span class="mono">cond(H)</span> column in section 3 is σ1/σ6, median
+{SV['cond_16_measured']:,.0f}, and it is measuring the identification noise
+floor rather than the plant. That is why it scatters by a factor of ten across
+twelve identifications of one deterministic system: the noise floor moves, the
+plant does not.</div>
 
 <p>Computing H analytically from the model's mass, stiffness and damping
 matrices — validated against the measured FRF, whose magnitude it matches to a
