@@ -310,7 +310,10 @@ which costs it against the specification but not against the floor.</p>
      'reachability floor behind. Channels 13X+ and 14X+ are the '
      'reachability-limited pair.')}
 
-<p>Six of the eight control channels sit within a couple of dB under every law.
+<p>Five of the eight control channels — 8X+ through 12X+ — stay within
+2.1&nbsp;dB under every law. 7X+ is marginal: inside 2&nbsp;dB for four of the
+five laws but −3.6&nbsp;dB under
+<span class="mono">pseudoinverse_control</span>.
 13X+ and 14X+ are the two directions six shakers cannot independently command,
 and every law undershoots them: −2.2/−2.8&nbsp;dB for congruence, −5.3/−6.0 for
 buzz, −6.7/−7.3 for match_trace, −8.5/−9.2 for pseudoinverse. The laws differ
