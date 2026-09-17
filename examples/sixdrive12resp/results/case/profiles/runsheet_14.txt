@@ -1,0 +1,163 @@
+RUN 14 -- optimal_diagonal_control_fast with the FRF update OFF (redo of 13)
+===============================================================================
+WHY THIS RUN IS BEING REPEATED
+-------------------------------------------------------------------------------
+Run 13 did not test what it was meant to test, for two independent reasons:
+
+  1. The profile was not the one that ran. The saved file's metadata reads
+     control law = pseudoinverse_control, update_tf_during_control = 1 --
+     profile_13 was never loaded at the rig. Whatever run 13 measured, it is
+     not this law and not this setting.
+  2. Its system identification was weak. Minimum multiple coherence 0.492,
+     against 0.75-0.88 across the twelve-run comparison set. Even had the
+     right profile loaded, "the solve behaves differently here" and "the
+     plant model was bad" would not have been separable.
+
+profile_14 is byte-for-byte profile_13 (verified cell by cell, 0 differing
+rows). Nothing about the intended test changed -- only the code underneath it
+and the discipline around loading it.
+
+-------------------------------------------------------------------------------
+WHAT CHANGED IN THE CODE SINCE RUN 13 -- read this before comparing to run 05
+-------------------------------------------------------------------------------
+a) THE ORIGINAL RATIONALE WAS RIGHT BY ACCIDENT. Runsheet 13 said "with update
+   OFF, H is set once at system_id_update() and never re-passed". That is not
+   what Rattlesnake does: random_vibration_sys_id_data_analysis.py:431-475
+   passes a transfer_function to control() EVERY cycle in both regimes, and
+   system_id_update() is never called during control at all. With the update
+   off the array simply happens to be the same frozen sysid_frf each cycle, so
+   the old bit-equality gate held and the fast path did engage. Right outcome,
+   wrong mechanism.
+
+b) THE FAST-PATH GATE NOW USES A THRESHOLD, not bit equality. It demotes to the
+   coherence-capped SDP when ||H - H_cache||/||H_cache|| exceeds
+   frf_update_threshold (0.05 here). With the update OFF this run is unaffected
+   -- H never changes at all. It is recorded because it means run 05 and run 06,
+   which had the update ON, were the base SDP law under a different name, and
+   are therefore not the "fast" comparison they were taken to be.
+
+c) THE STARTUP LEVEL CAP NOW APPLIES TO THIS LAW, at the -9.0 dB default. Run 05
+   and the original run 13 had none. Because the law is open loop the cap binds
+   on the FIRST command only -- cycle 2 onward is bit-identical to run 05 -- so
+   the converged comparison is unaffected. Practical consequence at the rig:
+   the old "RAMP THE TEST LEVEL, this law has no startup cap" warning no longer
+   applies. The first command will come in at -9 dB re specification and step
+   up on the second.
+
+-------------------------------------------------------------------------------
+LAUNCH
+-------------------------------------------------------------------------------
+cd ~/Code/python/rattlesnake-vibration-controller
+
+python rattlesnake.py --profile examples/sixdrive12resp/results/case/profiles/profile_14_optdiagfast_updateoff.xlsx
+
+-------------------------------------------------------------------------------
+SAVE FILENAMES  (into examples/sixdrive12resp/results/runs/)
+-------------------------------------------------------------------------------
+run 14  optimal_diagonal_control_fast  update OFF  1e-6,0.05,20,1.0,0.95,6
+          system id :  run14_optdiagfast_updateoff_sysid
+          streaming :  run14_optdiagfast_updateoff_stream
+          spectral  :  run14_optdiagfast_updateoff_spec
+
+Do NOT reuse the run13_ names. Those files exist and hold the wrong law's data;
+overwriting them would destroy the evidence of what actually went wrong.
+
+-------------------------------------------------------------------------------
+BEFORE YOU START THE ENVIRONMENT -- confirm the profile actually loaded
+-------------------------------------------------------------------------------
+This is the step that was missing last time. All three are free.
+
+  1. Launch terminal must print, at construction:
+         [optimal_diagonal_control_fast] bm_rank=6
+     If that line is absent, the fast law is not loaded. Stop.
+  2. GUI: Control Python Function reads optimal_diagonal_control_fast,
+     Control Parameters reads 1e-6,0.05,20,1.0,0.95,6
+  3. GUI: Update System ID During Control = N. Check it twice; the GUI has
+     reverted settings between runs before.
+
+-------------------------------------------------------------------------------
+AT THE RIG
+-------------------------------------------------------------------------------
+  Control Averaging Type = Exponential, Coefficient = 0.04   (confirm it --
+      the GUI has reverted this to Linear between runs before)
+  System ID Averages = 20,  System ID Level = 1.0 V RMS,  Estimator = H1
+
+  CHECK THE SYSTEM ID BEFORE CONTROLLING. This is the other half of what went
+  wrong in run 13. Minimum multiple coherence must be in the 0.75-0.88 band the
+  comparison set ran at. If it is near 0.5, re-run the identification -- do not
+  proceed, the run will not be interpretable.
+
+  The launch terminal must NOT print any line reading
+      [optimal_diagonal_control_fast] FRF moved ... safe SDP path this call
+  With the update off H never moves, so a single such line means the update is
+  on after all, or the FRF is being republished when it should not be.
+
+  Watch wall-clock per control cycle against run 05. The fast path is the whole
+  reason this law exists; if the per-cycle time matches run 05's, the path is
+  still not engaging, and that is the finding.
+
+-------------------------------------------------------------------------------
+WHAT THIS RUN ANSWERS
+-------------------------------------------------------------------------------
+  1. Does the Burer-Monteiro solve match the SDP in accuracy on THIS system,
+     on a clean identification? Compare to run 05 knowing the plant model is
+     frozen here and live there, so any difference still confounds solver with
+     model adaptation -- but the identification quality no longer does.
+  2. Does the fast path drive pairwise drive coherence to ~1.0?
+     The docstring's claim is established at 12 drives and UNVERIFIED at 6.
+     Run 13's drive showed median 0.407, 2.4% of pairs above 0.99 and 0.0% at
+     exactly 1.0 -- but that was the wrong law's drive, so it settles nothing.
+     This run's saved drive CPSD is the first real test.
+
+-------------------------------------------------------------------------------
+PREDICTED BEFORE THE RUN -- offline dry run, 2026-09-17
+-------------------------------------------------------------------------------
+The law was driven offline with run 01's identification and this exact
+parameter string, constructed the way Rattlesnake constructs it
+(transfer_function=None) and then handed a frozen H every cycle. Write these
+down and check them against the rig; a large disagreement is itself a finding.
+
+  SPEED, median per control cycle over 6 cycles, 20 bins solved each:
+      optimal_diagonal_control_fast (Burer-Monteiro)    149 ms
+      optimal_diagonal_control      (SDP)              1331 ms
+      -> 8.9x. This is the number to confirm at the rig. If run 14's
+         per-cycle time lands near run 05's, the fast path is not engaging.
+
+  ACCURACY, after 6 cycles (120 bins refined of 901 in band):
+      fast  -1.18 dB re spec     SDP  -1.20 dB re spec
+      -> the two solves agree to 0.02 dB. The BM path is not trading accuracy
+         for speed on this system.
+
+  COVERAGE, and this is the real limit, not solve time:
+      901 in-band bins, budget 20 per cycle -> 46 control cycles for ONE pass
+      over the band. The fast law spends 149 ms of a roughly 1 s control
+      cycle, so the budget, not the solver, is what sets convergence rate
+      here. That is the case for raising max_bins_per_update in a FOLLOW-ON
+      run -- deliberately not changed in this one, to keep a single variable.
+
+  DRIVE COHERENCE after 25 cycles (500 bins refined):
+      median pairwise 0.501,  2.8 % of pairs above 0.99,  0.0 % at exactly 1.0
+      eigenvalue participation 1.09 of 6 drives
+      -> the docstring's claim of coherence at EXACTLY 1.0 in ~100 % of bins
+         does NOT reproduce at 6 drives. It remains established at 12 drives
+         only. Note the tension in these two numbers: participation of 1.09
+         says the drive is nearly rank one, which would normally imply
+         coherence near 1 -- the median of 0.501 is carried by pairs where one
+         drive's autospectrum is near zero. Worth looking at the real drive
+         CPSD rather than trusting either summary alone.
+      -> run 13's saved drive showed median 0.407, 2.4 % above 0.99, 0.0 % at
+         1.0, participation 1.21. Close to this prediction, which is odd given
+         run 13's metadata says pseudoinverse_control ran. Do not read
+         anything into that resemblance until run 14 lands.
+
+-------------------------------------------------------------------------------
+COMPARABILITY
+-------------------------------------------------------------------------------
+NOT a 13th/14th row of the twelve-run matrix. update_tf_during_control is in
+score_runs_sdynpy.py's MUST_MATCH list, so the harness will flag it NOT
+COMPARABLE, correctly. This is a separate experiment.
+
+max_drive_coherence = 0.95 is carried from profile_05 for provenance
+cleanliness and has NO effect on the fast path, which is unconstrained by
+design. It applies only to the SDP fallback -- which, with the update off,
+should never be reached.
