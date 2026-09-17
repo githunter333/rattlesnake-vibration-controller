@@ -175,6 +175,12 @@ class optimal_diagonal_control:
         self.error_threshold_db = 1.0
         self.max_drive_coherence = 0.95
         self.startup_test_level_cap_db = -9.0
+        self.error_domain = 'db'     # 'db' (default) or 'linear' (pre-2026-09-17)
+        self.n_irls_passes = 2
+        # Drive-subspace restriction for the FACTORED path only -- see
+        # optimal_diagonal_control_fast._solve_one_bin.  Parsed here so one
+        # parameter string serves both classes.
+        self.drive_rcond = 1e-2
         if extra_parameters:
             try:
                 parts = [p.strip() for p in str(extra_parameters).split(',') if p.strip() != '']
@@ -185,6 +191,10 @@ class optimal_diagonal_control:
                 if len(parts) >= 5: self.max_drive_coherence = float(parts[4])
                 # parts[5] is bm_rank, read by optimal_diagonal_control_fast
                 if len(parts) >= 7: self.startup_test_level_cap_db = float(parts[6])
+                if len(parts) >= 8: self.error_domain = (
+                    'linear' if float(parts[7]) == 0 else 'db')
+                if len(parts) >= 9: self.n_irls_passes = max(0, int(float(parts[8])))
+                if len(parts) >= 10: self.drive_rcond = float(parts[9])
             except ValueError:
                 pass  # keep defaults if the string doesn't parse
 
@@ -288,6 +298,14 @@ class optimal_diagonal_control:
         diagY = cp.hstack([
             cp.real(cp.sum(cp.multiply(W_params[m], X))) for m in range(M)
         ])
+        # The objective's FORM is unchanged.  IRLS weighting is applied by
+        # scaling the values fed into the existing parameters, not by adding a
+        # weight Parameter: setting W_m <- w_m * outer(h_m, conj(h_m)) makes
+        # diagY[m] equal w_m * yhat_m, and y_target_param <- w * y then gives
+        # sum_m w_m^2 (yhat_m - y_m)^2 exactly.  A separate weight Parameter
+        # multiplying this expression is parameter-times-parameter and cvxpy
+        # rejects it as non-DPP (tried 2026-09-17, "SDP problem is not
+        # DPP-compliant").
         objective = cp.Minimize(
             cp.sum_squares(diagY - y_target_param) + self.reg * cp.sum_squares(cp.abs(X))
         )
@@ -307,27 +325,71 @@ class optimal_diagonal_control:
         assert prob.is_dcp(dpp=True), "SDP problem is not DPP-compliant"
         return prob, X, W_params, y_target_param
 
-    def _solve_one_bin(self, H, y_target):
+    def _irls_weights(self, H, X, y_target):
+        """Relative-error weights for the next IRLS pass: w_m = y_m / yhat_m.
+
+        Minimizing sum_m (yhat_m - y_m)^2 in LINEAR units caps what abandoning
+        a channel can cost you at that channel's own target squared, so the
+        solver sells the hardest channels to buy the easy ones.  In dB the
+        penalty has no such ceiling.  Weighting each residual by 1/yhat_m is
+        the Gauss-Newton step for least squares on log(yhat/y), so iterating
+        solve -> reweight -> solve converges on the dB objective while every
+        subproblem stays a convex SDP -- which is what keeps the coherence-cap
+        constraint, and the whole "demote to the safe path" design, intact.
+
+        Normalized by y_m rather than left as 1/yhat_m so that w = 1 exactly
+        when a channel is on target.  That keeps the weighted problem on the
+        same scale as the unweighted one, so self.reg means what it meant
+        before and does not have to be re-tuned.
+        """
+        yhat = np.real(np.einsum('mn,nk,mk->m', H, X, H.conj()))
+        with np.errstate(divide='ignore', invalid='ignore'):
+            w = y_target/yhat
+        bad = (~np.isfinite(w)) | (w <= 0) | (yhat <= 0) | (y_target <= 0)
+        w = np.where(bad, 1.0, w)
+        # A channel the current iterate has abandoned by orders of magnitude
+        # would otherwise get an enormous weight and make the next subproblem
+        # about nothing else.  Clip to a 20 dB span either way.
+        return np.clip(w, 0.1, 10.0)
+
+    def _solve_one_bin(self, H, y_target, X_warm=None):
         M, N = H.shape
         if self._sdp_prob is None or self._sdp_shape != (M, N):
             self._sdp_prob, self._sdp_X, self._sdp_W_params, self._sdp_y_param = \
                 self._build_sdp_problem(M, N)
             self._sdp_shape = (M, N)
 
-        for m in range(M):
-            self._sdp_W_params[m].value = np.outer(H[m, :], H[m, :].conj())
-        self._sdp_y_param.value = y_target
+        W_unweighted = [np.outer(H[m, :], H[m, :].conj()) for m in range(M)]
 
-        try:
-            self._sdp_prob.solve(solver=cp.CLARABEL, warm_start=True)
-            Xf = self._sdp_X.value
-            if Xf is None:
-                print(f"[optimal_diagonal_control] SDP solve returned no value, "
-                      f"status={self._sdp_prob.status!r} -- falling back to pinv", flush=True)
-        except Exception as e:
-            print(f"[optimal_diagonal_control] SDP solve raised {type(e).__name__}: {e} "
-                  f"-- falling back to pinv", flush=True)
-            Xf = None
+        # Pass 0 is unweighted unless a previous solution for this bin is in
+        # hand, in which case its weights are already informative and the
+        # first pass is a real IRLS step rather than a wasted one.
+        if self.error_domain == 'db' and X_warm is not None:
+            w = self._irls_weights(H, X_warm, y_target)
+        else:
+            w = np.ones(M)
+        n_passes = 1 + (self.n_irls_passes if self.error_domain == 'db' else 0)
+
+        Xf = None
+        for _ in range(n_passes):
+            for m in range(M):
+                self._sdp_W_params[m].value = w[m]*W_unweighted[m]
+            self._sdp_y_param.value = w*y_target
+            try:
+                self._sdp_prob.solve(solver=cp.CLARABEL, warm_start=True)
+                X_try = self._sdp_X.value
+                if X_try is None:
+                    print(f"[optimal_diagonal_control] SDP solve returned no value, "
+                          f"status={self._sdp_prob.status!r} -- falling back to pinv", flush=True)
+                    break
+            except Exception as e:
+                print(f"[optimal_diagonal_control] SDP solve raised {type(e).__name__}: {e} "
+                      f"-- falling back to pinv", flush=True)
+                break
+            Xf = X_try
+            if self.error_domain != 'db':
+                break
+            w = self._irls_weights(H, Xf, y_target)
         if Xf is None:
             self.n_solver_failures += 1
             Hpinv = np.linalg.pinv(H, rcond=1e-15)
@@ -413,7 +475,8 @@ class optimal_diagonal_control:
         n_fix = min(drifted.size, drift_budget, budget)
         fixed_this_call = drifted[:n_fix]
         for f in fixed_this_call:
-            self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self.y_diag_target[f])
+            self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self.y_diag_target[f],
+                                                     X_warm=self.output_cpsd[f])
             self.H_cache[f] = H_clean[f]
         if n_fix > 0:
             self.err_db_cache[fixed_this_call] = self._err_db(H_clean, fixed_this_call)
@@ -434,7 +497,8 @@ class optimal_diagonal_control:
             n_refine = min(order.size, budget)
             self.n_deferred = int(order.size - n_refine)
             for f in order[:n_refine]:
-                self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self.y_diag_target[f])
+                self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self.y_diag_target[f],
+                                                     X_warm=self.output_cpsd[f])
                 self.sdp_refined[f] = True
                 self.H_cache[f] = H_clean[f]
             if n_refine > 0:
@@ -472,7 +536,8 @@ class optimal_diagonal_control:
             n_stale = min(stale_order.size, budget)
             self.n_stale_deferred = int(stale_order.size - n_stale)
             for f in stale_order[:n_stale]:
-                self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self.y_diag_target[f])
+                self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self.y_diag_target[f],
+                                                     X_warm=self.output_cpsd[f])
                 self.H_cache[f] = H_clean[f]
             if n_stale > 0:
                 self.err_db_cache[stale_order[:n_stale]] = self._err_db(H_clean, stale_order[:n_stale])

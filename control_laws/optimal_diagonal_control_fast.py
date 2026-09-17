@@ -125,6 +125,14 @@ _spec.loader.exec_module(_base_module)
 optimal_diagonal_control = _base_module.optimal_diagonal_control
 
 
+# 10/ln(10), squared: converts a natural-log ratio to dB and back.
+_C_DB = 10.0/np.log(10.0)
+_C_DB2 = _C_DB**2
+# Floor under yhat and y inside the dB objective, so a bin passing through
+# zero response gives a large finite penalty rather than an overflow.
+_DB_FLOOR = 1e-300
+
+
 class optimal_diagonal_control_fast(optimal_diagonal_control):
     def __init__(self, *args, **kwargs):
         # This subclass's own state is set up BEFORE super().__init__(),
@@ -225,15 +233,55 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         return v[:n].reshape(N, r) + 1j * v[n:].reshape(N, r)
 
     def _bm_obj_and_grad(self, v, H, y_target, N, r):
+        """Objective and gradient for the factored solve.
+
+        error_domain 'db' (the default since 2026-09-17) minimizes
+            sum_m [10 log10(yhat_m / y_m)]^2
+        directly.  'linear' restores the original
+            sum_m (yhat_m - y_m)^2.
+
+        WHY THIS CHANGED.  The linear objective caps what abandoning a channel
+        can cost at that channel's own target squared -- drive its response to
+        zero and the penalty stops growing -- so on a plant whose rows have
+        unequal gain the solver sells the hardest channels to buy the easy
+        ones, and is correct to, given what it was asked to minimize.  On the
+        6-drive/8-control frame with a flat -30 dB specification and row gains
+        spanning 3.8 to 10.3 dB, that cost 13X+ and 14X+ about 5 dB each: run
+        14 converged to a self-predicted 9.47 and 8.28 dB rms on those two
+        channels against a reachability floor of 4.3 and 3.9, while beating
+        that floor on 8X+.  Pooled, 4.65 dB against a 2.38 dB floor.  Measured
+        offline on run 14's own FRF, the dB objective takes the pooled figure
+        to 3.06 dB and 13X+ to 5.52.
+
+        The dB objective is NOT convex, which is why it lives here and not in
+        the base class's SDP; the base class reaches the same objective by
+        iteratively reweighted least squares instead, keeping every subproblem
+        convex and its coherence-cap constraint valid.  The two agree on what
+        they are minimizing but will not agree to the last decimal.
+        """
         L = self._unpack(v, N, r)
         B = H @ L
         Ydiag = np.sum(np.abs(B) ** 2, axis=1)
-        resid = Ydiag - y_target
-        f_fit = np.sum(resid ** 2)
         X = L @ L.conj().T
         f_reg = self.reg * np.sum(np.abs(X) ** 2)
+        g_reg = 2 * self.reg * X
+
+        if self.error_domain == 'db':
+            # f = sum (C ln(yhat/y))^2, C = 10/ln10.  df/dyhat = 2 C^2
+            # ln(yhat/y) / yhat.  Guarded: a bin can pass through yhat = 0.
+            Yc = np.maximum(Ydiag, _DB_FLOOR)
+            yc = np.maximum(y_target, _DB_FLOOR)
+            logr = np.log(Yc / yc)
+            f_fit = _C_DB2 * np.sum(logr ** 2)
+            dfdy = 2.0 * _C_DB2 * logr / Yc
+            dfdy = np.where(y_target > 0, dfdy, 0.0)
+        else:
+            resid = Ydiag - y_target
+            f_fit = np.sum(resid ** 2)
+            dfdy = 2.0 * resid
+
         f = f_fit + f_reg
-        gX = 2 * (H.conj().T @ (resid[:, None] * H)) + 2 * self.reg * X
+        gX = (H.conj().T @ (dfdy[:, None] * H)) + g_reg
         gL = 2 * (gX @ L)
         grad = np.concatenate([gL.real.ravel(), gL.imag.ravel()])
         return f, grad
@@ -270,19 +318,86 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         return L @ L.conj().T
 
     # ------------------------------------------------------------------
-    def _solve_one_bin(self, H, y_target):
+    def _restricted_basis(self, H):
+        """Right-singular directions of H carrying sigma >= drive_rcond*sigma_max,
+        as an (N, k) matrix -- or None for no restriction.
+
+        WHY THE FACTORED PATH NEEDS THIS AND THE SDP PATH DOES NOT.  The dB
+        objective removes the ceiling on what missing a channel costs, which
+        is the point, but it also means the solver will spend unlimited drive
+        to chase a channel the plant barely reaches.  Unconstrained on run
+        14's FRF it did exactly that: pooled error 1.93 dB, better than the
+        rcond-1e-3 reachability floor itself, bought with +10.4 dB more drive
+        on average, +30.2 dB on the worst bin, at eigenvalue participation
+        1.02 -- a nearly rank-one drive pushed down a near-singular direction.
+        The base class's SDP does not need this because its coherence-cap
+        constraint already restrains it (+2.6 dB); the factored path is
+        unconstrained by design and has nothing else holding it.
+
+        reg is NOT the right lever and was measured not to be: it penalizes
+        every direction equally, so raising it from 1e-6 to 1.0 gave back the
+        accuracy (2.31 dB) while still leaving +7.8 dB mean drive and a +25.5
+        dB worst bin.  Restricting the SUBSPACE is what the reachability floor
+        itself does (restrict_rcond), and it targets the actual problem.
+
+        Measured on run 14, pooled / mean drive / worst bin, against the
+        as-shipped linear objective at 4.68 dB and 0 dB drive:
+
+            unrestricted   1.93 dB   +10.4 dB   +30.2 dB
+            rcond 1e-3     2.44 dB    +5.2 dB   +30.2 dB
+            rcond 1e-2     3.83 dB   -12.2 dB    +8.7 dB   <- default
+            rcond 5e-2     4.35 dB   -20.7 dB    +8.7 dB
+
+        The 1e-2 default is the one point on that curve that is better than
+        the law as it stands on BOTH axes -- 0.85 dB more accurate for 12 dB
+        LESS drive -- so it is safe to adopt without knowing the rig's
+        headroom.  Set drive_rcond to 0 to disable the restriction.
+        """
+        # Only the dB objective needs restraining.  Applied to the linear
+        # objective it is a gratuitous behaviour change -- measured on run 14
+        # it took the factored path's pooled error from 4.68 to 5.78 dB -- and
+        # it would break the guarantee that error_domain=0 reproduces the
+        # pre-2026-09-17 law exactly.
+        if self.error_domain != 'db' or not (self.drive_rcond > 0):
+            return None
+        try:
+            _, sv, Vh = np.linalg.svd(H, full_matrices=False)
+        except np.linalg.LinAlgError:
+            return None
+        if sv.size == 0 or not np.isfinite(sv[0]) or sv[0] <= 0:
+            return None
+        k = int(np.sum(sv >= self.drive_rcond*sv[0]))
+        if k < 1:
+            k = 1
+        if k >= H.shape[1]:
+            return None          # nothing excluded, skip the change of basis
+        return Vh[:k].conj().T
+
+    def _solve_one_bin(self, H, y_target, X_warm=None):
+        # X_warm is the base class's IRLS warm start; the factored solve here
+        # reaches the dB objective directly and has no use for it, but the
+        # signature has to match so the SDP fallback below still gets it.
         if not self._h_changed_this_call:
             # H is unchanged since the last call -- nothing is re-
             # estimating it live right now, so the fast unconstrained
             # solve is safe even though it drives coherence toward 1.0.
             self.n_fast_solves += 1
             try:
-                return self._bm_solve(H, y_target)
+                # Solve in the well-conditioned drive subspace and map back,
+                # so the dB objective cannot buy accuracy with drive down a
+                # near-singular direction -- see _restricted_basis.  The
+                # coherence cap does not apply on this path either way, so
+                # nothing is lost by working in a rotated basis here.
+                Vk = self._restricted_basis(H)
+                if Vk is None:
+                    return self._bm_solve(H, y_target)
+                Xk = self._bm_solve(H @ Vk, y_target)
+                return Vk @ Xk @ Vk.conj().T
             except Exception as e:
                 print(f"[optimal_diagonal_control_fast] BM solve raised {type(e).__name__}: {e} "
                       f"-- falling back to SDP for this bin", flush=True)
         self.n_safe_solves += 1
-        return super()._solve_one_bin(H, y_target)
+        return super()._solve_one_bin(H, y_target, X_warm=X_warm)
 
     # ------------------------------------------------------------------
     # Explicit pass-through overrides -- required, not decorative.
