@@ -240,6 +240,19 @@ def pseudoinverse_control(specification, # Specifications
         The output CPSD matrix with shape
         (num_frequencies x num_excitation_channels x num_excitation_channels)
     
+
+    Notes
+    -----
+    THIS LAW IS OPEN LOOP.  It has no error feedback of any kind:
+    ``last_response_cpsd`` is accepted and never referenced in the body, and
+    ``last_output_cpsd`` is read only as a first-call sentinel where a startup
+    clamp exists.  The solve is recomputed identically every cycle and the law
+    cannot converge toward the specification -- it lands wherever the current
+    FRF estimate puts it.  The only quantity that changes between calls is the
+    transfer function, so with "Update Transfer Function During Control" on the
+    law adapts to a changing plant model, not to its own error.  Verified by
+    inspection 2026-09-17.
+
     """
     rcond, max_drive_coherence = _parse_rcond_and_cap(extra_parameters)
     # Invert the transfer function using the pseudoinverse
@@ -248,6 +261,36 @@ def pseudoinverse_control(specification, # Specifications
     output = tf_pinv@specification@tf_pinv.conjugate().transpose(0,2,1)
     output = _cap_drive_coherence(output, max_drive_coherence)
     return output
+
+def _apply_startup_level_cap(output, specification, transfer_function,
+                             startup_test_level_cap_db):
+    """Scale each frequency line so the PREDICTED response trace sits no more
+    than startup_test_level_cap_db dB above the specification's own trace.
+
+    MUST BE THE LAST THING APPLIED TO THE OUTPUT. This is a safety ceiling on
+    the one otherwise-unguarded first command, and anything that runs after it
+    can lift the level straight back through it. Until 2026-09-17 both callers
+    ran _cap_drive_coherence afterwards, which did exactly that: with the
+    startup clamp correct and the coherence cap at 0.95, the first command
+    measured +6.72 dB re spec for match_trace_pseudoinverse and -0.12 dB for
+    buzz_control, with worst single lines at +22.41 and +16.53 dB -- against a
+    ceiling of -9.00 dB. Uncapped, both hit -9.00 dB exactly. The cap shrinks
+    off-diagonal drive terms while preserving the diagonal, which destroys the
+    inter-drive cancellation the pseudoinverse solve relies on, so the same
+    drive produces far more response; scaling before that happens bounds the
+    wrong quantity.
+    """
+    spec_trace = np.real(trace(specification))
+    predicted_response = (transfer_function @ output
+                          @ transfer_function.conjugate().transpose(0, 2, 1))
+    output_trace = np.real(trace(predicted_response))
+    max_power_ratio = 10.0**(startup_test_level_cap_db/10.0)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        scale = np.minimum(1.0, max_power_ratio*spec_trace/output_trace)
+    scale[~np.isfinite(scale)] = 1.0
+    scale[output_trace <= 0] = 1.0
+    return output*scale[:, np.newaxis, np.newaxis]
+
 
 def match_trace_pseudoinverse(specification, # Specifications
                               warning_levels, # Warning levels
@@ -362,6 +405,7 @@ def match_trace_pseudoinverse(specification, # Specifications
     """
     rcond, max_drive_coherence, startup_test_level_cap_db = _parse_match_trace_parameters(extra_parameters)
     # If it's the first time through, do the actual control
+    apply_startup_cap = False
     if last_output_cpsd is None:
         # Invert the transfer function using the pseudoinverse
         tf_pinv = np.linalg.pinv(transfer_function,rcond)
@@ -376,14 +420,18 @@ def match_trace_pseudoinverse(specification, # Specifications
         # own trace, as a hard ceiling on this one otherwise-unguarded
         # command. Steady-state operation (the trace_ratio branch below,
         # once there's a real measured response) is untouched.
-        spec_trace = np.real(trace(specification))
-        output_trace = np.real(trace(output))
-        max_power_ratio = 10.0**(startup_test_level_cap_db/10.0)
-        with np.errstate(divide='ignore', invalid='ignore'):
-            scale = np.minimum(1.0, max_power_ratio*spec_trace/output_trace)
-        scale[~np.isfinite(scale)] = 1.0
-        scale[output_trace <= 0] = 1.0
-        output = output*scale[:,np.newaxis,np.newaxis]
+        # The clamp is on the PREDICTED RESPONSE relative to the
+        # specification, so both traces must be response-domain quantities.
+        # Until 2026-09-17 this compared tr(specification) against
+        # tr(output) -- and `output` is the DRIVE CPSD, in V^2. That ratio
+        # is not dimensionless: it carries units of (response/volt)^2, so
+        # its value tracked the plant gain and the response channels' units
+        # rather than the overshoot it was meant to bound. Measured on run
+        # 01's identification, the raw solve sat -2.04 dB re spec, the
+        # clamp as written took it to a median -18.88 dB, and the clamp as
+        # documented takes it to exactly -9.00 dB. Roughly 10 dB too
+        # aggressive, and unit-dependent on top of that.
+        apply_startup_cap = True
     else:
         # Scale the last output cpsd by the trace ratio between spec and last response
         trace_ratio = trace(specification)/trace(last_response_cpsd)
@@ -396,6 +444,11 @@ def match_trace_pseudoinverse(specification, # Specifications
     # (or any other path that reaches this point with an uncapped
     # last_output_cpsd) can't silently skip the cap.
     output = _cap_drive_coherence(output, max_drive_coherence)
+    # The startup ceiling goes LAST -- see _apply_startup_level_cap.
+    if apply_startup_cap:
+        output = _apply_startup_level_cap(output, specification,
+                                          transfer_function,
+                                          startup_test_level_cap_db)
     return output
 
 
@@ -716,6 +769,7 @@ class match_trace_pseudoinverse_pi:
                 last_response_cpsd = None, # Last Control Response for Error Correction
                 last_output_cpsd = None, # Last Control Excitation for Drive-based control
                 ) -> np.ndarray:
+        apply_startup_cap = False
         if last_output_cpsd is None:
             # Same startup guard as match_trace_pseudoinverse: no prior
             # measured response to correct against yet, so this is a raw,
@@ -724,14 +778,13 @@ class match_trace_pseudoinverse_pi:
             # startup_test_level_cap_db dB relative to the specification.
             tf_pinv = np.linalg.pinv(transfer_function, self.rcond)
             output = tf_pinv@self.specification@tf_pinv.conjugate().transpose(0,2,1)
-            spec_trace = np.real(trace(self.specification))
-            output_trace = np.real(trace(output))
-            max_power_ratio = 10.0**(self.startup_test_level_cap_db/10.0)
-            with np.errstate(divide='ignore', invalid='ignore'):
-                scale = np.minimum(1.0, max_power_ratio*spec_trace/output_trace)
-            scale[~np.isfinite(scale)] = 1.0
-            scale[output_trace <= 0] = 1.0
-            output = output*scale[:,np.newaxis,np.newaxis]
+            # The startup ceiling is computed on the PREDICTED RESPONSE and
+            # applied LAST, after _cap_drive_coherence -- see
+            # _apply_startup_level_cap for both bugs this replaces (a drive-
+            # domain trace ratio that was not dimensionless, and a coherence
+            # cap that ran afterwards and lifted the level back through the
+            # ceiling).
+            apply_startup_cap = True
             self.prev_error = np.zeros(output.shape[0])
         else:
             spec_trace = np.real(trace(self.specification))
@@ -845,7 +898,13 @@ class match_trace_pseudoinverse_pi:
                     scale[needs_floor] = floor[needs_floor]/np.maximum(output_trace[needs_floor], 1e-300)
                 scale[~np.isfinite(scale)] = 1.0
                 output = output*scale[:,np.newaxis,np.newaxis]
-        return _cap_drive_coherence(output, self.max_drive_coherence)
+        output = _cap_drive_coherence(output, self.max_drive_coherence)
+        # The startup ceiling goes LAST -- see _apply_startup_level_cap.
+        if apply_startup_cap:
+            output = _apply_startup_level_cap(output, self.specification,
+                                              transfer_function,
+                                              self.startup_test_level_cap_db)
+        return output
 
 
 def buzz_control(specification, # Specifications
@@ -958,6 +1017,19 @@ def buzz_control(specification, # Specifications
         The output CPSD matrix with shape
         (num_frequencies x num_excitation_channels x num_excitation_channels)
     
+
+    Notes
+    -----
+    THIS LAW IS OPEN LOOP.  It has no error feedback of any kind:
+    ``last_response_cpsd`` is accepted and never referenced in the body, and
+    ``last_output_cpsd`` is read only as a first-call sentinel where a startup
+    clamp exists.  The solve is recomputed identically every cycle and the law
+    cannot converge toward the specification -- it lands wherever the current
+    FRF estimate puts it.  The only quantity that changes between calls is the
+    transfer function, so with "Update Transfer Function During Control" on the
+    law adapts to a changing plant model, not to its own error.  Verified by
+    inspection 2026-09-17.
+
     """
     rcond, max_drive_coherence, startup_test_level_cap_db = _parse_match_trace_parameters(extra_parameters)
     # Create a new specification using the autospectra from the original and
@@ -967,6 +1039,7 @@ def buzz_control(specification, # Specifications
     tf_pinv = np.linalg.pinv(transfer_function,rcond)
     # Return the least squares solution for the new output CPSD
     output = tf_pinv@modified_spec@tf_pinv.conjugate().transpose(0,2,1)
+    apply_startup_cap = False
     if last_output_cpsd is None:
         # Startup guard (added 2026-09-02, mirroring match_trace_pseudoinverse's):
         # unlike match_trace_pseudoinverse, buzz_control has no separate
@@ -984,15 +1057,25 @@ def buzz_control(specification, # Specifications
         # before this fix. Clamp the per-frequency-line output trace
         # (power) so it can't imply more than startup_test_level_cap_db dB
         # relative to the specification's own trace.
-        spec_trace = np.real(trace(specification))
-        output_trace = np.real(trace(output))
-        max_power_ratio = 10.0**(startup_test_level_cap_db/10.0)
-        with np.errstate(divide='ignore', invalid='ignore'):
-            scale = np.minimum(1.0, max_power_ratio*spec_trace/output_trace)
-        scale[~np.isfinite(scale)] = 1.0
-        scale[output_trace <= 0] = 1.0
-        output = output*scale[:,np.newaxis,np.newaxis]
-    return _cap_drive_coherence(output, max_drive_coherence)
+        # The clamp is on the PREDICTED RESPONSE relative to the
+        # specification, so both traces must be response-domain quantities.
+        # Until 2026-09-17 this compared tr(specification) against
+        # tr(output) -- and `output` is the DRIVE CPSD, in V^2. That ratio
+        # is not dimensionless: it carries units of (response/volt)^2, so
+        # its value tracked the plant gain and the response channels' units
+        # rather than the overshoot it was meant to bound. Measured on run
+        # 01's identification, the raw solve sat -2.04 dB re spec, the
+        # clamp as written took it to a median -18.88 dB, and the clamp as
+        # documented takes it to exactly -9.00 dB. Roughly 10 dB too
+        # aggressive, and unit-dependent on top of that.
+        apply_startup_cap = True
+    output = _cap_drive_coherence(output, max_drive_coherence)
+    # The startup ceiling goes LAST -- see _apply_startup_level_cap.
+    if apply_startup_cap:
+        output = _apply_startup_level_cap(output, specification,
+                                          transfer_function,
+                                          startup_test_level_cap_db)
+    return output
 
 def buzz_control_generator():
     output_cpsd = None
@@ -1381,6 +1464,7 @@ class buzz_feedback:
                 last_response_cpsd = None, # Last Control Response for Error Correction
                 last_output_cpsd = None, # Last Control Excitation for Drive-based control
                 ) -> np.ndarray:
+        apply_startup_cap = False
         if last_output_cpsd is None:
             # Startup guard, same structure as match_trace_pseudoinverse /
             # match_trace_pseudoinverse_pi: no real measured response yet,
@@ -1389,14 +1473,13 @@ class buzz_feedback:
             # startup_test_level_cap_db dB relative to the specification.
             tf_pinv = np.linalg.pinv(transfer_function, self.rcond)
             output = tf_pinv@self.modified_spec@tf_pinv.conjugate().transpose(0,2,1)
-            spec_trace = np.real(trace(self.specification))
-            output_trace = np.real(trace(output))
-            max_power_ratio = 10.0**(self.startup_test_level_cap_db/10.0)
-            with np.errstate(divide='ignore', invalid='ignore'):
-                scale = np.minimum(1.0, max_power_ratio*spec_trace/output_trace)
-            scale[~np.isfinite(scale)] = 1.0
-            scale[output_trace <= 0] = 1.0
-            output = output*scale[:,np.newaxis,np.newaxis]
+            # The startup ceiling is computed on the PREDICTED RESPONSE and
+            # applied LAST, after _cap_drive_coherence -- see
+            # _apply_startup_level_cap for both bugs this replaces (a drive-
+            # domain trace ratio that was not dimensionless, and a coherence
+            # cap that ran afterwards and lifted the level back through the
+            # ceiling).
+            apply_startup_cap = True
         else:
             if (self.min_correction_frames > 0
                     and (frames is None or frames < self.min_correction_frames)):
@@ -1489,7 +1572,13 @@ class buzz_feedback:
                     trace_scale[out_trace <= 0] = 1.0
                     trace_scale[prev_trace <= 0] = 1.0
                     output = output*trace_scale[:,np.newaxis,np.newaxis]
-        return _cap_drive_coherence(output, self.max_drive_coherence)
+        output = _cap_drive_coherence(output, self.max_drive_coherence)
+        # The startup ceiling goes LAST -- see _apply_startup_level_cap.
+        if apply_startup_cap:
+            output = _apply_startup_level_cap(output, self.specification,
+                                              transfer_function,
+                                              self.startup_test_level_cap_db)
+        return output
 
 
 def _parse_match_trace_pi_resolve_parameters(extra_parameters, default_startup_test_level_cap_db=-9.0):
@@ -1774,14 +1863,12 @@ class match_trace_pi_resolve:
             # Startup guard: identical to match_trace_pseudoinverse_pi's.
             tf_pinv = np.linalg.pinv(transfer_function, self.rcond)
             output = tf_pinv@self.specification@tf_pinv.conjugate().transpose(0,2,1)
-            spec_trace = np.real(trace(self.specification))
-            output_trace = np.real(trace(output))
-            max_power_ratio = 10.0**(self.startup_test_level_cap_db/10.0)
-            with np.errstate(divide='ignore', invalid='ignore'):
-                scale = np.minimum(1.0, max_power_ratio*spec_trace/output_trace)
-            scale[~np.isfinite(scale)] = 1.0
-            scale[output_trace <= 0] = 1.0
-            output = output*scale[:,np.newaxis,np.newaxis]
+            # The startup ceiling is computed on the PREDICTED RESPONSE and
+            # applied LAST, after _cap_drive_coherence -- see
+            # _apply_startup_level_cap for both bugs this replaces (a drive-
+            # domain trace ratio that was not dimensionless, and a coherence
+            # cap that ran afterwards and lifted the level back through the
+            # ceiling).
             # Reset all persistent state for a fresh run.
             self.prev_pi_error = np.zeros(output.shape[0])
             self.avg_response = None
@@ -1794,7 +1881,12 @@ class match_trace_pi_resolve:
             self.coh_frozen = None
             self.phs_frozen = None
             self.target_diag = None
-            return _cap_drive_coherence(output, self.max_drive_coherence)
+            output = _cap_drive_coherence(output, self.max_drive_coherence)
+            # The startup ceiling goes LAST -- see _apply_startup_level_cap.
+            output = _apply_startup_level_cap(output, self.specification,
+                                              transfer_function,
+                                              self.startup_test_level_cap_db)
+            return output
 
         # ------------------------------------------------------------
         # Coherence/stability tracker: runs every cycle regardless of
@@ -2197,14 +2289,12 @@ class match_trace_resolve:
             # Startup guard: identical to every other law in this module.
             tf_pinv = np.linalg.pinv(transfer_function, self.rcond)
             output = tf_pinv@self.specification@tf_pinv.conjugate().transpose(0,2,1)
-            spec_trace = np.real(trace(self.specification))
-            output_trace = np.real(trace(output))
-            max_power_ratio = 10.0**(self.startup_test_level_cap_db/10.0)
-            with np.errstate(divide='ignore', invalid='ignore'):
-                scale = np.minimum(1.0, max_power_ratio*spec_trace/output_trace)
-            scale[~np.isfinite(scale)] = 1.0
-            scale[output_trace <= 0] = 1.0
-            output = output*scale[:,np.newaxis,np.newaxis]
+            # The startup ceiling is computed on the PREDICTED RESPONSE and
+            # applied LAST, after _cap_drive_coherence -- see
+            # _apply_startup_level_cap for both bugs this replaces (a drive-
+            # domain trace ratio that was not dimensionless, and a coherence
+            # cap that ran afterwards and lifted the level back through the
+            # ceiling).
             # Reset all persistent state for a fresh run.
             self.prev_error = np.zeros(output.shape[0])
             self.avg_response = None
@@ -2217,7 +2307,12 @@ class match_trace_resolve:
             self.coh_frozen = None
             self.phs_frozen = None
             self.target_diag = None
-            return _cap_drive_coherence(output, self.max_drive_coherence)
+            output = _cap_drive_coherence(output, self.max_drive_coherence)
+            # The startup ceiling goes LAST -- see _apply_startup_level_cap.
+            output = _apply_startup_level_cap(output, self.specification,
+                                              transfer_function,
+                                              self.startup_test_level_cap_db)
+            return output
 
         # ------------------------------------------------------------
         # FRF-stability tracker (decides WHEN to resolve): runs every
