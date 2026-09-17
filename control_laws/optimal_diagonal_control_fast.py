@@ -12,11 +12,24 @@ roughly ~N^4 with the PSD-cone/coherence-constraint machinery. Benchmarked
 at a 12-drive/30-response scale: SDP ~105-119 ms/bin vs. the factored solve
 ~5.4-5.7 ms/bin (~18-20x faster), matching SDP accuracy closely (mean diff
 -0.02 dB, max 0.32 dB on real system H) -- but ONLY when unconstrained.
-Left unconstrained, the factored solve drives pairwise drive coherence to
-EXACTLY 1.0 in ~100% of bins tested (confirmed empirically, not assumed) --
+Left unconstrained, the factored solve was measured to drive pairwise drive
+coherence to EXACTLY 1.0 in ~100% of bins at a 12-drive/30-response scale --
 perfectly rank-deficient drives, which would make a live H1/H2 estimator's
 reference CPSD matrix singular. That's fine if nothing is re-estimating H
 live, but unsafe the moment it is.
+
+COUNTER-MEASUREMENT, 2026-09-17 (run 13, this 6-drive/8-control system, with
+"Update Transfer Function During Control" OFF so the fast path was eligible
+for the whole test): the saved drive CPSD showed median pairwise coherence
+0.407, 2.4% of pairs above 0.99 and 0.0% at exactly 1.0 -- the claim above
+did NOT reproduce here. Eigenvalue participation was 1.21 of 6, so the drive
+was concentrated but not rank-deficient. That run is confounded: its frozen
+FRF came from a weak system identification (minimum multiple coherence 0.492
+against 0.75-0.88 for the twelve-run comparison set) and it overshot by
++14.79 dB, so "the solve behaves differently at this scale" and "the plant
+model was bad" are not yet separated. Treat the 1.0-coherence claim as
+established at 12 drives and UNVERIFIED at 6 until a run on a clean
+identification says otherwise.
 
 THE SAFETY RULE (this is the important part): rather than trying to detect
 Rattlesnake's "Update Transfer Function During Control" checkbox directly
@@ -37,12 +50,18 @@ class), EVERY solve for the whole test uses the fast path. Under
 control (falls straight to the SDP) -- no accuracy or safety regression
 in that regime, purely a speed win in the regime where it's safe.
 
-extra_parameters: same 5 values as optimal_diagonal_control, plus an
-optional 6th:
-    "reg,frf_update_threshold,max_bins_per_update,error_threshold_db,max_drive_coherence,bm_rank"
+extra_parameters: same values as optimal_diagonal_control -- the 6th is
+this subclass's own, the 7th is parsed by the base class, so ONE string
+works for both laws:
+    "reg,frf_update_threshold,max_bins_per_update,error_threshold_db,max_drive_coherence,bm_rank,startup_test_level_cap_db"
     bm_rank - factorization rank r for the fast solve (default 4; the SDP's
               own constrained solutions rarely need rank >3-4 for 99% of
               their energy, and the unconstrained solve needs even less)
+    startup_test_level_cap_db - ceiling on the FIRST control command only,
+              in dB re the specification trace (default -9.0). Handled
+              entirely in the base class; see its docstring, including the
+              caveat that this law is open loop so the ceiling does not bind
+              after cycle 1.
 max_drive_coherence still applies to the SDP fallback path exactly as in
 the base class; it has no effect on the fast path (which is, by design,
 unconstrained).
@@ -73,8 +92,19 @@ optimal_diagonal_control = _base_module.optimal_diagonal_control
 
 class optimal_diagonal_control_fast(optimal_diagonal_control):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
+        # This subclass's own state is set up BEFORE super().__init__(),
+        # not after.  The base constructor calls _initialize() whenever it
+        # is handed a non-None transfer_function, and _initialize() runs
+        # _refine_batch() -> _solve_one_bin(), which is overridden here and
+        # reads self.bm_rank / self.n_fast_solves / self._h_changed_this_
+        # call.  With those assignments after the super() call the law
+        # crashed with AttributeError: 'optimal_diagonal_control_fast'
+        # object has no attribute 'n_fast_solves' (found 2026-09-17 by a
+        # harness that constructs the law with the FRF in hand).  Rattle-
+        # snake itself builds control laws before system ID, with
+        # transfer_function=None, so the crash never fired in the app -- it
+        # was latent, and would have fired the moment a law was constructed
+        # with an FRF already available.
         self.bm_rank = 4
         extra_parameters = kwargs.get('extra_parameters', args[3] if len(args) > 3 else '')
         if extra_parameters:
@@ -90,6 +120,8 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         self._h_changed_this_call = False
 
         print(f"[optimal_diagonal_control_fast] bm_rank={self.bm_rank}", flush=True)
+
+        super().__init__(*args, **kwargs)
 
     # ------------------------------------------------------------------
     def _refine_batch(self, transfer_function):

@@ -377,6 +377,16 @@ class match_diagonal_congruence:
         # realised cap depends on the FRF's scale.  Since H is in hand here,
         # cap the quantity actually meant: predicted response trace relative
         # to the specification trace.
+        #
+        # ORDER MATTERS, and until 2026-09-17 it was wrong here too: the
+        # clamp ran BEFORE _floor_and_silence and _cap_drive_coherence, both
+        # of which can raise the level back through the ceiling.  The
+        # coherence cap shrinks off-diagonal drive terms while preserving the
+        # diagonal, destroying the inter-drive cancellation the pseudoinverse
+        # solve relies on, so the same drive produces far more response; the
+        # floor raises lines outright.  The safety ceiling goes LAST.
+        output = _cap_drive_coherence(self._floor_and_silence(output),
+                                      self.max_drive_coherence)
         spec_trace = np.real(trace(self.specification))
         Y = np.einsum('fmn,fnk,flk->fml', H, output, H.conjugate())
         resp_trace = np.real(trace(Y))
@@ -387,8 +397,7 @@ class match_diagonal_congruence:
         scale[resp_trace <= 0] = 1.0
         output = output*scale[:, np.newaxis, np.newaxis]
         self.n_cycles = 0
-        return _cap_drive_coherence(self._floor_and_silence(output),
-                                    self.max_drive_coherence)
+        return output
 
     def _apply_ceiling(self, H, output, achieved=None, good=None, move=None):
         """The response may not exceed the target by more than ceiling_db.

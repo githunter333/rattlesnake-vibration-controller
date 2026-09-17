@@ -218,6 +218,14 @@ def pseudoinverse_control(specification, # Specifications
         A string containing any optional parameters the control law may need to
         use. It is up to the control law to parse this string to extract the
         required information that it needs.  The default is ''.
+        Format: 'rcond', 'rcond,max_drive_coherence', or
+        'rcond,max_drive_coherence,startup_test_level_cap_db' (shared with
+        match_trace_pseudoinverse and buzz_control -- see
+        _parse_match_trace_parameters). The third value caps only the very
+        first control command at startup_test_level_cap_db dB relative to
+        the specification (0 dB = full spec-match); it defaults to -9.0 dB
+        if omitted. Because this law is open loop the ceiling binds on that
+        first command only.
     last_response_cpsd : np.ndarray, optional
         The CPSD measured from the control channels during the vibration
         control.  Can be used to identify signal to noise ratio in the
@@ -254,12 +262,28 @@ def pseudoinverse_control(specification, # Specifications
     inspection 2026-09-17.
 
     """
-    rcond, max_drive_coherence = _parse_rcond_and_cap(extra_parameters)
+    rcond, max_drive_coherence, startup_test_level_cap_db = _parse_match_trace_parameters(extra_parameters)
     # Invert the transfer function using the pseudoinverse
     tf_pinv = np.linalg.pinv(transfer_function,rcond)
     # Return the least squares solution for the new output CPSD
     output = tf_pinv@specification@tf_pinv.conjugate().transpose(0,2,1)
     output = _cap_drive_coherence(output, max_drive_coherence)
+    # Startup ceiling (added 2026-09-17), the same guard match_trace_pseudo-
+    # inverse and buzz_control have carried since 2026-09-02: the very first
+    # command is a raw pseudoinverse solve off whatever FRF estimate exists
+    # so far, with nothing measured yet to check it against.  Goes LAST --
+    # see _apply_startup_level_cap.
+    #
+    # CAVEAT, and it is a real one: this law is OPEN LOOP, so the ceiling
+    # binds on the first command only and cycle 2 goes straight to the
+    # uncapped solve.  It is a guard on the one command issued before anyone
+    # has seen the rig respond, not a level limit for the run.  (Same
+    # limitation as buzz_control's; the match_trace family does not have it
+    # because its steady state converges on measured error.)
+    if last_output_cpsd is None:
+        output = _apply_startup_level_cap(output, specification,
+                                          transfer_function,
+                                          startup_test_level_cap_db)
     return output
 
 def _apply_startup_level_cap(output, specification, transfer_function,
@@ -280,7 +304,20 @@ def _apply_startup_level_cap(output, specification, transfer_function,
     drive produces far more response; scaling before that happens bounds the
     wrong quantity.
     """
-    spec_trace = np.real(trace(specification))
+    return _apply_startup_level_cap_from_trace(
+        output, np.real(trace(specification)), transfer_function,
+        startup_test_level_cap_db)
+
+
+def _apply_startup_level_cap_from_trace(output, spec_trace, transfer_function,
+                                        startup_test_level_cap_db):
+    """_apply_startup_level_cap for callers that hold the target as a per-line
+    trace (or a target DIAGONAL summed over channels) rather than a full CPSD
+    matrix -- optimal_diagonal_control and its _fast subclass keep only
+    y_diag_target.  Same ceiling, same must-be-last rule."""
+    if output is None or transfer_function is None:
+        return output
+    spec_trace = np.real(np.asarray(spec_trace))
     predicted_response = (transfer_function @ output
                           @ transfer_function.conjugate().transpose(0, 2, 1))
     output_trace = np.real(trace(predicted_response))

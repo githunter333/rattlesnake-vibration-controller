@@ -86,10 +86,48 @@ extra_parameters (string): comma-separated
                              two SDP-solved drive channels, so the optimizer
                              can't converge on totally dependent drives
                              (default 0.95; 1.0 disables the cap)
+    bm_rank               - read only by optimal_diagonal_control_fast; this
+                             class parses past it so a single parameter
+                             string works for both (default 4 there)
+    startup_test_level_cap_db
+                          - ceiling on the VERY FIRST control command, in dB
+                             relative to the specification's own trace
+                             (default -9.0; 0 dB = full spec-match). Added
+                             2026-09-17 to match every law in
+                             control_laws.py. The clamp is on the predicted
+                             response, trace(H X H^H), not on the drive, and
+                             it is applied to the RETURNED command only --
+                             the stored solution self.output_cpsd is left
+                             unscaled so the SDP refinement continues from
+                             the real solve.
+                             CAVEAT: this law is OPEN LOOP, so the ceiling
+                             binds on the first command only; cycle 2 returns
+                             the uncapped solution. It guards the one command
+                             issued before anyone has seen the rig respond,
+                             not the level of the run.
 A bare single value (no comma) is accepted too, read as `reg`.
 """
 
 import numpy as np
+
+# Rattlesnake loads a control-law file with importlib.spec_from_file_location,
+# i.e. as a standalone module with NO package context, so a relative import
+# raises ImportError and the law cannot be loaded at all.  (Same applies when
+# optimal_diagonal_control_fast.py loads THIS file that way.)  Fall back to an
+# explicit path import without touching sys.path -- putting control_laws/ on
+# the path would shadow the package of the same name for everything else.
+try:
+    from .control_laws import _apply_startup_level_cap_from_trace
+except ImportError:
+    import importlib.util as _ilu
+    import os as _os
+    _sib = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                         'control_laws.py')
+    _hspec = _ilu.spec_from_file_location('_rattlesnake_control_laws_helpers',
+                                          _sib)
+    _hmod = _ilu.module_from_spec(_hspec)
+    _hspec.loader.exec_module(_hmod)
+    _apply_startup_level_cap_from_trace = _hmod._apply_startup_level_cap_from_trace
 
 try:
     import cvxpy as cp
@@ -117,6 +155,13 @@ class optimal_diagonal_control:
                  multiple_coherence: np.ndarray = None,
                  frames=None,
                  total_frames=None,
+                 # ACCEPTED AND NEVER READ. This law is OPEN LOOP: it refines
+                 # each bin against its own PREDICTED response,
+                 # diag(H X H^H), not against the measured response. Nothing
+                 # in this class or optimal_diagonal_control_fast reads
+                 # last_response_cpsd or last_output_cpsd -- verified
+                 # 2026-09-17, they appear only in signatures. The only thing
+                 # that changes between calls is H.
                  last_response_cpsd: np.ndarray = None,
                  last_output_cpsd: np.ndarray = None,
                  ):
@@ -129,6 +174,7 @@ class optimal_diagonal_control:
         self.max_bins_per_update = 20
         self.error_threshold_db = 1.0
         self.max_drive_coherence = 0.95
+        self.startup_test_level_cap_db = -9.0
         if extra_parameters:
             try:
                 parts = [p.strip() for p in str(extra_parameters).split(',') if p.strip() != '']
@@ -137,6 +183,8 @@ class optimal_diagonal_control:
                 if len(parts) >= 3: self.max_bins_per_update = int(float(parts[2]))
                 if len(parts) >= 4: self.error_threshold_db = float(parts[3])
                 if len(parts) >= 5: self.max_drive_coherence = float(parts[4])
+                # parts[5] is bm_rank, read by optimal_diagonal_control_fast
+                if len(parts) >= 7: self.startup_test_level_cap_db = float(parts[6])
             except ValueError:
                 pass  # keep defaults if the string doesn't parse
 
@@ -476,7 +524,25 @@ class optimal_diagonal_control:
                 last_output_cpsd: np.ndarray = None) -> np.ndarray:
         if not self._initialized:
             self._initialize(transfer_function, None)
-            return self.output_cpsd
+            return self._startup_capped(self.output_cpsd, transfer_function,
+                                        last_output_cpsd)
         if transfer_function is not None:
             self._refine_batch(transfer_function)
-        return self.output_cpsd
+        return self._startup_capped(self.output_cpsd, transfer_function,
+                                    last_output_cpsd)
+
+    def _startup_capped(self, output, transfer_function, last_output_cpsd):
+        """Ceiling on the first command only -- see
+        startup_test_level_cap_db in this module's docstring.  Scales a COPY
+        on the way out; self.output_cpsd keeps the unscaled solve so the SDP
+        refinement is not dragged down with it.  Must be the last thing done
+        to the returned command (the drive-coherence cap is already inside
+        the solve here, as an SDP constraint, so nothing runs after this)."""
+        if last_output_cpsd is not None or output is None:
+            return output
+        H = transfer_function if transfer_function is not None else self.H_cache
+        if H is None:
+            return output
+        return _apply_startup_level_cap_from_trace(
+            output, np.sum(self.y_diag_target, axis=1), H,
+            self.startup_test_level_cap_db)
