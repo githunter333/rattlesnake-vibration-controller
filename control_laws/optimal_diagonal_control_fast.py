@@ -18,18 +18,41 @@ perfectly rank-deficient drives, which would make a live H1/H2 estimator's
 reference CPSD matrix singular. That's fine if nothing is re-estimating H
 live, but unsafe the moment it is.
 
-COUNTER-MEASUREMENT, 2026-09-17 (run 13, this 6-drive/8-control system, with
-"Update Transfer Function During Control" OFF so the fast path was eligible
-for the whole test): the saved drive CPSD showed median pairwise coherence
-0.407, 2.4% of pairs above 0.99 and 0.0% at exactly 1.0 -- the claim above
-did NOT reproduce here. Eigenvalue participation was 1.21 of 6, so the drive
-was concentrated but not rank-deficient. That run is confounded: its frozen
-FRF came from a weak system identification (minimum multiple coherence 0.492
-against 0.75-0.88 for the twelve-run comparison set) and it overshot by
-+14.79 dB, so "the solve behaves differently at this scale" and "the plant
-model was bad" are not yet separated. Treat the 1.0-coherence claim as
-established at 12 drives and UNVERIFIED at 6 until a run on a clean
-identification says otherwise.
+COUNTER-MEASUREMENT, 2026-09-17 (run 13, this 6-drive/8-control system): the
+saved drive CPSD showed median pairwise coherence 0.407, 2.4% of pairs above
+0.99 and 0.0% at exactly 1.0 -- the claim above did NOT reproduce. Eigenvalue
+participation was 1.21 of 6, so the drive was concentrated but not
+rank-deficient.
+
+Run 13 is still not admissible evidence, but for ONE reason, not two: its
+saved metadata reads control_python_function = pseudoinverse_control and
+update_tf_during_control = 1, so profile_13 was never loaded and whatever it
+measured is not this law.
+
+RETRACTED 2026-09-17, same day, and worth keeping as a caution about this
+metric. This paragraph previously also called run 13's system identification
+weak, "minimum multiple coherence 0.492 against 0.75-0.88 for the twelve-run
+comparison set". That comparison was invalid: 0.492 is run 13's CHANNEL-7
+minimum and 0.75-0.88 is the range of the OTHER channels' minima in the other
+runs. Control channel 7 sits between 0.28 and 0.54 in ALL THIRTEEN
+identifications taken on this system -- it is a property of the rig, not of
+any run. Scored consistently, run 13's identification was the BEST of the set
+(worst per-channel minimum 0.531; run 14's is 0.411, run 05's 0.284). Every
+run's identification has median coherence 0.998 and 5th percentile ~0.97.
+When judging a system ID here, use the median and the 5th percentile, or the
+per-channel minima compared like against like -- a bare minimum over all
+channels and lines is dominated by channel 7 at the band edge and says
+nothing about run quality.
+
+Treat the 1.0-coherence claim as established at 12 drives and UNVERIFIED at 6
+until run 14 lands.
+
+PREDICTED for run 14 by offline dry run on run 01's identification (this exact
+parameter string, law constructed the way Rattlesnake constructs it, frozen H):
+after 25 cycles and 500 refined bins, median pairwise coherence 0.501, 2.8% of
+pairs above 0.99, 0.0% at exactly 1.0, participation 1.09 of 6. Close to what
+run 13 showed, which is unexplained given run 13 ran a different law -- read
+nothing into the resemblance until run 14 is scored.
 
 THE SAFETY RULE (this is the important part): rather than trying to detect
 Rattlesnake's "Update Transfer Function During Control" checkbox directly

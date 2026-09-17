@@ -2,16 +2,34 @@ RUN 14 -- optimal_diagonal_control_fast with the FRF update OFF (redo of 13)
 ===============================================================================
 WHY THIS RUN IS BEING REPEATED
 -------------------------------------------------------------------------------
-Run 13 did not test what it was meant to test, for two independent reasons:
+Run 13 did not test what it was meant to test, for ONE reason:
 
-  1. The profile was not the one that ran. The saved file's metadata reads
-     control law = pseudoinverse_control, update_tf_during_control = 1 --
-     profile_13 was never loaded at the rig. Whatever run 13 measured, it is
-     not this law and not this setting.
-  2. Its system identification was weak. Minimum multiple coherence 0.492,
-     against 0.75-0.88 across the twelve-run comparison set. Even had the
-     right profile loaded, "the solve behaves differently here" and "the
-     plant model was bad" would not have been separable.
+  The profile was not the one that ran. The saved file's metadata reads
+  control law = pseudoinverse_control, update_tf_during_control = 1 --
+  profile_13 was never loaded at the rig. Whatever run 13 measured, it is not
+  this law and not this setting.
+
+CORRECTION, 2026-09-17: this sheet first gave a second reason -- "its system
+identification was weak, minimum multiple coherence 0.492 against 0.75-0.88
+across the comparison set". That was wrong, and wrong in an instructive way.
+0.492 was run 13's CHANNEL-7 minimum; 0.75-0.88 was the range of the OTHER
+channels' minima in the other runs. Two different statistics. Control channel
+7 sits between 0.28 and 0.54 in ALL THIRTEEN identifications taken on this
+system -- a property of the rig at the band edge, not of any one run. Scored
+like against like, run 13's identification was the BEST of the set:
+
+    run   worst per-channel min      run   worst per-channel min
+    01           0.491               08           0.538
+    02           0.359               09           0.506
+    03           0.351               11           0.323
+    04           0.481               12           0.411
+    05           0.284               13           0.531   <- best
+    06           0.370               14           0.411
+    07           0.428
+
+Every one of them has median coherence 0.998 and 5th percentile about 0.97.
+Run 13's data is inadmissible because the wrong law ran, not because the plant
+model was bad.
 
 profile_14 is byte-for-byte profile_13 (verified cell by cell, 0 differing
 rows). Nothing about the intended test changed -- only the code underneath it
@@ -82,10 +100,19 @@ AT THE RIG
       the GUI has reverted this to Linear between runs before)
   System ID Averages = 20,  System ID Level = 1.0 V RMS,  Estimator = H1
 
-  CHECK THE SYSTEM ID BEFORE CONTROLLING. This is the other half of what went
-  wrong in run 13. Minimum multiple coherence must be in the 0.75-0.88 band the
-  comparison set ran at. If it is near 0.5, re-run the identification -- do not
-  proceed, the run will not be interpretable.
+  CHECK THE SYSTEM ID BEFORE CONTROLLING -- but check the RIGHT statistic.
+  A bare minimum over all channels and lines is dominated by control channel 7
+  at the top of the band, which reads 0.28-0.54 on every identification this
+  system has ever produced, and tells you nothing. Use instead:
+
+      median multiple coherence          expect ~0.998
+      5th percentile                     expect ~0.97
+      lines with ANY channel below 0.75  expect 13-30 of 901
+      per-channel minima, channels 1-6   expect 0.82-0.91
+
+  Run 14's actual identification: median 0.998, 5th pct 0.971, 20 of 901 lines
+  below 0.75, per-channel minima [0.84 0.84 0.82 0.85 0.85 0.85 0.41 0.76].
+  Normal for this system. Accepted.
 
   The launch terminal must NOT print any line reading
       [optimal_diagonal_control_fast] FRF moved ... safe SDP path this call
@@ -148,7 +175,10 @@ down and check them against the rig; a large disagreement is itself a finding.
       -> run 13's saved drive showed median 0.407, 2.4 % above 0.99, 0.0 % at
          1.0, participation 1.21. Close to this prediction, which is odd given
          run 13's metadata says pseudoinverse_control ran. Do not read
-         anything into that resemblance until run 14 lands.
+         anything into that resemblance until run 14 lands. (Run 13 is
+         inadmissible because the wrong law ran -- NOT, as this sheet first
+         claimed, because its identification was weak. See the correction at
+         the top.)
 
 -------------------------------------------------------------------------------
 COMPARABILITY
