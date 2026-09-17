@@ -189,6 +189,13 @@ class optimal_diagonal_control:
                 pass  # keep defaults if the string doesn't parse
 
         self.output_cpsd = None    # (F, N, N) current best drive CPSD per bin
+        # Console throttling -- see _should_log.  Once every bin is solved and
+        # the FRF is frozen, _refine_batch does no work but still ran two print
+        # statements per control cycle, which on run 14 buried the terminal in
+        # hundreds of identical lines and read as a hung process.  (It was not
+        # hung: newly_refined=0, n_deferred=0, cum_sdp_refinements frozen.)
+        self._idle_repeats = 0
+        self._log_every_when_idle = 50
         self.H_cache = None        # (F, M, N) FRF each bin's current solution was derived from
         self.sdp_refined = None    # (F,) bool -- True once a bin has been through the SDP
         self.err_db_cache = None   # (F,) achieved dB error each bin had the last time it was solved --
@@ -395,7 +402,8 @@ class optimal_diagonal_control:
             num0 = np.linalg.norm((sub_new - sub_init).reshape(refined_idx.size, -1), axis=1)
             den0 = np.linalg.norm(sub_init.reshape(refined_idx.size, -1), axis=1) + 1e-30
             since_init_ratio = num0 / den0
-            print(f"[optimal_diagonal_control] H drift on refined bins: "
+            if self._idle_repeats < 3:
+              print(f"[optimal_diagonal_control] H drift on refined bins: "
                   f"since_last_solve[median={np.median(since_last_ratio):.4f}, max={np.max(since_last_ratio):.4f}], "
                   f"since_initial[median={np.median(since_init_ratio):.4f}, max={np.max(since_init_ratio):.4f}]",
                   flush=True)
@@ -486,6 +494,29 @@ class optimal_diagonal_control:
             self_rms_per_channel = np.sqrt(np.mean(err_db_all ** 2, axis=0))
         else:
             self_rms_per_channel = np.zeros(self.M)
+
+        # A call that solved nothing, deferred nothing and saw no FRF movement
+        # has nothing to report that the previous line did not already say.
+        # Log the first few, then one in every _log_every_when_idle, so the
+        # loop stays visibly alive without flooding.  Any real activity resets
+        # the counter and restores full logging immediately.
+        idle = (not H_changed and n_fix == 0 and n_refine == 0 and n_stale == 0
+                and self.n_deferred == 0 and self.n_stale_deferred == 0)
+        if idle:
+            self._idle_repeats += 1
+        else:
+            if self._idle_repeats > 0:
+                print(f"[optimal_diagonal_control] ...{self._idle_repeats} idle "
+                      f"call(s) suppressed; work resumed", flush=True)
+            self._idle_repeats = 0
+        if idle and self._idle_repeats == 4:
+            print(f"[optimal_diagonal_control] every bin solved and the FRF is "
+                  f"static -- nothing left to do. Logging one call in "
+                  f"{self._log_every_when_idle} from here. THIS IS NOT A HANG.",
+                  flush=True)
+        if (idle and self._idle_repeats > 3
+                and self._idle_repeats % self._log_every_when_idle != 0):
+            return
 
         print(f"[optimal_diagonal_control] _refine_batch call #{self._n_calls}: "
               f"H_changed_since_last={H_changed}, drifted_resolved={n_fix}, "
