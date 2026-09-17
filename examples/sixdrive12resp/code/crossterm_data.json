@@ -84,7 +84,7 @@
   {
    "run": "run03",
    "law": "opt diagonal",
-   "loop": "feedback",
+   "loop": "open",
    "cap": "on",
    "part": 1.4710695878833402,
    "resp_med": 0.854507200074746,
@@ -96,7 +96,7 @@
   {
    "run": "run05",
    "law": "opt diag fast",
-   "loop": "feedback",
+   "loop": "open",
    "cap": "on",
    "part": 1.4934191740734089,
    "resp_med": 0.8565268207049157,
@@ -120,7 +120,7 @@
   {
    "run": "run04",
    "law": "opt diagonal",
-   "loop": "feedback",
+   "loop": "open",
    "cap": "off",
    "part": 1.4224168989977117,
    "resp_med": 0.8730257447715171,
@@ -132,7 +132,7 @@
   {
    "run": "run06",
    "law": "opt diag fast",
-   "loop": "feedback",
+   "loop": "open",
    "cap": "off",
    "part": 1.4454492986326393,
    "resp_med": 0.8828684192517704,

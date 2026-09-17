@@ -40,7 +40,8 @@
   "level": 0.0890410252171763,
   "cond": 6975.7680106959315,
   "min_mult_coh": 0.8382225757449402,
-  "stream_bytes": 104639406
+  "stream_bytes": 104639406,
+  "cap_mode": "post-process"
  },
  {
   "run": "run02",
@@ -83,13 +84,14 @@
   "level": 0.052420767189307854,
   "cond": 25927.74338055623,
   "min_mult_coh": 0.274960494895463,
-  "stream_bytes": 89799126
+  "stream_bytes": 89799126,
+  "cap_mode": "post-process"
  },
  {
   "run": "run03",
   "law": "optimal_diagonal",
   "law_full": "optimal_diagonal_control",
-  "loop": "feedback",
+  "loop": "open",
   "cap": "0.95",
   "params": "1e-6,0.05,20,1.0,0.95",
   "rms": 5.6235846918483325,
@@ -126,13 +128,14 @@
   "level": 0.07907889417417285,
   "cond": 3567.272401446749,
   "min_mult_coh": 0.8358799490075673,
-  "stream_bytes": 185102838
+  "stream_bytes": 185102838,
+  "cap_mode": "in-solve"
  },
  {
   "run": "run04",
   "law": "optimal_diagonal",
   "law_full": "optimal_diagonal_control",
-  "loop": "feedback",
+  "loop": "open",
   "cap": "off",
   "params": "1e-6,0.05,20,1.0,1.0",
   "rms": 5.6158448218002155,
@@ -169,13 +172,14 @@
   "level": 0.40906552727331785,
   "cond": 2492.6026053769488,
   "min_mult_coh": 0.8428210090095372,
-  "stream_bytes": 195450294
+  "stream_bytes": 195450294,
+  "cap_mode": "in-solve"
  },
  {
   "run": "run05",
   "law": "optimal_diagonal_fast",
   "law_full": "optimal_diagonal_control_fast",
-  "loop": "feedback",
+  "loop": "open",
   "cap": "0.95",
   "params": "1e-6,0.05,20,1.0,0.95,6",
   "rms": 5.640049706897121,
@@ -212,13 +216,14 @@
   "level": 0.2640149055988865,
   "cond": 3456.9639800428217,
   "min_mult_coh": 0.8545846579871538,
-  "stream_bytes": 220448718
+  "stream_bytes": 220448718,
+  "cap_mode": "in-solve"
  },
  {
   "run": "run06",
   "law": "optimal_diagonal_fast",
   "law_full": "optimal_diagonal_control_fast",
-  "loop": "feedback",
+  "loop": "open",
   "cap": "off",
   "params": "1e-6,0.05,20,1.0,1.0,6",
   "rms": 5.663777140566623,
@@ -255,7 +260,8 @@
   "level": 0.05531536703457529,
   "cond": 2447.3574780006356,
   "min_mult_coh": 0.75098522536325,
-  "stream_bytes": 222402006
+  "stream_bytes": 222402006,
+  "cap_mode": "in-solve"
  },
  {
   "run": "run07",
@@ -298,7 +304,8 @@
   "level": 2.8506001683046573,
   "cond": 3353.941845395885,
   "min_mult_coh": 0.881580929577208,
-  "stream_bytes": 247786902
+  "stream_bytes": 247786902,
+  "cap_mode": "post-process"
  },
  {
   "run": "run08",
@@ -341,7 +348,8 @@
   "level": 2.784896451436831,
   "cond": 8675.980318975622,
   "min_mult_coh": 0.8406609904660777,
-  "stream_bytes": 309695406
+  "stream_bytes": 309695406,
+  "cap_mode": "post-process"
  },
  {
   "run": "run09",
@@ -384,7 +392,8 @@
   "level": 13.554482078965233,
   "cond": 5543.36623152914,
   "min_mult_coh": 0.5464364806289724,
-  "stream_bytes": 149754342
+  "stream_bytes": 149754342,
+  "cap_mode": "post-process"
  },
  {
   "run": "run10",
@@ -427,7 +436,8 @@
   "level": -1.278926771079412,
   "cond": 9849.65631022155,
   "min_mult_coh": 0.5251983321859631,
-  "stream_bytes": 126122958
+  "stream_bytes": 126122958,
+  "cap_mode": "post-process"
  },
  {
   "run": "run11",
@@ -470,7 +480,8 @@
   "level": 9.377701007862804,
   "cond": 4731.409811337709,
   "min_mult_coh": 0.7892186169113184,
-  "stream_bytes": 85111758
+  "stream_bytes": 85111758,
+  "cap_mode": "post-process"
  },
  {
   "run": "run12",
@@ -513,6 +524,7 @@
   "level": -0.29711956512677207,
   "cond": 7958.381297231735,
   "min_mult_coh": 0.835829927264294,
-  "stream_bytes": 96631710
+  "stream_bytes": 96631710,
+  "cap_mode": "post-process"
  }
 ]

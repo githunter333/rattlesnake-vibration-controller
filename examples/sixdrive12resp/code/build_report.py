@@ -261,12 +261,12 @@ how far that best-achievable response itself sits from the specification.
 in-control FRF re-identification — a measure of how trustworthy that run's own
 plant model was.</p>
 
-<h2>4. The coherence cap inverts by family</h2>
+<h2>4. What the coherence cap costs, and why</h2>
 
 {img('cap_effect.png',
-     'Each law at cap 0.95 (hollow) and cap off (solid). Colour is loop type. '
-     'The open-loop laws gain 2.0 and 3.5 dB from removing the cap; three of '
-     'the four feedback laws move by 0.08 dB or less.')}
+     'Each law at cap 0.95 (hollow) and cap off (solid). The spread is not '
+     'explained by loop type — it is explained by where the cap is applied and '
+     'how much authority the law has to recover afterward.')}
 
 <div class="tw"><table>
 <thead><tr><th>Law</th><th>Loop</th><th>rms cap on</th><th>rms cap off</th>
@@ -276,40 +276,91 @@ plant model was.</p>
 {cap_rows()}
 </tbody></table></div>
 
-<p>The mechanism is visible in the drive solution. Both open-loop laws produce
-a strongly rank-concentrated drive — eigenvalue participation ratio 1.0–1.1 out
-of 6 — so the six shakers act as essentially one source and the responses
-cancel by precise inter-drive phasing.
-<span class="mono">_cap_drive_coherence</span> shrinks the off-diagonal terms
-while preserving the diagonal, which breaks that cancellation: the drive power
-is barely changed, but the responses now add incoherently and the level jumps.
-Run 09 sat <strong>+13.55&nbsp;dB</strong> above specification and run 11
-<strong>+9.38&nbsp;dB</strong>; uncapped, the same laws land at −1.28 and
-−0.30&nbsp;dB.</p>
+<div class="note"><strong>Correction, 2026-09-17</strong>
+An earlier version of this section attributed the split to loop type — feedback
+laws tolerate the cap, open-loop laws do not. <strong>That was wrong.</strong>
+<span class="mono">optimal_diagonal_control</span> and its fast subclass never
+read <span class="mono">last_response_cpsd</span>: they refine each bin against
+their own <em>predicted</em> response and are open-loop, yet the cap costs them
+nothing. Only <span class="mono">match_trace_pseudoinverse</span> and
+<span class="mono">match_diagonal_congruence</span> close a loop at all. The
+explanation below replaces it.</div>
 
-<p>A feedback law survives the same treatment because its loop re-converges
-around the cap as a constraint. An open-loop law has nothing to re-converge
-with, so the cap is pure damage. The residual is <em>shape</em> error, not
-level error: the best possible single rescale of run 09's whole drive improves
-it from 10.47 to only 10.17&nbsp;dB.</p>
+<p><strong>Where the cap is applied is what matters.</strong> The
+optimal-diagonal laws solve <em>subject to</em> the cap — it is a cvxpy
+constraint inside the SDP
+(<span class="mono">optimal_diagonal_control.py:248</span>,
+<span class="mono">cp.abs(X[i,j]) &lt;= max_drive_coherence·√(X_ii·X_jj)</span>),
+so whatever they return is already optimal given the constraint and there is
+nothing to lose. Every other law calls
+<span class="mono">_cap_drive_coherence</span> on an
+<em>already-computed</em> solve, which is a different and much more damaging
+operation.</p>
+
+<p><strong>How much the post-process costs then depends on what the law can do
+about it.</strong> The pseudoinverse-family solves are strongly
+rank-concentrated — eigenvalue participation 1.0–1.1 out of 6 — so the six
+shakers act as essentially one source and the responses cancel by precise
+inter-drive phasing. That phasing lives entirely in the off-diagonal terms.
+<span class="mono">_cap_drive_coherence</span> shrinks them while preserving
+the diagonal, so drive power barely changes but the cancellation is destroyed
+and the responses add incoherently. What happens next is the whole story:</p>
+
+<div class="tw"><table>
+<thead><tr><th>Law</th><th>Cap applied</th><th>Correction authority after it</th><th>Δ from cap off</th></tr></thead>
+<tbody>
+<tr><td class="mono">optimal_diagonal_control</td><td>SDP constraint</td><td>— (already optimal under it)</td><td class="num">−0.01</td></tr>
+<tr><td class="mono">optimal_diagonal_control_fast</td><td>SDP constraint</td><td>— (already optimal under it)</td><td class="num">+0.02</td></tr>
+<tr><td class="mono">match_diagonal_congruence</td><td>post-process</td><td>per-drive log error, re-converges</td><td class="num">−0.08</td></tr>
+<tr><td class="mono">match_trace_pseudoinverse</td><td>post-process</td><td>one scalar — level only</td><td class="num">−1.01</td></tr>
+<tr><td class="mono">buzz_control</td><td>post-process</td><td>none</td><td class="num">−1.99</td></tr>
+<tr><td class="mono">pseudoinverse_control</td><td>post-process</td><td>none</td><td class="num">−3.47</td></tr>
+</tbody></table></div>
+
+<p>Congruence corrects per drive and re-converges around the damage, so it
+barely notices. match_trace can only rescale the whole matrix, which cannot
+undo a shape change, so it loses a full dB. The two laws with no error
+feedback at all cannot recover anything, and pay 2.0 and 3.5&nbsp;dB. The
+residual is <em>shape</em> error, not level: the best possible single rescale
+of run 09's whole drive improves it from 10.47 to only 10.17&nbsp;dB — which
+is precisely why match_trace's scalar is not enough.</p>
+
+<p>The level offsets make it starker than rms does. Run 09 sat
+<strong>+13.55&nbsp;dB</strong> above specification with the cap on and
+−1.28&nbsp;dB with it off; run 11 went from +9.38 to −0.30&nbsp;dB.</p>
 
 <div class="note"><strong>Operational consequence</strong>
 For <span class="mono">pseudoinverse_control</span> and
 <span class="mono">buzz_control</span>, cap off (1.0) is the correct setting,
-not the reckless one. This is the reverse of the feedback-law intuition, and
-nothing in the parameter name or the docstring warns of it.</div>
+not the reckless one — and for the optimal-diagonal laws the cap is close to
+free, so leave it on. Nothing in the parameter name or the docstrings conveys
+either fact.</div>
 
-<h2>5. Feedback buys less than expected</h2>
+<h2>5. Only two of the six laws close a loop at all</h2>
 
 {img('rms_vs_pout.png',
      'The two acceptance criteria against each other, marker area proportional '
      'to log drive power. Hollow markers are cap-on runs. At their correct cap '
      'setting the open-loop laws sit inside the feedback cluster.')}
 
-<p><span class="mono">buzz_control</span> at 5.91&nbsp;dB / 13.6&nbsp;% finishes
+<p>Reading the six laws for what they actually do with
+<span class="mono">last_response_cpsd</span> gives a different census than this
+report carried until 2026-09-17. <strong>Only
+<span class="mono">match_trace_pseudoinverse</span> and
+<span class="mono">match_diagonal_congruence</span> read it.</strong>
+<span class="mono">optimal_diagonal_control</span> and its fast subclass accept
+it and never reference it — they refine each bin against
+<span class="mono">diag(H X H<sup>H</sup>)</span>, their own prediction, so
+they adapt to a changing plant model rather than to their own error. Four of
+six laws are open-loop.</p>
+
+<p>That makes the original observation stronger rather than weaker: the top of
+the table is now almost entirely open-loop.
+<span class="mono">buzz_control</span> at 5.91&nbsp;dB / 13.6&nbsp;% finishes
 0.68&nbsp;dB behind the best run in the matrix and ahead of both
-<span class="mono">match_trace_pseudoinverse</span> runs — with no error
-feedback whatsoever. Tracing the code confirms it:
+<span class="mono">match_trace_pseudoinverse</span> runs, and the
+optimal-diagonal family at 5.62–5.66&nbsp;dB is open-loop too. Tracing the code
+confirms it:
 <span class="mono">last_response_cpsd</span> appears in the signature and the
 docstring and never in the body; <span class="mono">last_output_cpsd</span> is
 read only as a first-call sentinel for the startup clamp. The law recomputes
@@ -324,8 +375,10 @@ to its own error, which is why runs 11 and 12 sat at a steady offset instead of
 converging toward 0&nbsp;dB.</p>
 
 <p>The reading this supports: on this plant the 5.2–5.9&nbsp;dB cluster is set
-by reachability and identification quality, not by loop design. What separates
-the laws is how sensibly they choose a target inside the reachable set.
+by reachability and identification quality, not by loop design — and with four
+of the six laws open-loop, there was never much loop design in it to begin
+with. What separates the laws is how sensibly they choose a target inside the
+reachable set.
 <span class="mono">buzz_control</span>'s substitution of measured coherence and
 phase for the specification's unreachable diagonal is worth 1.1&nbsp;dB and a
 third of the drive against <span class="mono">pseudoinverse_control</span>,

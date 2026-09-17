@@ -50,7 +50,21 @@ SHORT = {'match_trace_pseudoinverse': 'match_trace',
          'optimal_diagonal_control_fast': 'optimal_diagonal_fast',
          'match_diagonal_congruence': 'congruence',
          'pseudoinverse_control': 'pseudoinverse', 'buzz_control': 'buzz'}
-OPEN_LOOP = {'pseudoinverse_control', 'buzz_control'}
+# Laws with NO error feedback: none of these reads last_response_cpsd.
+# optimal_diagonal_control and its fast subclass were misclassified as
+# feedback laws until 2026-09-17 -- they refine each bin against their own
+# PREDICTED response, diag(H X H^H), never against the measured one, so only
+# match_trace_pseudoinverse (trace ratio) and match_diagonal_congruence
+# (per-drive log error) actually close a loop.
+OPEN_LOOP = {'pseudoinverse_control', 'buzz_control',
+             'optimal_diagonal_control', 'optimal_diagonal_control_fast'}
+
+# How each law applies the drive-coherence cap. This, not the loop type, is
+# what predicts whether the cap costs anything: the optimal-diagonal laws
+# solve SUBJECT TO it as an SDP constraint (optimal_diagonal_control.py:248),
+# every other law post-processes it onto an already-computed solve via
+# _cap_drive_coherence.
+CAP_IN_SOLVE = {'optimal_diagonal_control', 'optimal_diagonal_control_fast'}
 
 _s = importlib.util.spec_from_file_location(
     'ar', '../../../control_laws/achievable_response.py')
@@ -124,6 +138,7 @@ def one(path):
     return dict(
         run=os.path.basename(path)[:5], law=SHORT[law], law_full=law,
         loop='open' if law in OPEN_LOOP else 'feedback',
+        cap_mode='in-solve' if law in CAP_IN_SOLVE else 'post-process',
         cap='off' if cap >= 1.0 else f'{cap:g}', params=','.join(par),
         rms=flat['rms'], pout=flat['pout'], mean_db=flat['mean_db'],
         reach_rms=reach['rms'], reach_pout=reach['pout'],
