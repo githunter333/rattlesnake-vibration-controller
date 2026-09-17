@@ -33,22 +33,34 @@ identification says otherwise.
 
 THE SAFETY RULE (this is the important part): rather than trying to detect
 Rattlesnake's "Update Transfer Function During Control" checkbox directly
-(system_id_update()/control()'s signatures don't expose it), this watches
-the actual safety-relevant property instead -- has H changed since the
-last call? If H is bit-for-bit identical to last time, nothing is
-re-estimating it live THIS call, so the fast unconstrained path is safe.
-The moment H changes at all, every solve for the rest of that call (and
-any future call where H keeps changing) uses the real coherence-capped SDP
-instead, via super()._solve_one_bin(). This degrades gracefully: a run
-that starts static and has TF-update enabled mid-test correctly downgrades
-to the safe path the instant that happens, rather than trusting a stale
-assumption from init time. Under "TF-update off" (H set once at
-system_id_update() and never re-passed -- control() only calls
-_refine_batch when given a non-None transfer_function, per the base
-class), EVERY solve for the whole test uses the fast path. Under
-"TF-update on", this behaves identically to the base optimal_diagonal_
-control (falls straight to the SDP) -- no accuracy or safety regression
-in that regime, purely a speed win in the regime where it's safe.
+(control()'s signature doesn't expose it), this watches the actual
+safety-relevant property instead -- has H MOVED since the last call, by
+more than frf_update_threshold in relative Frobenius norm? If it has not,
+nothing is meaningfully re-estimating it right now and the fast
+unconstrained path is safe. The moment it has, every solve for the rest of
+that call uses the real coherence-capped SDP instead, via
+super()._solve_one_bin(). This degrades gracefully: a run that starts
+static and has TF-update enabled mid-test downgrades to the safe path as
+soon as the plant model actually moves, rather than trusting a stale
+assumption from init time. See _h_moved().
+
+REVISED 2026-09-17, and the previous version of this paragraph was wrong
+in a way worth recording. The gate used to be `not np.array_equal(H,
+H_cache)` -- ANY bitwise difference -- and this docstring claimed that with
+TF-update off "H [is] set once at system_id_update() and never re-passed".
+That is not what Rattlesnake does: random_vibration_sys_id_data_analysis.py
+:431-475 passes a transfer_function to control() EVERY cycle in both
+regimes, and system_id_update() is never called during control at all
+(:190, only from perform_control_prediction). With the update off the array
+happens to be the same frozen sysid_frf each time, so array_equal held and
+the fast path ran -- the right outcome by the wrong mechanism. With the
+update ON the environment republishes an incrementally-averaged FRF every
+cycle (:390-394), so H was never bit-identical, EVERY bin fell through to
+the SDP, and this law was byte-for-byte the base class. It was only ever
+fast in the configuration it was least needed in, and any comparison of
+"fast" against "optimal diagonal" with the update on was a law against
+itself. A relative-change threshold fixes that; frf_update_threshold = 0
+restores the old any-change behaviour.
 
 extra_parameters: same values as optimal_diagonal_control -- the 6th is
 this subclass's own, the 7th is parsed by the base class, so ONE string
@@ -131,10 +143,47 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         # class, which doesn't expose it) so _solve_one_bin knows, this
         # call, whether it's safe to use the fast unconstrained path.
         H_clean = np.nan_to_num(transfer_function, nan=0.0, posinf=0.0, neginf=0.0)
-        self._h_changed_this_call = (
-            self.H_cache is None or not np.array_equal(H_clean, self.H_cache)
-        )
+        self._h_changed_this_call = self._h_moved(H_clean)
         super()._refine_batch(transfer_function)
+
+    def _h_moved(self, H_clean):
+        """Has the FRF moved enough to make the unconstrained fast path
+        unsafe?
+
+        CHANGED 2026-09-17.  This used to be `not np.array_equal(H_clean,
+        self.H_cache)` -- ANY difference at all, down to the last bit.  That
+        reads as the conservative choice and is in fact a silent failure:
+        with "Update Transfer Function During Control" on, the environment
+        republishes an incrementally-averaged FRF every single cycle
+        (random_vibration_sys_id_data_analysis.py:390-394), so H is never
+        bit-identical, every bin falls through to the SDP, and
+        optimal_diagonal_control_fast is byte-for-byte the base class.  The
+        law was only ever fast with FRF update OFF -- the configuration it
+        was least needed in -- and a run comparing "fast" against "optimal
+        diagonal" with the update on was comparing a law against itself.
+
+        The threshold is frf_update_threshold, the SAME relative-change
+        metric the base class already uses to decide which refined bins are
+        stale enough to re-solve (optimal_diagonal_control.py's `drifted`
+        selection).  So the fast path survives ordinary averaging jitter and
+        a genuinely moving plant still demotes every bin to the coherence-
+        capped SDP, which is what the gate exists for.  Setting
+        frf_update_threshold to 0 restores the old any-change behaviour.
+        """
+        if self.H_cache is None:
+            return True
+        baseline = np.linalg.norm(self.H_cache.reshape(-1))
+        if not np.isfinite(baseline) or baseline <= 0:
+            return True
+        delta = np.linalg.norm((H_clean - self.H_cache).reshape(-1))
+        if not np.isfinite(delta):
+            return True
+        moved = (delta/baseline) > self.frf_update_threshold
+        if moved:
+            print(f"[optimal_diagonal_control_fast] FRF moved "
+                  f"{delta/baseline:.4f} > {self.frf_update_threshold:g} -- "
+                  f"safe SDP path this call", flush=True)
+        return moved
 
     # ------------------------------------------------------------------
     # Unconstrained Burer-Monteiro factored solve: X = L L^H, L is N x r.

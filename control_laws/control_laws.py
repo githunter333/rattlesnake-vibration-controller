@@ -138,6 +138,101 @@ def _parse_match_trace_parameters(extra_parameters, default_startup_test_level_c
         startup_cap_db = default_startup_test_level_cap_db
     return rcond, max_drive_coherence, startup_cap_db
 
+
+def _apply_running_ceiling(output, specification, transfer_function,
+                           last_output_cpsd, last_response_cpsd,
+                           running_ceiling_db):
+    """Per-cycle ceiling for the laws with no error feedback.  Bounds the
+    response to running_ceiling_db dB above the specification's own trace,
+    using the MORE RESTRICTIVE of two estimates, and never raises a line.
+
+      model-predicted  -- tr(H X H^H), the same quantity the startup cap uses.
+      measured-anchored -- tr(last_response_cpsd) * (predicted new / predicted
+          previous).  The ABSOLUTE level comes from the measurement; only the
+          ratio between this command and the last one is taken from the model.
+
+    THE SECOND ESTIMATE IS THE ONE THAT MATTERS, and the reason is worth
+    stating plainly.  A purely model-based ceiling is computed with the same
+    transfer function the law just used to build the drive, so it is blind in
+    exactly the direction that hurts: if the FRF UNDERSTATES the plant, the law
+    commands too much drive AND the ceiling agrees that the response will be
+    fine.  Measured on run 01's identification with a ceiling of +3.0 dB and an
+    FRF understating the plant by 12 dB, both pseudoinverse_control and
+    buzz_control sailed to +14.3 dB of true response with the model ceiling
+    engaged and reporting no problem.  Anchoring on tr(last_response_cpsd)
+    closes that: the level is then whatever the rig actually did.
+
+    Reading last_response_cpsd here does NOT make these laws closed loop.  It
+    is used only to scale DOWN; nothing here can raise a command, and the
+    control solve itself still never sees the measured response.
+
+    Ordering: must be the last thing applied, for the same reason as
+    _apply_startup_level_cap.
+    """
+    if transfer_function is None:
+        return output
+    spec_trace = np.real(trace(specification))
+    with np.errstate(over='ignore'):
+        max_power_ratio = 10.0**(np.float64(running_ceiling_db)/10.0)
+    limit = max_power_ratio*spec_trace
+
+    predicted_new = _predicted_response_trace(transfer_function, output)
+    with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+        scale = np.minimum(1.0, limit/predicted_new)
+    scale[~np.isfinite(scale)] = 1.0
+    scale[predicted_new <= 0] = 1.0
+
+    if last_response_cpsd is not None and last_output_cpsd is not None:
+        measured_prev = np.real(trace(last_response_cpsd))
+        predicted_prev = _predicted_response_trace(transfer_function,
+                                                   last_output_cpsd)
+        with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+            estimated = measured_prev*(predicted_new/predicted_prev)
+            scale_measured = np.minimum(1.0, limit/estimated)
+        usable = (np.isfinite(scale_measured) & (measured_prev > 0)
+                  & (predicted_prev > 0) & (predicted_new > 0))
+        scale = np.where(usable, np.minimum(scale, scale_measured), scale)
+
+    scale = np.where(spec_trace > 0, scale, 1.0)
+    return output*scale[:, np.newaxis, np.newaxis]
+
+
+def _parse_open_loop_parameters(extra_parameters,
+                                default_startup_test_level_cap_db=-9.0,
+                                default_running_ceiling_db=3.0):
+    """_parse_match_trace_parameters plus a 4th value, running_ceiling_db, for
+    the laws that have no error feedback:
+    'rcond,max_drive_coherence,startup_test_level_cap_db,running_ceiling_db'.
+
+    WHY THE OPEN-LOOP LAWS NEED A FOURTH NUMBER (2026-09-17).  The startup cap
+    is gated on last_output_cpsd is None and so binds on the first command
+    only.  For a law with error feedback that is enough: the steady state is a
+    correction on the MEASURED response, so a wrong FRF costs convergence, not
+    level.  pseudoinverse_control and buzz_control have no such branch -- every
+    cycle is pinv(H) @ target @ pinv(H)^H recomputed from scratch, so the drive
+    level is a direct function of whatever H arrives.  With "Update Transfer
+    Function During Control" on, a bad FRF estimate is an immediate,
+    unbounded level change with nothing in the law to stop it.
+
+    running_ceiling_db bounds the predicted response trace on EVERY cycle, in
+    dB relative to the specification's own trace.  It defaults to +3.0 -- a
+    real limit but a loose one, above the 0 dB these laws aim at, so it does
+    not interfere with normal operation and only engages when the model has
+    gone wrong.  Set it very large (e.g. 1e6) to disable.  The startup cap
+    still governs the first command, where it is the stricter of the two.
+    """
+    rcond, max_drive_coherence, startup_cap_db = _parse_match_trace_parameters(
+        extra_parameters, default_startup_test_level_cap_db)
+    parts = extra_parameters.split(',') if extra_parameters else []
+    try:
+        running_ceiling_db = (float(parts[3])
+                              if len(parts) >= 4 and parts[3].strip() != ''
+                              else default_running_ceiling_db)
+    except ValueError:
+        running_ceiling_db = default_running_ceiling_db
+    return rcond, max_drive_coherence, startup_cap_db, running_ceiling_db
+
+
 def pseudoinverse_control(specification, # Specifications
                           warning_levels, # Warning levels
                           abort_levels, # Abort Levels
@@ -218,14 +313,15 @@ def pseudoinverse_control(specification, # Specifications
         A string containing any optional parameters the control law may need to
         use. It is up to the control law to parse this string to extract the
         required information that it needs.  The default is ''.
-        Format: 'rcond', 'rcond,max_drive_coherence', or
-        'rcond,max_drive_coherence,startup_test_level_cap_db' (shared with
-        match_trace_pseudoinverse and buzz_control -- see
-        _parse_match_trace_parameters). The third value caps only the very
+        Format: 'rcond', 'rcond,max_drive_coherence',
+        'rcond,max_drive_coherence,startup_test_level_cap_db', or
+        'rcond,max_drive_coherence,startup_test_level_cap_db,running_ceiling_db'
+        -- see _parse_open_loop_parameters. The third value caps the very
         first control command at startup_test_level_cap_db dB relative to
-        the specification (0 dB = full spec-match); it defaults to -9.0 dB
-        if omitted. Because this law is open loop the ceiling binds on that
-        first command only.
+        the specification (0 dB = full spec-match), default -9.0; the fourth
+        caps EVERY LATER command at running_ceiling_db dB, default +3.0,
+        which is what bounds this open-loop law when the FRF is being
+        updated during control.
     last_response_cpsd : np.ndarray, optional
         The CPSD measured from the control channels during the vibration
         control.  Can be used to identify signal to noise ratio in the
@@ -262,7 +358,8 @@ def pseudoinverse_control(specification, # Specifications
     inspection 2026-09-17.
 
     """
-    rcond, max_drive_coherence, startup_test_level_cap_db = _parse_match_trace_parameters(extra_parameters)
+    (rcond, max_drive_coherence, startup_test_level_cap_db,
+     running_ceiling_db) = _parse_open_loop_parameters(extra_parameters)
     # Invert the transfer function using the pseudoinverse
     tf_pinv = np.linalg.pinv(transfer_function,rcond)
     # Return the least squares solution for the new output CPSD
@@ -280,10 +377,20 @@ def pseudoinverse_control(specification, # Specifications
     # has seen the rig respond, not a level limit for the run.  (Same
     # limitation as buzz_control's; the match_trace family does not have it
     # because its steady state converges on measured error.)
+    #
+    # RUNNING CEILING (2026-09-17): the startup cap governs the first command;
+    # running_ceiling_db governs every command after it.  This law is open
+    # loop, so with the FRF being updated live its drive level follows H
+    # directly and nothing else bounds it -- see _parse_open_loop_parameters.
     if last_output_cpsd is None:
         output = _apply_startup_level_cap(output, specification,
                                           transfer_function,
                                           startup_test_level_cap_db)
+    else:
+        output = _apply_running_ceiling(output, specification,
+                                        transfer_function, last_output_cpsd,
+                                        last_response_cpsd,
+                                        running_ceiling_db)
     return output
 
 def _apply_startup_level_cap(output, specification, transfer_function,
@@ -321,11 +428,80 @@ def _apply_startup_level_cap_from_trace(output, spec_trace, transfer_function,
     predicted_response = (transfer_function @ output
                           @ transfer_function.conjugate().transpose(0, 2, 1))
     output_trace = np.real(trace(predicted_response))
-    max_power_ratio = 10.0**(startup_test_level_cap_db/10.0)
-    with np.errstate(divide='ignore', invalid='ignore'):
+    # np.float64 rather than the Python float: a deliberately huge ceiling
+    # (the documented way to disable one, e.g. 1e6 dB) overflows Python's
+    # float pow with OverflowError, where numpy gives +inf and the
+    # np.minimum below then correctly leaves every line unscaled.
+    with np.errstate(over='ignore'):
+        max_power_ratio = 10.0**(np.float64(startup_test_level_cap_db)/10.0)
+    with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
         scale = np.minimum(1.0, max_power_ratio*spec_trace/output_trace)
     scale[~np.isfinite(scale)] = 1.0
     scale[output_trace <= 0] = 1.0
+    return output*scale[:, np.newaxis, np.newaxis]
+
+
+def _predicted_response_trace(transfer_function, cpsd):
+    """Per-frequency-line trace of the response a drive CPSD is predicted to
+    produce through transfer_function: real(tr(H X H^H))."""
+    return np.real(trace(transfer_function@cpsd
+                         @transfer_function.conjugate().transpose(0, 2, 1)))
+
+
+def _refresh_drive_shape(specification, transfer_function, rcond):
+    """The drive SHAPE the CURRENT transfer function calls for -- the raw
+    pseudoinverse solve, with no level meaning attached.  The caller caps it
+    and then sets its level explicitly with _set_predicted_response_trace.
+
+    Why this exists (2026-09-17).  match_trace_pseudoinverse and
+    match_trace_pseudoinverse_pi update the drive as a per-frequency-line real
+    scalar on the previous command: output = last_output_cpsd * correction.
+    The transfer function therefore entered ONCE, in the startup pseudoinverse,
+    and never again -- so "Update Transfer Function During Control" was a
+    complete no-op for both laws.  They tracked LEVEL against a re-estimated
+    plant while holding a drive SHAPE synthesized from the plant as it looked
+    before the test started.
+
+    NOT used by match_trace_pi_resolve or match_trace_resolve, whose phase-1
+    level-only hold is deliberate and whose phase 2 re-solves against the live
+    H already.
+    """
+    if transfer_function is None:
+        return None
+    tf_pinv = np.linalg.pinv(transfer_function, rcond)
+    return tf_pinv@specification@tf_pinv.conjugate().transpose(0, 2, 1)
+
+
+def _set_predicted_response_trace(output, transfer_function, target_trace):
+    """Scale each frequency line of `output` so its predicted response trace
+    equals `target_trace`.  MUST run after the coherence cap, not before.
+
+    This is what makes a refreshed drive shape safe to substitute for the
+    previous command.  The obvious implementation -- rescale the new shape to
+    the old command's level, then cap -- looks equivalent and is not:
+    _cap_drive_coherence re-projects onto the PSD cone after shrinking cross
+    terms, which moves the level by an amount that depends on the bin's
+    conditioning, and is not idempotent.  Inheriting a level through it and
+    then capping again compounds that shift every cycle.  Measured on run 01's
+    identification with the cap at 0.95, one ill-conditioned line (bin 134)
+    went +0.33 dB at cycle 5 and +28.44 dB at cycle 6, dragging the aggregate
+    to +2.49 dB on a law that had been sitting at +0.0001 dB.
+
+    Setting the level from the FINAL array removes the question entirely.  It
+    also makes the constant-FRF identity exact rather than approximate: with H
+    unchanged the capped solve is the same array every cycle, so the scale
+    recovered here reproduces last_output_cpsd*correction to the bit.
+
+    target_trace <= 0 silences the line (what the callers' own correction of 0
+    did before).  A line whose predicted trace is non-positive or non-finite
+    cannot be scaled and is left as it is.
+    """
+    current = _predicted_response_trace(transfer_function, output)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        scale = np.asarray(target_trace)/current
+    scale = np.where(np.asarray(target_trace) <= 0, 0.0, scale)
+    unscalable = (~np.isfinite(scale)) | (current <= 0) | (~np.isfinite(current))
+    scale = np.where(unscalable, 1.0, scale)
     return output*scale[:, np.newaxis, np.newaxis]
 
 
@@ -443,6 +619,7 @@ def match_trace_pseudoinverse(specification, # Specifications
     rcond, max_drive_coherence, startup_test_level_cap_db = _parse_match_trace_parameters(extra_parameters)
     # If it's the first time through, do the actual control
     apply_startup_cap = False
+    target_response_trace = None
     if last_output_cpsd is None:
         # Invert the transfer function using the pseudoinverse
         tf_pinv = np.linalg.pinv(transfer_function,rcond)
@@ -473,7 +650,21 @@ def match_trace_pseudoinverse(specification, # Specifications
         # Scale the last output cpsd by the trace ratio between spec and last response
         trace_ratio = trace(specification)/trace(last_response_cpsd)
         trace_ratio[np.isnan(trace_ratio)] = 0
-        output =  last_output_cpsd*trace_ratio[:,np.newaxis,np.newaxis]
+        # Refresh the drive SHAPE against the CURRENT transfer function, and
+        # carry the level forward explicitly rather than by inheritance -- see
+        # _refresh_drive_shape and _set_predicted_response_trace.  Without this
+        # the law never read transfer_function again after the startup solve,
+        # so "Update Transfer Function During Control" did nothing at all.
+        # Exactly equivalent to output = last_output_cpsd*trace_ratio whenever
+        # the FRF is not being updated.
+        shape = _refresh_drive_shape(specification, transfer_function, rcond)
+        if shape is None:
+            output = last_output_cpsd*trace_ratio[:,np.newaxis,np.newaxis]
+            target_response_trace = None
+        else:
+            output = shape
+            target_response_trace = trace_ratio*_predicted_response_trace(
+                transfer_function, last_output_cpsd)
     # Note: a uniform per-bin real scalar (the trace_ratio branch, and the
     # startup guard above) leaves pairwise coherence ratios unchanged, so
     # this cap is only ever "doing work" on the raw pseudoinverse itself --
@@ -481,6 +672,11 @@ def match_trace_pseudoinverse(specification, # Specifications
     # (or any other path that reaches this point with an uncapped
     # last_output_cpsd) can't silently skip the cap.
     output = _cap_drive_coherence(output, max_drive_coherence)
+    # Level is set AFTER the cap, never inherited through it -- see
+    # _set_predicted_response_trace.
+    if not apply_startup_cap and target_response_trace is not None:
+        output = _set_predicted_response_trace(output, transfer_function,
+                                               target_response_trace)
     # The startup ceiling goes LAST -- see _apply_startup_level_cap.
     if apply_startup_cap:
         output = _apply_startup_level_cap(output, specification,
@@ -807,6 +1003,7 @@ class match_trace_pseudoinverse_pi:
                 last_output_cpsd = None, # Last Control Excitation for Drive-based control
                 ) -> np.ndarray:
         apply_startup_cap = False
+        target_response_trace = None
         if last_output_cpsd is None:
             # Same startup guard as match_trace_pseudoinverse: no prior
             # measured response to correct against yet, so this is a raw,
@@ -894,7 +1091,22 @@ class match_trace_pseudoinverse_pi:
             # their prev_error is left untouched below so a later good
             # measurement compares against the last KNOWN-good error rather
             # than a corrupted one.
-            output = last_output_cpsd*np.exp(correction)[:,np.newaxis,np.newaxis]
+            # Refresh the drive SHAPE against the CURRENT transfer function,
+            # carrying the level forward explicitly -- see
+            # _refresh_drive_shape and _set_predicted_response_trace.  Exactly
+            # equivalent to output = last_output_cpsd*exp(correction) whenever
+            # the FRF is not being updated.
+            shape = _refresh_drive_shape(self.specification,
+                                         transfer_function, self.rcond)
+            if shape is None:
+                output = last_output_cpsd*np.exp(correction)[:,np.newaxis,np.newaxis]
+                target_response_trace = None
+            else:
+                output = shape
+                target_response_trace = (
+                    np.exp(correction)*_predicted_response_trace(
+                        transfer_function, last_output_cpsd))
+                target_response_trace[unspecified] = 0.0
             output[unspecified] = 0.0
             new_prev_error = self.prev_error.copy()
             new_prev_error[normal] = log_error[normal]
@@ -936,6 +1148,11 @@ class match_trace_pseudoinverse_pi:
                 scale[~np.isfinite(scale)] = 1.0
                 output = output*scale[:,np.newaxis,np.newaxis]
         output = _cap_drive_coherence(output, self.max_drive_coherence)
+        # Level is set AFTER the cap, never inherited through it -- see
+        # _set_predicted_response_trace.
+        if not apply_startup_cap and target_response_trace is not None:
+            output = _set_predicted_response_trace(output, transfer_function,
+                                                   target_response_trace)
         # The startup ceiling goes LAST -- see _apply_startup_level_cap.
         if apply_startup_cap:
             output = _apply_startup_level_cap(output, self.specification,
@@ -1026,12 +1243,15 @@ def buzz_control(specification, # Specifications
         A string containing any optional parameters the control law may need to
         use. It is up to the control law to parse this string to extract the
         required information that it needs.  The default is ''.
-        Format: 'rcond', 'rcond,max_drive_coherence', or
-        'rcond,max_drive_coherence,startup_test_level_cap_db' (shared with
-        match_trace_pseudoinverse -- see _parse_match_trace_parameters). The
-        third value caps only the very first control command at
-        startup_test_level_cap_db dB relative to the specification (0 dB =
-        full spec-match); it defaults to -9.0 dB if omitted.
+        Format: 'rcond', 'rcond,max_drive_coherence',
+        'rcond,max_drive_coherence,startup_test_level_cap_db', or
+        'rcond,max_drive_coherence,startup_test_level_cap_db,running_ceiling_db'
+        -- see _parse_open_loop_parameters. The third value caps the very
+        first control command at startup_test_level_cap_db dB relative to
+        the specification (0 dB = full spec-match), default -9.0; the fourth
+        caps EVERY LATER command at running_ceiling_db dB, default +3.0,
+        which is what bounds this open-loop law when the FRF is being
+        updated during control.
     last_response_cpsd : np.ndarray, optional
         The CPSD measured from the control channels during the vibration
         control.  Can be used to identify signal to noise ratio in the
@@ -1068,7 +1288,8 @@ def buzz_control(specification, # Specifications
     inspection 2026-09-17.
 
     """
-    rcond, max_drive_coherence, startup_test_level_cap_db = _parse_match_trace_parameters(extra_parameters)
+    (rcond, max_drive_coherence, startup_test_level_cap_db,
+     running_ceiling_db) = _parse_open_loop_parameters(extra_parameters)
     # Create a new specification using the autospectra from the original and
     # phase and coherence of the buzz_cpsd
     modified_spec = match_coherence_phase(specification,sysid_response_cpsd)
@@ -1107,11 +1328,23 @@ def buzz_control(specification, # Specifications
         # aggressive, and unit-dependent on top of that.
         apply_startup_cap = True
     output = _cap_drive_coherence(output, max_drive_coherence)
-    # The startup ceiling goes LAST -- see _apply_startup_level_cap.
+    # The ceiling goes LAST -- see _apply_startup_level_cap.
+    #
+    # RUNNING CEILING (2026-09-17): the startup cap governs the first command;
+    # running_ceiling_db governs every command after it.  This law is open
+    # loop -- it has no steady-state branch at all, every cycle is the same
+    # raw pseudoinverse solve against whatever H arrives -- so with the FRF
+    # being updated live nothing else bounds its level.  See
+    # _parse_open_loop_parameters.
     if apply_startup_cap:
         output = _apply_startup_level_cap(output, specification,
                                           transfer_function,
                                           startup_test_level_cap_db)
+    else:
+        output = _apply_running_ceiling(output, specification,
+                                        transfer_function, last_output_cpsd,
+                                        last_response_cpsd,
+                                        running_ceiling_db)
     return output
 
 def buzz_control_generator():
