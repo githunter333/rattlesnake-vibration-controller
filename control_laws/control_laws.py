@@ -136,7 +136,17 @@ def _parse_match_trace_parameters(extra_parameters, default_startup_test_level_c
         startup_cap_db = float(parts[2]) if len(parts) >= 3 and parts[2].strip() != '' else default_startup_test_level_cap_db
     except ValueError:
         startup_cap_db = default_startup_test_level_cap_db
-    return rcond, max_drive_coherence, startup_cap_db
+    # 5th value: refresh the drive SHAPE against the live FRF each cycle.
+    # DEFAULT OFF, so match_trace_pseudoinverse reproduces runs 01 and 02.
+    # Position 4 is deliberately skipped here -- it is running_ceiling_db for
+    # pseudoinverse_control and buzz_control, which share this string format
+    # (see _parse_open_loop_parameters), and giving one position two meanings
+    # would make parameter strings unsafe to copy between laws.
+    try:
+        refresh_shape = bool(float(parts[4])) if len(parts) >= 5 and parts[4].strip() != '' else False
+    except ValueError:
+        refresh_shape = False
+    return rcond, max_drive_coherence, startup_cap_db, refresh_shape
 
 
 def _apply_running_ceiling(output, specification, transfer_function,
@@ -199,7 +209,7 @@ def _apply_running_ceiling(output, specification, transfer_function,
 
 def _parse_open_loop_parameters(extra_parameters,
                                 default_startup_test_level_cap_db=-9.0,
-                                default_running_ceiling_db=3.0):
+                                default_running_ceiling_db=1e9):
     """_parse_match_trace_parameters plus a 4th value, running_ceiling_db, for
     the laws that have no error feedback:
     'rcond,max_drive_coherence,startup_test_level_cap_db,running_ceiling_db'.
@@ -215,13 +225,15 @@ def _parse_open_loop_parameters(extra_parameters,
     unbounded level change with nothing in the law to stop it.
 
     running_ceiling_db bounds the predicted response trace on EVERY cycle, in
-    dB relative to the specification's own trace.  It defaults to +3.0 -- a
-    real limit but a loose one, above the 0 dB these laws aim at, so it does
-    not interfere with normal operation and only engages when the model has
-    gone wrong.  Set it very large (e.g. 1e6) to disable.  The startup cap
-    still governs the first command, where it is the stricter of the two.
+    dB relative to the specification's own trace.  It DEFAULTS TO OFF (1e9),
+    because switching it on changes what these laws do in steady state and the
+    twelve-run comparison set was taken without it -- runs 09 and 11 sat at
+    +13.55 and +9.38 dB level, which a +3 dB ceiling would have clamped, so a
+    default-on ceiling would silently make those runs unreproducible.  Pass a
+    4th value (e.g. 3.0) to switch it on.  The startup cap still governs the
+    first command either way.
     """
-    rcond, max_drive_coherence, startup_cap_db = _parse_match_trace_parameters(
+    rcond, max_drive_coherence, startup_cap_db, _ = _parse_match_trace_parameters(
         extra_parameters, default_startup_test_level_cap_db)
     parts = extra_parameters.split(',') if extra_parameters else []
     try:
@@ -616,7 +628,8 @@ def match_trace_pseudoinverse(specification, # Specifications
         (num_frequencies x num_excitation_channels x num_excitation_channels)
     
     """
-    rcond, max_drive_coherence, startup_test_level_cap_db = _parse_match_trace_parameters(extra_parameters)
+    (rcond, max_drive_coherence, startup_test_level_cap_db,
+     refresh_shape) = _parse_match_trace_parameters(extra_parameters)
     # If it's the first time through, do the actual control
     apply_startup_cap = False
     target_response_trace = None
@@ -657,7 +670,8 @@ def match_trace_pseudoinverse(specification, # Specifications
         # so "Update Transfer Function During Control" did nothing at all.
         # Exactly equivalent to output = last_output_cpsd*trace_ratio whenever
         # the FRF is not being updated.
-        shape = _refresh_drive_shape(specification, transfer_function, rcond)
+        shape = (_refresh_drive_shape(specification, transfer_function, rcond)
+                 if refresh_shape else None)
         if shape is None:
             output = last_output_cpsd*trace_ratio[:,np.newaxis,np.newaxis]
             target_response_trace = None
@@ -726,7 +740,11 @@ def _parse_match_trace_pi_parameters(extra_parameters, default_startup_test_leve
     Ki = _get(4, 1.0)
     resonance_sensitivity = _get(5, 0.0)
     max_step_db = _get(6, 0.0)
-    return rcond, max_drive_coherence, startup_cap_db, Kp, Ki, resonance_sensitivity, max_step_db
+    # 8th value: refresh the drive SHAPE against the live FRF each cycle.
+    # DEFAULT OFF, matching match_trace_pseudoinverse.
+    refresh_shape = bool(_get(7, 0.0))
+    return (rcond, max_drive_coherence, startup_cap_db, Kp, Ki,
+            resonance_sensitivity, max_step_db, refresh_shape)
 
 
 def _find_local_maxima(x):
@@ -973,8 +991,8 @@ class match_trace_pseudoinverse_pi:
         self.warning_levels = warning_levels
         self.abort_levels = abort_levels
         (self.rcond, self.max_drive_coherence, self.startup_test_level_cap_db,
-         self.Kp, self.Ki, self.resonance_sensitivity,
-         self.max_step_db) = _parse_match_trace_pi_parameters(extra_parameters)
+         self.Kp, self.Ki, self.resonance_sensitivity, self.max_step_db,
+         self.refresh_shape) = _parse_match_trace_pi_parameters(extra_parameters)
         # Allocated (to the per-frequency-line shape) on the first call --
         # we don't know the frequency-line count until then.
         self.prev_error = None
@@ -1096,8 +1114,9 @@ class match_trace_pseudoinverse_pi:
             # _refresh_drive_shape and _set_predicted_response_trace.  Exactly
             # equivalent to output = last_output_cpsd*exp(correction) whenever
             # the FRF is not being updated.
-            shape = _refresh_drive_shape(self.specification,
-                                         transfer_function, self.rcond)
+            shape = (_refresh_drive_shape(self.specification, transfer_function,
+                                          self.rcond)
+                     if self.refresh_shape else None)
             if shape is None:
                 output = last_output_cpsd*np.exp(correction)[:,np.newaxis,np.newaxis]
                 target_response_trace = None

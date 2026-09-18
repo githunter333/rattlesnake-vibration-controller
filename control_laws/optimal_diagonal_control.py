@@ -175,7 +175,12 @@ class optimal_diagonal_control:
         self.error_threshold_db = 1.0
         self.max_drive_coherence = 0.95
         self.startup_test_level_cap_db = -9.0
-        self.error_domain = 'db'     # 'db' (default) or 'linear' (pre-2026-09-17)
+        # 'linear' is the DEFAULT and reproduces runs 03-06 exactly.  'db' is
+        # the 2026-09-17 objective change -- better pooled rms, but it spreads
+        # error across every channel instead of sacrificing the two the plant
+        # cannot reach, which is not what this rig wants (see the 8th
+        # extra_parameters field).  Opt in with an 8th value of 1.
+        self.error_domain = 'linear'
         self.n_irls_passes = 2
         # Drive-subspace restriction for the FACTORED path only -- see
         # optimal_diagonal_control_fast._solve_one_bin.  Parsed here so one
