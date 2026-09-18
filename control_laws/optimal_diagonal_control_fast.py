@@ -353,12 +353,34 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         LESS drive -- so it is safe to adopt without knowing the rig's
         headroom.  Set drive_rcond to 0 to disable the restriction.
         """
-        # Only the dB objective needs restraining.  Applied to the linear
-        # objective it is a gratuitous behaviour change -- measured on run 14
-        # it took the factored path's pooled error from 4.68 to 5.78 dB -- and
-        # it would break the guarantee that error_domain=0 reproduces the
-        # pre-2026-09-17 law exactly.
-        if self.error_domain != 'db' or not (self.drive_rcond > 0):
+        # APPLIES IN BOTH ERROR DOMAINS since 2026-09-18.  It was briefly
+        # gated to 'db' only, to keep error_domain=0 reproducing the
+        # pre-2026-09-17 law exactly.  Run 22 is what that cost: the factored
+        # path in its DEFAULT linear mode then had nothing constraining it at
+        # all -- no coherence cap, which it cannot express, and no subspace
+        # restriction -- and it commanded a drive whose response depends on
+        # inter-drive cancellation the rig cannot physically realize.
+        #
+        # THE MEASUREMENT THAT SETTLES IT.  Perturbing the commanded drive by
+        # 1%, which is less than the difference between what run 22 commanded
+        # and what its saved drive CPSD actually shows:
+        #
+        #     configuration                      rms    level  | +1% drive
+        #     factored, unconstrained           4.64   -0.42   | 11.85  +16.69
+        #     factored + drive_rcond 1e-2       3.73   +1.94   |  4.68   +3.80
+        #     SDP + coherence cap 0.95          4.16   -0.50   |  7.23   +7.92
+        #     SDP, cap off                      4.09   -0.49   |  7.98   +9.09
+        #
+        # Run 22 measured +14.29 dB level against -0.39 predicted from the
+        # commanded drive; a 1% realization error predicts +16.69.  The
+        # unconstrained solve is not wrong, it is UNREALIZABLE -- its accuracy
+        # lives in cancellation between drives that survives only if the drive
+        # is reproduced to a precision no rig delivers.  drive_rcond bounds
+        # that sensitivity directly, and does it better than the coherence cap,
+        # which only halves it.
+        #
+        # Set drive_rcond to 0 to disable and recover the run-22 behaviour.
+        if not (self.drive_rcond > 0):
             return None
         try:
             _, sv, Vh = np.linalg.svd(H, full_matrices=False)
