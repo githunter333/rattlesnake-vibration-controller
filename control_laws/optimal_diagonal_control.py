@@ -185,7 +185,16 @@ class optimal_diagonal_control:
         # Drive-subspace restriction for the FACTORED path only -- see
         # optimal_diagonal_control_fast._solve_one_bin.  Parsed here so one
         # parameter string serves both classes.
-        self.drive_rcond = 1e-2
+        #
+        # NOW A MULTIPLE of the plant's own singular-value spread, not an
+        # absolute ratio -- see optimal_diagonal_control_fast.
+        # _effective_drive_rcond.  Runs 22-25 swept the absolute value on the
+        # rig at 0 / 1e-2 / 3e-2 / 5e-2 and 3e-2 was a genuine minimum; this
+        # frame's smallest structural direction is sigma_5/sigma_1 = 0.0152,
+        # so 3e-2 is 2.0x that.  Expressed as a multiple it tracks a
+        # differently conditioned article without re-tuning.  Negative means
+        # an absolute ratio, |value|.
+        self.drive_rcond = 2.0
         if extra_parameters:
             try:
                 parts = [p.strip() for p in str(extra_parameters).split(',') if p.strip() != '']

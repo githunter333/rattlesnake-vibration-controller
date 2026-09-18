@@ -1,0 +1,92 @@
+RUN 18 -- optimal_diagonal_control_fast, dB objective, FRF UPDATE ON
+===============================================================================
+WHY
+-------------------------------------------------------------------------------
+Scoring runs 15 and 16 turned up something neither law can fix on its own: the
+FRF stored in the spectral file differs from the system-ID FRF by 31.7% on run
+15 and 31.6% on run 16, on both runs with update_tf_during_control = 0. Two
+independent runs agreeing to a tenth of a percent is not noise.
+
+It matters because the control-phase FRF predicts the measured response almost
+exactly (0.06 dB), and the system-ID FRF -- the one both laws actually solved
+against -- does not. Measured cost, by solving against one and evaluating
+against the other:
+
+    solve on system-ID FRF, evaluate on control FRF     4.93 dB
+    solve on control FRF (correct model)                3.56 dB
+    run 15 as actually measured                         4.90 dB
+
+So about 1.37 dB of run 15's error is the model being wrong, not the solver,
+not drive_rcond and not the objective. These laws are OPEN LOOP -- they never
+read the measured response -- so they cannot correct for it at any point in
+the run. The only mechanism available is to re-estimate the FRF during
+control, which is exactly the setting we switched off for comparability.
+
+It also explains why the offline predictions ran optimistic: they used the
+system-ID FRF as both the model AND the plant, which assumes this error away.
+
+-------------------------------------------------------------------------------
+WHAT CHANGED FROM RUN 15
+-------------------------------------------------------------------------------
+EXACTLY ONE CELL: Update System ID During Control, N -> Y. Verified cell by
+cell against profile_15 -- the only differing value in the whole workbook.
+
+drive_rcond stays at 1e-2 DELIBERATELY, even though 3e-3 is the better setting
+(see runsheet_17). One variable at a time. Run 17 is the drive_rcond A/B with
+the update off; this is the update A/B at fixed drive_rcond. Changing both at
+once is how run 13 became uninterpretable.
+
+-------------------------------------------------------------------------------
+LAUNCH
+-------------------------------------------------------------------------------
+cd ~/Code/python/rattlesnake-vibration-controller
+
+python rattlesnake.py --profile examples/sixdrive12resp/results/case/profiles/profile_18_optdiagfast_db_updateon.xlsx
+
+-------------------------------------------------------------------------------
+SAVE FILENAMES  (into examples/sixdrive12resp/results/runs/)
+-------------------------------------------------------------------------------
+          system id :  run18_optdiagfast_db_updateon_sysid
+          streaming :  run18_optdiagfast_db_updateon_stream
+          spectral  :  run18_optdiagfast_db_updateon_spec
+
+-------------------------------------------------------------------------------
+WHAT WILL LOOK DIFFERENT, AND IS SUPPOSED TO
+-------------------------------------------------------------------------------
+  "FRF moved ... safe SDP path this call" SHOULD APPEAR in this run. On runs 14
+  and 15 a single such line meant something was wrong; here it is the gate
+  doing its job. Expect a burst of them early: the first live FRF will differ
+  from the system-ID seed by roughly the 32% above, far past the 5%
+  frf_update_threshold, so every bin demotes to the SDP until the live estimate
+  settles cycle to cycle.
+
+  THAT MAKES THE START SLOW. A demoted bin now runs the IRLS SDP at about 197
+  ms/bin, so a fully demoted cycle is around 3.9 s against the fast path's 113
+  ms. It should speed up markedly once the live FRF stops moving more than 5%
+  per cycle. If it NEVER speeds up, the live estimate is not settling and that
+  is the finding -- note it and stop.
+
+  Update on also means the startup FRF seeding and the frame grace period are
+  in play (min_live_frf_frames_before_replacing_sysid_seed = 2), so the first
+  couple of cycles hold the system-ID seed before live estimates take over.
+
+-------------------------------------------------------------------------------
+PREDICTED
+-------------------------------------------------------------------------------
+If the live FRF converges to something close to the control-phase FRF, the law
+should land near 3.6 dB pooled against run 15's measured 4.90 -- recovering
+most of the 1.37 dB attributed to model error. Per channel, expect the easy
+six to tighten and 13X+ / 14X+ to stay the worst two.
+
+No offline prediction is offered for the trajectory, because the live FRF
+sequence is not reproducible offline. This one is genuinely an experiment.
+
+-------------------------------------------------------------------------------
+THE OTHER QUESTION THIS RAISES
+-------------------------------------------------------------------------------
+A 31.6% FRF difference between a 1.0 V RMS system-ID excitation and control at
+roughly 8.6 V RMS is worth explaining in its own right. On a linear plant those
+two estimates should agree. Either the system-ID estimate is biased, or the
+state-space model in sdynpy_frame6x12_system.npz is not behaving linearly over
+that level range. Worth a separate check -- run a system ID at control level
+and compare -- independent of any control law.

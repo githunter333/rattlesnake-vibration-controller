@@ -131,6 +131,8 @@ _C_DB2 = _C_DB**2
 # Floor under yhat and y inside the dB objective, so a bin passing through
 # zero response gives a large finite penalty rather than an overflow.
 _DB_FLOOR = 1e-300
+# Used only if the singular-value spectrum cannot be measured at all.
+_FALLBACK_SPREAD = 0.0152
 
 
 class optimal_diagonal_control_fast(optimal_diagonal_control):
@@ -318,6 +320,71 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         return L @ L.conj().T
 
     # ------------------------------------------------------------------
+    def _effective_drive_rcond(self, H):
+        """The subspace threshold actually used, as a MULTIPLE of this plant's
+        own singular-value spread.
+
+        drive_rcond > 0 is read as a multiple of the smallest STRUCTURAL
+        singular-value ratio; drive_rcond < 0 is an absolute ratio, |value|,
+        for reproducing an old run or pinning a value by hand.
+
+        WHY A MULTIPLE.  An absolute ratio has to be re-tuned for every test
+        article, because it is a threshold on a quantity that is a property of
+        the structure.  The rig sweep (runs 22-25) put the optimum at 3.0e-2 on
+        this frame, and this frame's smallest structural direction sits at
+        sigma_5/sigma_1 = 0.0152 -- so the tuned optimum is 2.0x that, which is
+        the default here.  On a differently conditioned article 2.0x tracks the
+        plant automatically where 3.0e-2 would not.
+
+        FINDING THE STRUCTURAL FLOOR.  This 8-response/6-drive frame is rank 5:
+        its measured sigma_k/sigma_1 medians run 1.000, 0.319, 0.084, 0.032,
+        0.015, 0.0017, and that last value is the identification noise floor,
+        not a direction the plant has.  Scaling off sigma_min would therefore
+        track how good the system ID was rather than how the structure is
+        conditioned.  The floor is found instead by the largest gap in the
+        spectrum -- here 8.9x between sigma_5 and sigma_6, against 2.1-3.8x
+        everywhere else -- and the reference is the smallest direction above
+        that gap.
+
+        Computed once per FRF from the median over in-band bins, so a single
+        noisy line cannot move it.
+        """
+        if self.drive_rcond < 0:
+            return -self.drive_rcond          # absolute override
+        if self.drive_rcond == 0:
+            return 0.0
+        key = None if self.H_cache is None else self.H_cache.shape
+        if getattr(self, '_rcond_cache', None) is not None and self._rcond_key == key:
+            return self._rcond_cache
+        Hb = self.H_cache if self.H_cache is not None else H[np.newaxis]
+        if Hb.ndim == 2:
+            Hb = Hb[np.newaxis]
+        # IN-BAND ONLY.  Out-of-band lines are not controlled and are
+        # conditioned quite differently; including them moved the reference
+        # from 0.0152 to 0.1435 on this frame, a factor of 9, which is the
+        # difference between the tuned 3.0e-2 and a useless 0.29.
+        if Hb.shape[0] == self.y_diag_target.shape[0]:
+            in_band = self.y_diag_target.max(axis=1) > 0
+            if in_band.any():
+                Hb = Hb[in_band]
+        try:
+            sv = np.linalg.svd(np.nan_to_num(Hb), compute_uv=False)
+        except np.linalg.LinAlgError:
+            return self.drive_rcond*_FALLBACK_SPREAD
+        ratios = sv/np.maximum(sv[:, :1], 1e-300)
+        med = np.median(ratios, axis=0)                      # (N,)
+        med = med[np.isfinite(med) & (med > 0)]
+        if med.size < 2:
+            ref = _FALLBACK_SPREAD
+        else:
+            gaps = med[:-1]/np.maximum(med[1:], 1e-300)
+            ref = float(med[int(np.argmax(gaps))])           # last direction above the gap
+        eff = float(np.clip(self.drive_rcond*ref, 1e-4, 0.5))
+        self._rcond_cache = eff; self._rcond_key = key
+        print(f"[optimal_diagonal_control_fast] drive_rcond {self.drive_rcond:g} x "
+              f"plant spread {ref:.4f} -> effective {eff:.4g}", flush=True)
+        return eff
+
     def _restricted_basis(self, H):
         """Right-singular directions of H carrying sigma >= drive_rcond*sigma_max,
         as an (N, k) matrix -- or None for no restriction.
@@ -380,7 +447,8 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         # which only halves it.
         #
         # Set drive_rcond to 0 to disable and recover the run-22 behaviour.
-        if not (self.drive_rcond > 0):
+        rc = self._effective_drive_rcond(H)
+        if not (rc > 0):
             return None
         try:
             _, sv, Vh = np.linalg.svd(H, full_matrices=False)
@@ -388,7 +456,7 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
             return None
         if sv.size == 0 or not np.isfinite(sv[0]) or sv[0] <= 0:
             return None
-        k = int(np.sum(sv >= self.drive_rcond*sv[0]))
+        k = int(np.sum(sv >= rc*sv[0]))
         if k < 1:
             k = 1
         if k >= H.shape[1]:

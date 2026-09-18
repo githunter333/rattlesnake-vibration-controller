@@ -1,0 +1,88 @@
+RUN 17 -- optimal_diagonal_control_fast, dB objective, drive_rcond 3e-3
+===============================================================================
+WHY
+-------------------------------------------------------------------------------
+Run 15 (drive_rcond 1e-2) improved on run 14 but the trace still looked poor,
+and scoring the saved spectral data showed why. The error was not broadband --
+it sat in two places, with two different causes.
+
+  418-428 Hz, 14X+ at -29 dB.  MOSTLY REAL. sigma_min/sigma_max is 2.2e-3
+      there and the reachability floor itself is -15 to -20 dB on that channel.
+      A structural null. Even unrestricted the law only reaches 16.9 dB rms.
+
+  985-1000 Hz, 13X+ at -26 dB and 8X+ at +14 dB.  SELF-INFLICTED. The floor
+      says these lines are reachable to about +/-1 dB. sigma_min/sigma_max is
+      8.1e-3 here -- just BELOW the 1e-2 threshold -- so drive_rcond cut the
+      sixth drive direction exactly where the plant needed it. Restoring it
+      takes that band from 8.08 to 3.40 dB rms.
+
+The 1e-2 default was chosen off a sweep averaged over a decimated sample of
+the whole band, which hid the fact that this plant's sixth singular direction
+runs between 2e-3 and 8e-3 of sigma_max depending on frequency. A 1e-2
+threshold does not separate a negligible direction from a useful one -- it
+slices through the middle of the distribution and cuts the direction
+everywhere.
+
+-------------------------------------------------------------------------------
+THE TRADEOFF, measured offline on run 15's own FRF, 70 cycles, 901 lines
+-------------------------------------------------------------------------------
+  rcond    pooled   13X+   14X+   max drive V rms   >950 Hz
+  1e-2      3.56    6.24   5.45        9.3            8.27     <- run 15
+  5e-3      2.95    5.10   5.11       19.6            5.30
+  3e-3      2.55    4.31   4.96       28.4            3.42     <- run 17
+  2e-3      2.33    3.94   4.73       36.1            3.24
+  1e-3      2.19    3.68   4.58       47.7            3.00
+  floor     2.33    4.43   3.85         --              --
+
+Accuracy is bought very nearly linearly with drive voltage, because the only
+way to reach 13X+ and 14X+ is to push hard down a direction the plant barely
+responds to. 3e-3 recovers the self-inflicted band-edge failure without
+chasing the last 0.2 dB at 48 V.
+
+Run 15 MEASURED 8.6 V rms max per shaker against 9.3 V predicted, so the model
+is tracking the rig closely on drive. Expect roughly 28 V rms at 3e-3.
+
+NOTE: no voltage limits are set in the channel table (Maximum Value (V) is
+empty on all six drive channels), so nothing in Rattlesnake will stop this.
+On the virtual state-space plant that is fine. On real hardware anything past
+about 10 V rms to the amplifier would be out of range -- this parameter would
+have to be chosen against the amplifier, not against the floor.
+
+-------------------------------------------------------------------------------
+LAUNCH
+-------------------------------------------------------------------------------
+cd ~/Code/python/rattlesnake-vibration-controller
+
+python rattlesnake.py --profile examples/sixdrive12resp/results/case/profiles/profile_17_optdiagfast_db_rcond3e3.xlsx
+
+-------------------------------------------------------------------------------
+SAVE FILENAMES  (into examples/sixdrive12resp/results/runs/)
+-------------------------------------------------------------------------------
+          system id :  run17_optdiagfast_db_rcond3e3_sysid
+          streaming :  run17_optdiagfast_db_rcond3e3_stream
+          spectral  :  run17_optdiagfast_db_rcond3e3_spec
+
+SAVE THE SPECTRAL DATA. Run 14 has no spectral file -- it was stopped when it
+looked hung -- so there is still no measured baseline for the linear objective.
+Everything comparing run 15 to run 14 is measured-against-predicted.
+
+-------------------------------------------------------------------------------
+PREDICTED
+-------------------------------------------------------------------------------
+  pooled 2.55 dB   per channel [1.38 2.17 0.83 0.86 0.55 0.67 4.31 4.96]
+  above 950 Hz: 3.42 dB rms, against run 15's 8.27
+  max drive about 28 V rms per shaker, against run 15's measured 8.6
+
+Run 15 measured 4.90 dB pooled against 3.74 predicted, a 1.16 dB optimism,
+of which 0.38 dB was plant-model error (measured vs predicted from the
+identified FRF, 1.56 dB rms and essentially zero-mean). If run 17 lands near
+3.6 dB measured rather than 2.55, that same optimism is holding and is worth
+chasing separately.
+
+-------------------------------------------------------------------------------
+WHAT WOULD BE THE REAL FIX
+-------------------------------------------------------------------------------
+drive_rcond is a proxy. The quantity that actually matters is drive VOLTAGE per
+channel, and a per-channel drive limit in the solve would express the real
+constraint directly instead of through the plant's conditioning. That is a
+larger change and is not in this run.
