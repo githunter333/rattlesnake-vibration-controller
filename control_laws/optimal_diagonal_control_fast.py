@@ -245,7 +245,16 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
                   f"(threshold {self.frf_update_threshold:g}, "
                   f"{'SDP' if moved else 'fast'} path) -- over {n} calls: "
                   f"median {np.median(a):.4f}, 90th {np.percentile(a, 90):.4f}, "
-                  f"max {a.max():.4f}, demoted {100*np.mean(a > self.frf_update_threshold):.0f}%",
+                  f"max {a.max():.4f}, demoted {100*np.mean(a > self.frf_update_threshold):.0f}%; "
+                  # PER-BIN counters, not per-call.  The demotion rate above
+                  # counts CALLS; these count the solves that actually took
+                  # each path, which is the thing "was the fast law used?"
+                  # really asks.  Confirming run 29 needed three indirect
+                  # arguments (metadata, the gate log, and a drive-coherence
+                  # signature above the SDP's 0.95 cap) only because these
+                  # counters existed but were never printed.
+                  f"solves: {self.n_fast_solves} fast / {self.n_safe_solves} SDP "
+                  f"({100*self.n_fast_solves/max(1, self.n_fast_solves+self.n_safe_solves):.0f}% fast)",
                   flush=True)
         return moved
 

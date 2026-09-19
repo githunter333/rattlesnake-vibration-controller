@@ -1,0 +1,152 @@
+Session summary -- 2026-09-19
+System: 6-drive / 8-control-channel frame (examples/sixdrive12resp), Rattlesnake random
+vibration control.  Branch optimaldiaglaws.  Runs 30 and 31, both optimal_diagonal_control_fast
+with the FRF update ON.
+
+Headline: the fast law's drive number REPEATS.  Runs 29 and 31 measured 17.03 and 18.44 V^2
+against an offline prediction of 16.2 -- where runs 24/26/27 with the update OFF spread
+153 -> 485 -> 245 V^2 for the same commanded solution.  The drive-realization gap that made
+run 22 land at +14.29 dB and 17.8 V is closed when the FRF tracks the plant as driven.
+Between those two runs, run 30 diverged and exposed two real defects, both now guarded.
+
+===============================================================================
+1. RUN 30 -- THE LIVE FRF ESTIMATE DIVERGED, AND THE LAW COULD NOT GET OUT
+===============================================================================
+Not a solver problem.  The class's own diagnostic:
+
+    H drift on refined bins: since_initial[median=39834.0460, max=500217.6528]
+
+The live H1 estimate was four to five orders of magnitude away from the system
+identification, and the law solved against it: 1.8e5 V commanded, 176 solver failures.
+
+The demotion gate WORKED -- 69% demoted over the first 75 calls, max movement 209366 --
+which is the lesson: falling back to the safe solver does not help when the plant MODEL is
+garbage.  Both solvers get the same bad H.  The gate protects against solver fragility,
+not estimator divergence.
+
+Then the end state, calls 109-182: every scheduler field zero, self-prediction bit-identical
+for seventy consecutive calls.  An ABSORBING STATE --
+
+    corrupted H -> near-zero drive (0.0015 V) -> no excitation -> live FRF stops moving
+    -> nothing trips frf_update_threshold -> no bins scheduled -> same dead solution
+
+It cannot recover, because recovering requires excitation the law is no longer commanding.
+The process was killed by the user; nothing crashed, and there were no errors in
+Rattlesnake.log at all.
+
+The system ID was NOT the cause and was checked first, given the history of blaming one
+wrongly: run 30 median coherence 0.9977, 5th percentile 0.9713, against run 29's 0.9979 /
+0.9702.  Comparable.  Channel 7 at 0.424 is normal for this rig.
+
+===============================================================================
+2. TWO GUARDS, IN THE BASE CLASS SO BOTH LAWS GET THEM
+===============================================================================
+GUARD 1, divergence (_reject_diverged_frf).  Per BIN, not global: a bin whose live FRF has
+moved more than _FRF_DIVERGENCE_LIMIT (10.0) from the system-ID FRF reverts to its
+system-ID value for that call.  One wild line cannot condemn the array, and a bin recovers
+by itself when the live estimate comes back.  10.0 against run 28's healthy since_initial
+of median 0.1752, max 0.8920 -- an order of magnitude of headroom -- and it catches run 30
+at its 55th call.
+
+GUARD 2, deadlock escape (_escape_deadlock_if_starved).  Fires only when the predicted
+response has sat _DEADLOCK_ESCAPE_DB (20) below specification WITH NOTHING SCHEDULED for
+_DEADLOCK_ESCAPE_CALLS (10) consecutive calls, then discards the live FRF and re-solves
+from the system ID.
+
+Neither guard fixes what made the estimate diverge.  They stop the law amplifying it.
+
+VERIFIED -- examples/sixdrive12resp/code/verify_frf_guards.py, three tests:
+  1. 40 bins corrupted by run 30's measured factor of 22325 -> exactly 40 rejected, drive
+     finite.
+  2. Run 30's real end state reproduced (not "output is zero" -- a self-consistent solution
+     commanding no drive, with err_db_cache = inf so step 3 finds nothing stale, which is
+     what stale_resolved=0 meant) -> escape fires on starved call #10, drive restored.
+  3. REGRESSION, the one that matters: on ordinary 3% averaging jitter neither guard fires
+     and output_cpsd is BIT-IDENTICAL to the pre-guard code (max |new-old| = 0.000e+00).
+     Nothing in runs 19-29 is invalidated.
+
+===============================================================================
+3. RUN 31 -- CLEAN, AND THE PRE-REGISTERED CONFIRMATION
+===============================================================================
+Same profile_26, unedited, same -12 dB start as run 30.
+
+  run                        rms   >3dB    level   maxV   driveV2  easy6   ch7    ch8
+  19 SDP base    upd ON     5.68  19.1%   +0.17    4.40     67.42   2.50  11.06   9.93
+  27 fast auto   upd OFF    6.27  22.8%   +0.55    9.83    245.38   3.18  12.00  10.45
+  29 fast auto   upd ON     6.06  22.5%   -0.10    2.06     17.03   2.90  11.74  10.26
+  31 fast auto   upd ON     6.04  23.0%   -0.07    2.15     18.44   2.87  11.76  10.19
+  offline prediction        5.96    --    -0.74    2.07     16.20    --     --     --
+
+runsheet_30.txt registered the acceptance bands BEFORE the run: 150-500 V^2 would have
+falsified run 29, 20-60 would have been "a range, not a match", 15-20 confirms.  18.44
+lands in the confirming band.  Console agrees with the file: commanded 17.696 V^2, 2.135 V.
+
+Drive trajectory, run 31: 69.2 -> 44.1 -> 25.0 -> 10.7 -> 2.17 -> 2.13 V, monotone over
+about sixty cycles.
+
+The SDP is still more accurate (5.68 vs 6.04 rms, 2.50 vs 2.87 easy six).  The fast law's
+case is drive and speed: a quarter of the voltage-squared and roughly 18x faster per bin.
+
+===============================================================================
+4. TWO CLAIMS OF MINE, RETRACTED
+===============================================================================
+"The 66 V first command is anomalous and unexplained."  It is the normal startup transient.
+Run 31 opens at 69.2 V and decays monotonically to 2.13.  Run 30 opened the same way and
+diverged at its FOURTH update, so the divergence began after the first commands, not at
+them.  I had flagged this as a possible root cause; it was not one.
+
+"Run 29 must have ended at full level, because its saved response scores -0.10 dB."  Invalid.
+Run 31 was saved at -12 dB and scores -0.07 dB with drive 18.44 V^2, matching the commanded
+17.70 from the console.  Saved response AND drive are both test-level normalized.  The test
+level was never the difference between runs 29 and 30.
+
+WHAT TRIGGERED RUN 30 IS THEREFORE STILL UNEXPLAINED.  Same profile, same level, comparable
+system ID, and run 31 was clean.  The honest statement is that the divergence is intermittent
+and we have one instance.  The guards bound the damage; they do not explain it.
+
+===============================================================================
+5. DEFAULT CHANGED
+===============================================================================
+frf_update_threshold 0.05 -> 0.5, now that runs 29 and 31 have measured the corrected
+in-band distribution (median 0.196, 90th 0.232, thin tail to 3.5; 0.5 gives 5% demotion).
+Verified cell by cell that every profile_01..26 sets field 2 explicitly, so no archived run
+configuration changes.
+
+===============================================================================
+6. OPEN
+===============================================================================
+1. Run 30's trigger.  Unexplained.  Worth watching for a second instance rather than
+   theorising from one.
+2. The guards have never fired on the rig -- run 31 was clean on its own.  They are verified
+   offline only.
+3. Option 2 from the original list, dither on the drives with the FRF update on, is still
+   untried.  With the update-on case now working it may no longer be needed.
+4. Git: commits still pending behind the .git lock problem.  Messages staged in
+   "Claude outputs/pending/".
+
+===============================================================================
+7. RUN 32 -- THIRD CONFIRMATION, AND A THIRD OUT-OF-BAND MISTAKE
+===============================================================================
+  run                        rms   >3dB    level   maxV   driveV2  easy6
+  29 fast auto   upd ON     6.06  22.5%   -0.10    2.06     17.03   2.90
+  31 fast auto   upd ON     6.04  23.0%   -0.07    2.15     18.44   2.87
+  32 fast auto   upd ON     6.08  23.0%   +0.01    2.01     16.22   3.00
+  offline prediction        5.96    --    -0.74    2.07     16.20    --
+
+17.03 / 18.44 / 16.22 V^2 -- +/-7% around 17.2, against 153 -> 485 -> 245 with the
+update off.  Run 32 lands on the offline prediction exactly.  Settled.
+
+THE DIVERGENCE GUARD SHIPPED WITH THE OUT-OF-BAND BUG.  Run 31 fired it on 986-1161
+bins of 2049 on nearly every call while controlling perfectly -- 1148 of those bins are
+out of band, where the live estimate is noise.  Third time this same mistake has been
+made here: _effective_drive_rcond, then _h_moved, then this, each one written AFTER
+diagnosing the previous.  The rule is now in the code next to the mask: any statistic
+over the FRF array must be masked to in-band bins.
+
+Masked, run 32 fired the guard 3 times in 281 calls (calls 7/8/9; 4, 20 and 3 in-band
+bins; worst 45.4 / 67.0 / 26.7), during the startup transient, then never again.
+cum_solver_failures = 0.  No deadlock escapes.  Gate at settle: median 0.1838, 90th
+0.2763, demoted 6%, 78% fast.
+
+Console captured to results/notes/run32_console.log via tee -- first run where the full
+log is on disk rather than pasted.

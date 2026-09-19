@@ -110,6 +110,29 @@ A bare single value (no comma) is accepted too, read as `reg`.
 
 import numpy as np
 
+# ---------------------------------------------------------------------------
+# LIVE-FRF SAFETY LIMITS.  Added 2026-09-19 after run 30, where the live H1
+# estimate walked 22,000x away from the system identification (reported by
+# this class's own since_initial diagnostic as median 39834, max 500217) and
+# the law solved against it, commanding 1.8e5 V.  A healthy run sits well
+# under 1: run 28 logged since_initial median 0.1752, max 0.8920 over its
+# whole length.  10.0 therefore has an order of magnitude of headroom over
+# anything ever measured on a working run and still catches run 30 at its
+# 55th call.
+_FRF_DIVERGENCE_LIMIT = 10.0
+
+# DEADLOCK ESCAPE.  Run 30's end state: corrupted H -> near-zero commanded
+# drive (0.0015 V) -> no excitation -> the live FRF stops moving -> nothing
+# exceeds frf_update_threshold -> no bins scheduled -> the law holds a dead
+# solution forever.  70+ consecutive calls with every scheduler field zero
+# and a bit-identical self-prediction.  It cannot recover on its own, because
+# recovering requires excitation the law is no longer commanding.  These
+# thresholds only fire in that absorbing state: 20 dB below the target trace
+# is far outside anything a working run reaches (runs 19-29 all land within
+# +/-3 dB), and 10 consecutive calls rules out a transient.
+_DEADLOCK_ESCAPE_DB = 20.0
+_DEADLOCK_ESCAPE_CALLS = 10
+
 # Rattlesnake loads a control-law file with importlib.spec_from_file_location,
 # i.e. as a standalone module with NO package context, so a relative import
 # raises ImportError and the law cannot be loaded at all.  (Same applies when
@@ -170,7 +193,20 @@ class optimal_diagonal_control:
         self.F, self.M = self.y_diag_target.shape
 
         self.reg = 1e-6
-        self.frf_update_threshold = 0.05
+        # 0.5, raised from 0.05 on 2026-09-19 once runs 29 and 31 measured
+        # what this gate actually sees.  0.05 was set against the broken
+        # _h_moved metric, which included out-of-band bins and read median
+        # 4.37; corrected and in-band the per-cycle movement is median 0.196,
+        # 90th 0.232, with a thin tail to 3.5.  At 0.05 essentially every
+        # call demoted the fast law to the SDP (99% on run 28) AND every
+        # previously-refined bin counted as drifted, so half the refinement
+        # budget went to re-solving old bins forever (cum_frf_updates 10 per
+        # call, 5570 and climbing).  0.5 sits at about the 95th percentile of
+        # the measured distribution: 5% demotion, budget freed.
+        #
+        # Changing this default does not alter any archived run: every
+        # profile_01..26 sets field 2 explicitly (verified cell by cell).
+        self.frf_update_threshold = 0.5
         self.max_bins_per_update = 20
         self.error_threshold_db = 1.0
         self.max_drive_coherence = 0.95
@@ -219,6 +255,15 @@ class optimal_diagonal_control:
         # hundreds of identical lines and read as a hung process.  (It was not
         # hung: newly_refined=0, n_deferred=0, cum_sdp_refinements frozen.)
         self._idle_repeats = 0
+        # Live-FRF guard state.  Set here as well as in _initialize so a
+        # harness that reaches _refine_batch without going through
+        # _initialize cannot raise AttributeError -- the same latent bug
+        # the fast subclass hit on 2026-09-17 with n_fast_solves.
+        self._frf_rejected = 0
+        self._last_frf_rejected = 0
+        self._starved_calls = 0
+        self._n_escapes = 0
+        self._sysid_response_cpsd = None
         self._log_every_when_idle = 50
         self.H_cache = None        # (F, M, N) FRF each bin's current solution was derived from
         self.sdp_refined = None    # (F,) bool -- True once a bin has been through the SDP
@@ -429,11 +474,149 @@ class optimal_diagonal_control:
               f"H any-nan-in-input={bool(np.any(~np.isfinite(transfer_function)))}", flush=True)
         self.output_cpsd = self._buzz_solve_all(H_clean, sysid_response_cpsd)
         self.H_cache = H_clean.copy()
-        self.H_initial = H_clean.copy()  # diagnostic: fixed baseline to measure cumulative drift against
+        self.H_initial = H_clean.copy()  # diagnostic AND, since 2026-09-19, the
+                                         # fallback the divergence guard reverts to
+        self._sysid_response_cpsd = (None if sysid_response_cpsd is None
+                                     else np.asarray(sysid_response_cpsd).copy())
+        self._frf_rejected = 0            # bins currently held at H_initial
+        self._last_frf_rejected = 0
+        self._starved_calls = 0           # consecutive calls in the dead state
+        self._n_escapes = 0
         self.sdp_refined = np.zeros(self.F, dtype=bool)
         self.err_db_cache = np.full(self.F, np.inf)  # unset until a bin is actually SDP-solved
         self._initialized = True
         self._refine_batch(H_clean)  # spend the first batch of SDP budget immediately
+
+    # ------------------------------------------------------------------
+    def _reject_diverged_frf(self, H_clean):
+        """GUARD 1 -- refuse a live FRF that is no longer a plant model.
+
+        Rattlesnake re-publishes an incrementally-averaged FRF every cycle
+        when "Update Transfer Function During Control" is on.  That estimate
+        is formed from the drive the control law itself commands, so a bad
+        solve feeds a bad estimate which feeds a worse solve.  Run 30 closed
+        that loop: since_initial reached median 39834 and max 500217 -- the
+        live H was four to five orders of magnitude away from the system
+        identification -- and the law dutifully solved against it and asked
+        for 1.8e5 V.
+
+        Per BIN, not globally, so one wild line cannot condemn the whole
+        array and the law keeps controlling on the bins that are still sane.
+        A rejected bin reverts to its system-ID value for this call; it is
+        not frozen, and recovers by itself the moment the live estimate comes
+        back inside the limit.
+
+        This does NOT fix whatever made the estimate diverge.  It stops the
+        law amplifying it, and says so in the log.
+        """
+        H_init = getattr(self, 'H_initial', None)
+        if H_init is None or H_init.shape != H_clean.shape:
+            return H_clean
+        limit = getattr(self, 'frf_divergence_limit', _FRF_DIVERGENCE_LIMIT)
+        if not np.isfinite(limit) or limit <= 0:
+            return H_clean
+
+        n = H_clean.shape[0]
+        num = np.linalg.norm((H_clean - H_init).reshape(n, -1), axis=1)
+        den = np.linalg.norm(H_init.reshape(n, -1), axis=1)
+        live = den > 0
+
+        # IN-BAND ONLY, and this was got wrong the first time.  Run 31 fired
+        # this guard on 986-1161 bins of 2049 on essentially every call while
+        # controlling perfectly well (converged 2.13 V, 17.70 V^2, and the
+        # refined-bin drift never left median 0.07).  2049 - 901 in-band =
+        # 1148 out-of-band bins: no drive energy there, so the live estimate
+        # is noise and its relative change is unbounded.  The guard was
+        # reporting noise.  Harmless -- those bins are not controlled -- but
+        # it buried the log and made the threshold untestable.
+        #
+        # THIRD TIME this same mistake has been made in this file and its
+        # subclass: the singular-value spread in _effective_drive_rcond, the
+        # movement metric in _h_moved, and now this.  Any statistic taken
+        # over the FRF array on this rig must be masked to in-band bins.
+        in_band = self.y_diag_target.max(axis=1) > 0
+        if in_band.shape[0] == n and in_band.any():
+            live &= in_band
+
+        ratio = np.zeros(n)
+        ratio[live] = num[live]/den[live]
+        bad = live & (ratio > limit)
+        n_bad = int(bad.sum())
+        n_scored = int(live.sum())
+
+        if n_bad:
+            H_clean = H_clean.copy()
+            H_clean[bad] = H_init[bad]
+            # Log on entry and whenever the count changes by more than a few
+            # bins, not every call -- this fires on the cycle that matters.
+            if abs(n_bad - self._last_frf_rejected) > 2 or self._last_frf_rejected == 0:
+                print(f"[optimal_diagonal_control] LIVE FRF REJECTED on {n_bad} of "
+                      f"{n_scored} in-band bins (relative change from the system ID above "
+                      f"{limit:g}; worst {ratio.max():.1f}). Those bins are using "
+                      f"the system-ID FRF this call. The live estimate is "
+                      f"diverging -- check excitation and drive level.", flush=True)
+                self._last_frf_rejected = n_bad
+        elif self._last_frf_rejected:
+            print(f"[optimal_diagonal_control] live FRF back inside the "
+                  f"divergence limit on every bin; using it again.", flush=True)
+            self._last_frf_rejected = 0
+        self._frf_rejected = n_bad
+        return H_clean
+
+    # ------------------------------------------------------------------
+    def _escape_deadlock_if_starved(self, H_clean, worked):
+        """GUARD 2 -- break out of the zero-drive absorbing state.
+
+        The failure this exists for (run 30, calls 109-182): the commanded
+        drive collapses to near zero, so the plant is barely excited, so the
+        live FRF stops moving, so no bin trips frf_update_threshold, so the
+        scheduler has nothing to do, so the law keeps commanding the same
+        dead solution.  Every scheduler field zero and a bit-identical
+        self-prediction for seventy consecutive calls.  Nothing in the loop
+        can restart it, because restarting requires excitation the law is no
+        longer asking for.
+
+        Detection is deliberately narrow: the predicted response trace has to
+        be _DEADLOCK_ESCAPE_DB below the specification trace AND no bin can
+        have been scheduled, for _DEADLOCK_ESCAPE_CALLS consecutive calls.  A
+        working run sits within a few dB of target, so this cannot fire on
+        one.
+
+        Recovery throws away the corrupted state and starts over from the
+        system identification -- the one plant model known to be good.
+        """
+        in_band = self.y_diag_target.max(axis=1) > 0
+        if not in_band.any():
+            return
+        Y = np.einsum('fmn,fnk,flk->fml', H_clean[in_band],
+                      self.output_cpsd[in_band], H_clean[in_band].conj())
+        achieved = float(np.sum(np.maximum(np.real(np.einsum('fmm->fm', Y)), 0.0)))
+        target = float(np.sum(self.y_diag_target[in_band]))
+        if target <= 0:
+            return
+        shortfall_db = 10.0*np.log10(max(achieved, 1e-300)/target)
+
+        if worked or shortfall_db > -_DEADLOCK_ESCAPE_DB:
+            self._starved_calls = 0
+            return
+
+        self._starved_calls += 1
+        if self._starved_calls < _DEADLOCK_ESCAPE_CALLS:
+            return
+
+        self._n_escapes += 1
+        print(f"[optimal_diagonal_control] DEADLOCK ESCAPE #{self._n_escapes}: "
+              f"predicted response has sat {shortfall_db:.1f} dB below "
+              f"specification with nothing scheduled for "
+              f"{self._starved_calls} calls. Re-solving from the system-ID "
+              f"FRF and discarding the live one.", flush=True)
+        self.output_cpsd = self._buzz_solve_all(self.H_initial,
+                                                self._sysid_response_cpsd)
+        self.H_cache = self.H_initial.copy()
+        self.sdp_refined[:] = False
+        self.err_db_cache[:] = np.inf
+        self._starved_calls = 0
+        self._idle_repeats = 0
 
     def _refine_batch(self, transfer_function):
         """
@@ -453,6 +636,7 @@ class optimal_diagonal_control:
         """
         self._n_calls += 1
         H_clean = np.nan_to_num(transfer_function, nan=0.0, posinf=0.0, neginf=0.0)
+        H_clean = self._reject_diverged_frf(H_clean)
         H_changed = self.H_cache is None or not np.array_equal(H_clean, self.H_cache)
         budget = self.max_bins_per_update
 
@@ -579,6 +763,9 @@ class optimal_diagonal_control:
         # Log the first few, then one in every _log_every_when_idle, so the
         # loop stays visibly alive without flooding.  Any real activity resets
         # the counter and restores full logging immediately.
+        self._escape_deadlock_if_starved(
+            H_clean, worked=(n_fix > 0 or n_refine > 0 or n_stale > 0))
+
         idle = (not H_changed and n_fix == 0 and n_refine == 0 and n_stale == 0
                 and self.n_deferred == 0 and self.n_stale_deferred == 0)
         if idle:

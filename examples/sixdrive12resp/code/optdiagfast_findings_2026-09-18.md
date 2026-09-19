@@ -202,3 +202,163 @@ per-cycle movement the gate tests. `_h_moved` now logs the observed relative
 change every call — median, 90th percentile, max and demotion rate — so one
 update-on run yields the distribution and the threshold can be set from it
 rather than guessed.
+
+## FRF update on, measured — run 29
+
+The gate metric was wrong. `_h_moved` compared live H against cached H over
+the whole 2049-bin array, 1148 bins of which are out of band and carry no
+drive energy, so the live estimate there is noise. Run 28 measured median
+4.3736, max 179.6692, demoted 99% — while the base class's in-band drift
+metric read 0.1705 on the same data. A factor of 25 between two measurements
+of one quantity, and the same mistake as measuring the singular-value spread
+over all lines. Fixed in `deaa8cb6`; run 29 is the first run with the
+corrected gate and `frf_update_threshold` raised 0.05 → 0.5.
+
+| | median | 90th | max | demoted |
+|---|---|---|---|---|
+| fast law, in-band (run 29) | 0.1957 | 0.2318 | 3.5044 | 5 % |
+| base class, refined bins | ~0.165 | — | — | — |
+
+The two now agree to a factor of 1.2. **Run 28 and everything before it was
+the base class under the fast law's name** — 99% demotion. Confirmed three
+ways: the gate log, a drive-coherence signature (below), and run 28 scoring
+within 0.04 dB rms and 1% of drive of run 19, a different law.
+
+### Scores
+
+| run | rms | >3 dB | level | max V | drive V² | easy six |
+|---|---|---|---|---|---|---|
+| 19 SDP base, upd ON | 5.68 | 19.1 % | +0.17 | 4.40 | 67.4 | 2.50 |
+| 24 fast, rcond 3e-2, upd OFF | 6.30 | 22.9 % | +0.75 | 6.50 | 153.4 | 3.21 |
+| 26 fast, auto, upd OFF | 6.38 | 23.9 % | +3.06 | 12.80 | 484.7 | 3.50 |
+| 27 fast, auto, upd OFF | 6.27 | 22.8 % | +0.55 | 9.83 | 245.4 | 3.18 |
+| 28 SDP in disguise, upd ON | 5.64 | 19.6 % | +0.21 | 4.39 | 66.7 | 2.53 |
+| **29 fast, auto, upd ON** | **6.06** | **22.5 %** | **−0.10** | **2.06** | **17.0** | **2.90** |
+| offline prediction | 5.96 | — | −0.74 | 2.07 | 16.2 | — |
+
+**The drive-realization gap closed.** Run 29 measured 17.0 V² against a
+prediction of 16.2, and 2.06 V against 2.07. Runs 26 and 27 were 10–30× that
+prediction. Solving against an FRF that tracks the plant *as driven* removes
+the inter-drive cancellation the rig cannot reproduce — the failure mode that
+put run 22 at +14.29 dB and 17.8 V.
+
+**NOT YET CONFIRMED.** The standing finding from runs 24/26/27 is that
+accuracy repeats and drive does not (153 → 485 → 245 V² for the same
+commanded solution), so a single-run drive number is exactly what that finding
+says to distrust. Two things argue 17.0 is real: it sits a factor of 9 below
+the bottom of the observed spread rather than inside it, and it matches an
+independent offline prediction to 5%. Run 30 (runsheet_30.txt) is an identical
+repeat to settle it. Until it lands, do not quote 17.0 V² outside this
+document.
+
+### Was the fast path actually used?
+
+Three independent checks, because "optimal_diagonal_control_fast" in the
+metadata has twice not meant the fast algorithm ran:
+
+1. Metadata — correct law and parameters (rules out run 13's failure mode).
+2. Code path — `_refine_batch:179` sets `_h_changed_this_call`;
+   `_solve_one_bin:510` branches to the factored solve on False, SDP on True.
+3. Drive coherence, in-band pairwise — the SDP enforces a 0.95 cap:
+
+| run | median | >0.95 | >0.99 |
+|---|---|---|---|
+| 29 fast, upd ON | 0.4455 | **6.6 %** | 0.9 % |
+| 27 fast, upd OFF | 0.4011 | 4.5 % | 0.8 % |
+| 28 "fast", upd ON | 0.3202 | **0.0 %** | 0.0 % |
+| 19 SDP base | 0.3299 | **0.0 %** | 0.0 % |
+
+Run 29 puts 6.6% of in-band drive pairs above a cap the SDP cannot exceed, and
+lands beside run 27 rather than run 28. Eigenvalue participation came out ~1.6
+on all four and does **not** discriminate — it is not evidence either way.
+
+The per-bin `n_fast_solves` / `n_safe_solves` counters existed throughout but
+were never printed, which is why this took three indirect arguments. They are
+now in the gate log line.
+
+### Correction to a claim made yesterday
+
+`newly_refined = 0` with `n_refined_total = 901/2049` was read as the
+scheduler being starved of new bins. It is not. 2049 − 1148 out-of-band =
+**901**, verified as the non-zero specification lines in every run file: 901
+is complete in-band coverage and `newly_refined = 0` means finished. This was
+true of run 28 as well.
+
+## Run 31 — the repeat, and it confirms
+
+| run | rms | >3 dB | level | max V | drive V² | easy six | ch7 | ch8 |
+|---|---|---|---|---|---|---|---|---|
+| 19 SDP base, upd ON | 5.68 | 19.1 % | +0.17 | 4.40 | 67.42 | 2.50 | 11.06 | 9.93 |
+| 27 fast auto, upd OFF | 6.27 | 22.8 % | +0.55 | 9.83 | 245.38 | 3.18 | 12.00 | 10.45 |
+| **29 fast auto, upd ON** | 6.06 | 22.5 % | −0.10 | 2.06 | **17.03** | 2.90 | 11.74 | 10.26 |
+| **31 fast auto, upd ON** | 6.04 | 23.0 % | −0.07 | 2.15 | **18.44** | 2.87 | 11.76 | 10.19 |
+| offline prediction | 5.96 | — | −0.74 | 2.07 | 16.2 | — | — | — |
+
+Runs 29 and 31 agree on every measure, drive included: 17.03 against 18.44 V²,
+8% apart, where runs 24/26/27 spread 153 → 485 → 245 for the same commanded
+solution. `runsheet_30.txt` registered "15–20 V² → confirmed" before the run.
+**The drive-realization gap is closed with the FRF update on.** Solving
+against a plant model that tracks the plant as driven removes the inter-drive
+cancellation the rig cannot reproduce.
+
+The console agrees with the file: commanded 17.696 V², max 2.135 V.
+
+### Two things I got wrong, corrected here
+
+**The 66 V first command was never an anomaly.** Run 31 opens at 69.2 V and
+decays monotonically — 69 → 44 → 25 → 10.7 → 2.17 → 2.13 over about sixty
+cycles. That is this law's normal startup transient. Run 30 opened the same
+way and diverged at its fourth update, so the divergence began after the
+first commands, not at them.
+
+**Saved spectra are test-level normalized.** I argued run 29 must have ended
+at full level because its saved response scored −0.10 dB. That inference is
+invalid: run 31 was saved at −12 dB and also scores −0.07 dB with drive
+18.44 V², matching the commanded 17.70 V² from the console. Both response and
+drive are stored normalized by test level, exactly as the 2026-09-01 notes
+recorded for the acquisition paths. The test level was never the difference
+between runs 29 and 30, and what did trigger run 30 remains unexplained.
+
+### Default moved
+
+`frf_update_threshold` 0.05 → **0.5**. Verified cell by cell that every
+profile_01..26 sets field 2 explicitly, so no archived run configuration
+changes.
+
+## Run 32 — third confirmation, and the guard corrected
+
+| run | rms | >3 dB | level | max V | drive V² | easy six | ch7 | ch8 |
+|---|---|---|---|---|---|---|---|---|
+| 19 SDP base, upd ON | 5.68 | 19.1 % | +0.17 | 4.40 | 67.42 | 2.50 | 11.06 | 9.93 |
+| 27 fast auto, upd OFF | 6.27 | 22.8 % | +0.55 | 9.83 | 245.38 | 3.18 | 12.00 | 10.45 |
+| 29 fast auto, upd ON | 6.06 | 22.5 % | −0.10 | 2.06 | 17.03 | 2.90 | 11.74 | 10.26 |
+| 31 fast auto, upd ON | 6.04 | 23.0 % | −0.07 | 2.15 | 18.44 | 2.87 | 11.76 | 10.19 |
+| **32 fast auto, upd ON** | 6.08 | 23.0 % | +0.01 | 2.01 | **16.22** | 3.00 | 11.70 | 10.25 |
+| offline prediction | 5.96 | — | −0.74 | 2.07 | 16.2 | — | — | — |
+
+Three runs: **17.03, 18.44, 16.22 V²** — a ±7 % spread around 17.2, against
+153 → 485 → 245 with the FRF update off. Run 32 lands on the offline
+prediction of 16.2 exactly. rms 6.04–6.08, level within 0.1 dB of target on
+all three. This is settled.
+
+### The divergence guard had the out-of-band bug too
+
+Run 31 fired it on 986–1161 bins of 2049 on nearly every call *while
+controlling perfectly*. 2049 − 901 in-band = 1148 out-of-band bins, where
+there is no drive energy, the live estimate is noise, and relative change is
+unbounded. The guard was reporting noise.
+
+Third occurrence of the same mistake in this file and its subclass — after
+`_effective_drive_rcond` (singular-value spread over all lines) and `_h_moved`
+(movement over the whole array). Any statistic taken over the FRF array on
+this rig must be masked to in-band bins; that note is now in the code beside
+the mask.
+
+Masked, run 32 fired the guard **three times in 281 calls** — on calls 7, 8
+and 9, covering 4, 20 and 3 in-band bins, worst ratios 45.4 / 67.0 / 26.7 —
+and never again. A brief in-band excursion during the startup transient,
+bounded, then silent. `cum_solver_failures = 0` throughout; no deadlock
+escapes.
+
+Gate at settle: median 0.1838, 90th 0.2763, max 5.7478, demoted 6 %,
+1178 fast / 340 SDP (78 % fast).
