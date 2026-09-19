@@ -205,17 +205,48 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         """
         if self.H_cache is None:
             return True
-        baseline = np.linalg.norm(self.H_cache.reshape(-1))
+        # IN-BAND ONLY.  Measured over the whole array this metric is dominated
+        # by the out-of-band bins, where there is no excitation, the live
+        # estimate is noise, and the relative change per cycle is enormous.
+        # Run 28 measured it: median 4.37 -- a 437% change every cycle, max
+        # 179 -- while the base class's own drift metric, which looks only at
+        # refined (in-band) bins, read 0.17 on the same data.  A factor of 25
+        # between two metrics of the same quantity.  That is why runs 21 and 28
+        # demoted on 99% of cycles: the gate was responding to out-of-band
+        # noise, never to the plant.  Same mistake as measuring the
+        # singular-value spread over all lines -- see _effective_drive_rcond.
+        Hc, Hn = self.H_cache, H_clean
+        if (Hc.shape[0] == self.y_diag_target.shape[0]
+                and Hn.shape[0] == self.y_diag_target.shape[0]):
+            in_band = self.y_diag_target.max(axis=1) > 0
+            if in_band.any():
+                Hc, Hn = Hc[in_band], Hn[in_band]
+        baseline = np.linalg.norm(Hc.reshape(-1))
         if not np.isfinite(baseline) or baseline <= 0:
             return True
-        delta = np.linalg.norm((H_clean - self.H_cache).reshape(-1))
+        delta = np.linalg.norm((Hn - Hc).reshape(-1))
         if not np.isfinite(delta):
             return True
-        moved = (delta/baseline) > self.frf_update_threshold
-        if moved:
-            print(f"[optimal_diagonal_control_fast] FRF moved "
-                  f"{delta/baseline:.4f} > {self.frf_update_threshold:g} -- "
-                  f"safe SDP path this call", flush=True)
+        rel = delta/baseline
+        moved = rel > self.frf_update_threshold
+
+        # Record what the FRF actually does, whether or not it trips the gate.
+        # The demotion threshold should be set from the movement this rig
+        # really produces, and that cannot be recovered afterwards -- only the
+        # FINAL FRF is saved, so a run file shows cumulative drift (about 28%
+        # between the system ID and end of control on run 21) and says nothing
+        # about the per-cycle movement the gate tests.
+        self._h_move_log = getattr(self, '_h_move_log', [])
+        self._h_move_log.append(float(rel))
+        n = len(self._h_move_log)
+        if moved or n <= 5 or n % 25 == 0:
+            a = np.asarray(self._h_move_log)
+            print(f"[optimal_diagonal_control_fast] FRF moved {rel:.4f} "
+                  f"(threshold {self.frf_update_threshold:g}, "
+                  f"{'SDP' if moved else 'fast'} path) -- over {n} calls: "
+                  f"median {np.median(a):.4f}, 90th {np.percentile(a, 90):.4f}, "
+                  f"max {a.max():.4f}, demoted {100*np.mean(a > self.frf_update_threshold):.0f}%",
+                  flush=True)
         return moved
 
     # ------------------------------------------------------------------
@@ -353,10 +384,19 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
             return -self.drive_rcond          # absolute override
         if self.drive_rcond == 0:
             return 0.0
-        key = None if self.H_cache is None else self.H_cache.shape
+        # Only cache once the FULL band is in hand.  H_cache is populated by
+        # _initialize before _refine_batch runs, so the control loop always
+        # has it -- but _solve_one_bin called directly (a harness, a unit
+        # test) would otherwise compute the reference from the ONE bin it was
+        # handed and cache that answer forever.  Found 2026-09-18 when an FRF
+        # sensitivity test reported 10.34 dB for a configuration the control
+        # loop scores at 5.95.
+        if self.H_cache is None:
+            return float(np.clip(self.drive_rcond*_FALLBACK_SPREAD, 1e-4, 0.5))
+        key = self.H_cache.shape
         if getattr(self, '_rcond_cache', None) is not None and self._rcond_key == key:
             return self._rcond_cache
-        Hb = self.H_cache if self.H_cache is not None else H[np.newaxis]
+        Hb = self.H_cache
         if Hb.ndim == 2:
             Hb = Hb[np.newaxis]
         # IN-BAND ONLY.  Out-of-band lines are not controlled and are

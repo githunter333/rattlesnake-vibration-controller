@@ -147,3 +147,58 @@ outside ±3 dB against the linear objective's 18.6 %, because the dB objective
 spreads error instead of sacrificing the two unreachable channels. The runs
 above are all linear-objective, which holds the achievable channels tight and
 lets 13X+ and 14X+ go — the behaviour wanted here.
+
+## Repeatability, and what is NOT repeatable (runs 26, 27)
+
+Run 26 used the automatic threshold; run 27 repeated it with nothing changed.
+
+| run | rms | % out | level | max V | drive V² |
+|---|---|---|---|---|---|
+| 27 auto (repeat) | 6.27 | 22.8 % | +0.55 | 9.83 | 245.4 |
+| 26 auto | 6.38 | 23.9 % | +3.06 | 12.80 | 484.7 |
+| 24 hand 3.0e-2 | 6.30 | 22.9 % | +0.75 | 6.50 | 153.4 |
+| offline, both FRFs | 5.96 | — | −0.74 | 2.07 | 16.2 |
+
+**Accuracy repeats; drive does not.** rms holds within 0.1 dB and per-channel
+within 0.2 dB across all three, but drive ran 153 → 485 → 245 V² for the same
+commanded solution, and all three are 10-30x the offline prediction. That is
+the realization-sensitivity finding showing up again: this law sits near the
+conditioning limit, so the response is reproducible and the drive is not.
+
+Consequence for reading earlier rows in this document: single-run drive
+comparisons were over-interpreted. "2.3x the SDP" should read "150-500 V²
+against the SDP's 67". Budget for the spread, not the mean.
+
+The automatic threshold is confirmed by run 27 — it reproduced the hand-tuned
+run 24 on every accuracy measure, having derived the threshold from a fresh
+identification (0.0302 vs 0.0303) without being told it.
+
+## FRF update on
+
+Solving on H and running on a perturbed plant, which is the question the
+demotion gate exists to answer (rms dB / level dB):
+
+| configuration | exact | H off 2 % | H off 5 % | H off 10 % |
+|---|---|---|---|---|
+| factored, unconstrained | 4.52 / −0.39 | 4.63 / +4.06 | 8.95 / +10.57 | 13.72 / +16.23 |
+| factored + auto drive_rcond | 5.90 / −0.74 | 4.33 / −0.56 | 3.78 / +0.23 | 4.13 / +2.25 |
+| SDP + coherence cap | 4.05 / −0.50 | 3.56 / +0.80 | 5.11 / +4.68 | 8.61 / +9.55 |
+
+**The restricted factored path is the most FRF-robust of the three.** Slightly
+worse with an exact model, clearly better with a wrong one — at 10 % FRF error
+it holds +2.25 dB where the SDP goes to +9.55. `drive_rcond` was added for
+drive-realization error and turns out to handle model error at least as well,
+and better than the coherence cap does.
+
+That undercuts the demotion gate's premise. The gate demotes whenever H moves
+more than 5 %, but at 5 % model error the restricted factored path beats the
+SDP (3.78 / +0.23 against 5.11 / +4.68), so demoting trades a better solver
+for a worse one and pays 18x the time for it.
+
+**Setting the new threshold needs a measurement that does not exist yet.** Only
+the FINAL FRF is saved in a run file, so run 21 shows about 28 % cumulative
+drift between system ID and end of control and says nothing about the
+per-cycle movement the gate tests. `_h_moved` now logs the observed relative
+change every call — median, 90th percentile, max and demotion rate — so one
+update-on run yields the distribution and the threshold can be set from it
+rather than guessed.

@@ -1,0 +1,66 @@
+RUN 29 -- optimal_diagonal_control_fast, FRF UPDATE ON, corrected gate metric
+=============================================================================
+Profile : profile_26_optdiagfast_updateon_gatefix.xlsx
+Law     : control_laws/optimal_diagonal_control_fast.py
+Params  : 1e-6,0.5,20,1.0,0.95,6
+          reg=1e-6
+          frf_update_threshold=0.5   <-- CHANGED from 0.05
+          max_bins_per_update=20
+          error_threshold_db=1.0
+          max_drive_coherence=0.95
+          bm_rank=6
+          (fields 7-10 left at code defaults: startup cap -9 dB,
+           error_domain=linear, n_irls_passes=2, drive_rcond=2.0 auto)
+Update System ID During Control : Y
+Coherence cap : not applicable on the fast path (unconstrained by design);
+                0.95 applies only if a bin falls back to the SDP.
+
+SAVE AS
+  run29_optdiagfast_updateon_gatefix_sysid.nc4
+  run29_optdiagfast_updateon_gatefix_spec.nc4
+  run29_optdiagfast_updateon_gatefix_stream.nc4   (please save the stream
+                                                   this time -- run 28 has
+                                                   no stream file)
+
+WHAT CHANGED SINCE RUN 28
+  _h_moved now measures the FRF change over IN-BAND bins only.  Run 28
+  measured it over the whole 2049-bin array, 1148 of which carry no drive
+  energy; there the live estimate is noise and the relative change per
+  cycle is enormous.  Measured: median 4.3736, 90th 6.2169, max 179.6692,
+  demoted 99% of 549 calls.  The base class's own in-band drift metric read
+  median 0.1705 on the same data -- a factor of 25.
+
+WHY THE THRESHOLD MOVED TO 0.5
+  0.05 was set against the broken metric.  Against the corrected one the
+  in-band per-cycle movement is of order 0.17 median, so 0.05 would still
+  demote on most cycles and the fast law would again be the base class in
+  disguise.  0.5 sits above the bulk and below the excursions (max 4.78 on
+  the base class's metric).  This is a FIRST ESTIMATE, not a measurement --
+  the run's own log is what sets the final default.
+
+  The same parameter also sets the base class's drift budget
+  (optimal_diagonal_control.py:465,473): with threshold 0.05 essentially
+  every previously-refined bin counted as drifted, so 10 of the 20 bins per
+  cycle went to re-solving old bins forever -- run 28 reached
+  cum_frf_updates=5570 and climbing.  Raising the threshold frees that half
+  of the budget for new coverage as well.
+
+WHAT TO WATCH IN THE CONSOLE
+  [optimal_diagonal_control_fast] FRF moved <r> (threshold 0.5, fast|SDP
+  path) -- over N calls: median .., 90th .., max .., demoted ..%
+  prints on every trip and every 25th call.  The line to report back is any
+  one of the later ones -- median / 90th / max / demoted% is what sets the
+  default.  Expect a MUCH smaller number than 4.37.  If demoted% is still
+  high the threshold goes up again; if it is 0% the threshold may be too
+  permissive and can come down toward the 90th percentile.
+
+  [optimal_diagonal_control] H drift on refined bins: since_last_solve[...]
+  is the base class's independent measurement of the same quantity -- the
+  two should now agree to within a factor of about 2, not 25.  If they
+  still disagree by an order of magnitude, stop and say so; the fix is
+  wrong.
+
+NOT YET TESTED (open item from the user's list)
+  Option 2 -- dither on the drives with the FRF update on -- has not been
+  attempted.  If run 29's fast path holds but the identification degrades,
+  that is the next thing to try.
