@@ -150,3 +150,120 @@ cum_solver_failures = 0.  No deadlock escapes.  Gate at settle: median 0.1838, 9
 
 Console captured to results/notes/run32_console.log via tee -- first run where the full
 log is on disk rather than pasted.
+
+===============================================================================
+8. WHERE THE FOUR "KEY" LAWS ACTUALLY STAND
+===============================================================================
+Asked at the end of the day whether the four key laws are all running well and well
+tested on the low-damping system.  Scored, all on sdynpy_frame6x12_system.npz, coherence
+cap on, FRF update on:
+
+  law                        run  date    rms   >3dB    level   maxV  driveV2  easy6
+  optimal_diagonal            19  09-18  5.68  19.1%   +0.17   4.40    67.4   2.50
+  optimal_diagonal_fast       32  09-19  6.08  23.0%   +0.01   2.01    16.2   3.00
+  match_diagonal_congruence   20  09-18  5.39  48.8%   +3.04   5.46    75.3   4.13
+  match_trace_pseudoinverse   01  09-12  8.22  59.8%   +0.09   7.24   108.1   5.85
+
+TWO ARE SOLID.  optimal_diagonal is the accuracy benchmark, 5.62 (run 03) -> 5.68 (run
+19) across a code generation.  optimal_diagonal_fast is now three-run reproducible
+including drive.
+
+CONGRUENCE LOOKS BETTER THAN IT IS.  rms 5.39 is second best on the board, but 48.8% of
+lines are outside +/-3 dB and it runs +3.04 dB hot.  A low rms with half the lines out
+means the errors are BALANCED, not small.  easy six 4.13 against optimal_diagonal's 2.50
+-- worse on exactly the channels we want tight.
+
+MATCH_TRACE_PSEUDOINVERSE IS THE WEAKEST AND THE STALEST.  8.22 rms, 59.8% out, and last
+run 09-12 -- before the startup-cap fix, before "make Update Transfer Function During
+Control real on every law", before the defaults revert, and before the guards.  Four code
+generations back.  Run 01 does not describe what that law does today.
+
+PLANT COVERAGE IS ONE SYSTEM.  All 32 runs used sdynpy_frame6x12_system.npz, the
+low-damping plant.  Five others sit untouched in results/case: _higherz, _shifted,
+_shifted_allmodes, _nonlinear, _nonlinear_allmodes.  drive_rcond derives itself from the
+plant's own singular-value spread and that adaptation has only ever been exercised on one
+plant.
+
+===============================================================================
+9. CONGRUENCE: FORCING 0 dB OVERALL WOULD MAKE IT WORSE
+===============================================================================
+Question raised: the +3.04 dB overall offset comes from balancing channel errors -- good
+channels high, bad channels less bad -- so could we force zero overall?
+
+The mechanism is confirmed.  Per-channel MEAN bias on run 20:
+
+  as run (+3.04 overall)  ch1-6 [+2.05 +2.06 +1.64 +1.03 +0.33 +1.32]  ch7 -2.16  ch8 -2.82
+  scaled -1.40 dB         ch1-6 [+0.65 +0.66 +0.24 -0.37 -1.07 -0.08]  ch7 -3.56  ch8 -4.22
+  scaled -3.04 (0 dB)     ch1-6 [-0.99 -0.98 -1.40 -2.01 -2.71 -1.72]  ch7 -5.20  ch8 -5.86
+
+Forcing 0 dB overall: rms 5.39 -> 5.97, >3dB 48.8% -> 55.6%, easy six 4.13 -> 4.21.  It
+OVERSHOOTS: the achievable six go from 1.40 dB average high to 1.64 dB average low, no
+better, just wrong the other way, and channels 7/8 drop another 3 dB.  The +3 dB is what
+is holding 7 and 8 up, exactly as suspected, and removing it is paid for entirely by them.
+
+THE RIGHT TARGET IS ABOUT -1.4 dB, not 0.  That centres the achievable six (mean |bias|
+1.40 -> 0.51, the best any uniform scale can do) and leaves the overall level near +1.6 dB
+-- the honest number for a law serving 8 channels with 6 drives.
+
+BUT THE OFFSET IS NOT THE MAIN PROBLEM.  Perfectly centred at -1.4 dB, >3dB goes 48.8% ->
+49.0%.  Flat.  The out-of-tolerance count is driven by per-line SCATTER, not by the mean
+offset, and no global scale touches it.  optimal_diagonal sits at 19.1% out with a similar
+rms.  That 30-point gap is where the real work is, and its cause is not yet known.
+
+CAVEAT: all of the above is an offline uniform rescale of saved run-20 spectra.  The law is
+closed loop with integral action (Ki = 0.5 in run 20), so it would find its own equilibrium
+rather than reproduce a post-scale.  Direction and rough magnitude should hold; exact
+numbers need a run.
+
+===============================================================================
+10. GIT STATE AT END OF DAY
+===============================================================================
+Commit 7dbd1d5e bundles runs 29-32: the per-bin solve counters, the two live-FRF guards,
+the threshold default 0.05 -> 0.5, and the in-band fix to the guard.  Bundled rather than
+split into three because the lock problem prevented committing at each step and the working
+tree held them cumulatively.
+
+optimaldiaglaws was fast-forwarded into control-law-development-2026-09 with
+`git fetch . optimaldiaglaws:control-law-development-2026-09` -- no checkout, no
+working-tree change, and it was a true fast-forward (control-law-development was sitting
+exactly at the merge base 04b879ea with nothing of its own).
+
+PUSH STATE, verified against the remote rather than from local tracking refs:
+
+  githunter333/optimaldiaglaws                  7dbd1d5e   up to date
+  githunter333/control-law-development-2026-09  04b879ea   NOT PUSHED
+  origin (sandialabs)                           has no branch of that name
+
+Two GitKraken attempts reported success and changed nothing, because GitKraken pushes the
+CHECKED-OUT branch and HEAD is on optimaldiaglaws, which was already current.  Fix: check
+out control-law-development-2026-09 first (zero risk -- both branches point at the same
+commit, so the working tree does not change), or right-click that branch and push it.
+Failing that, the commit is already on the remote via optimaldiaglaws, so a PR on the fork
+from optimaldiaglaws -> control-law-development-2026-09 merges it in the browser with no
+local push at all (plain merge commit, NOT "rebase and merge", which would rewrite SHAs).
+
+Console pushes fail because there is no credential helper configured at all
+(`git config --get-all credential.helper` returns nothing), so git asks for a username and
+password every time.  One-time fix on macOS: `git config --global credential.helper
+osxkeychain`, then authenticate once with the PAT.
+
+Nothing is at risk: all seven commits are on the remote via optimaldiaglaws.
+
+===============================================================================
+11. OPEN AT END OF DAY
+===============================================================================
+1. Push control-law-development-2026-09 (see section 10).
+2. Run 30's trigger.  Still unexplained.  One instance, four runs on that profile, three
+   clean.  The guards bound the damage; they do not explain it, and they have never fired
+   in the field on the condition they were built for -- only on run 32's startup transient.
+3. Re-run match_trace_pseudoinverse and match_diagonal_congruence on current code.  Both
+   rows above are stale, and neither law has ever run with the guards, which live in the
+   BASE CLASS and are inherited by all of them.  Two runs closes both gaps.
+4. Congruence per-line scatter -- 48.8% out against optimal_diagonal's 19.1% at similar
+   rms.  Cause unknown; this is the real congruence problem, not the level offset.
+5. Plant coverage: five other plants untouched.
+6. Option 2 from the original list (dither with the FRF update on) still untried, and
+   probably no longer needed now that update-on works.
+7. Housekeeping: results/notes/.probe is an empty file I created testing directory
+   writability and cannot delete through the mount.  Also
+   results/runs/un21_optdiagfast_capon_gatefixed_sysid.nc4 is missing its leading "r".

@@ -1,0 +1,91 @@
+RUNS 33 and 34 -- refresh match_trace, and field-test the guards on a second law
+===============================================================================
+Both profiles are UNEDITED.  Comparability with their earlier runs is the point.
+
+-------------------------------------------------------------------------------
+RUN 33 -- match_trace_pseudoinverse, cap 0.95, FRF update ON   (repeat of run 01)
+-------------------------------------------------------------------------------
+Profile : profile_01_matchtrace_capon.xlsx
+Script  : control_laws/control_laws.py      Function: match_trace_pseudoinverse
+Params  : 1e-3,0.95                          Update System ID During Control : Y
+
+  SAVE AS  run33_matchtrace_capon_refresh_{sysid,spec,stream}.nc4
+
+WHY.  Run 01 was taken 2026-09-12 and is the stalest row on the board.  Since then
+control_laws.py has changed twice in ways this law goes through:
+  f582f6d3 / 61c5db6b (09-17)  startup level cap fixed in all six laws that have one
+  acb3b3fe   (09-17)  "Update Transfer Function During Control" made real on every law
+  45d417a3   (09-18)  every behaviour change defaulted back OFF, keeping the startup cap
+                      (49 lines of control_laws.py)
+Run 01 therefore does not describe what this law does today.
+
+RUN 01 SCORED  rms 8.22, 59.8% of lines outside +/-3 dB, level +0.09, max 7.24 V,
+drive 108.1 V^2, easy six 5.85 -- the worst of the four key laws by a wide margin.
+No prediction is registered for run 33 because nobody has looked at why.  If it lands
+near run 01, the law is simply weak on this plant and that is the finding.  If it moves
+a lot, the 09-17 fixes mattered more for this law than for the others and that is a
+different finding.
+
+NOTE THE LAW IDENTITY.  This is match_trace_pseudoinverse, the plain function at
+control_laws.py:520 -- NOT match_trace_pseudoinverse_pi, the PI-controlled class at
+control_laws.py:864 used by sdynpy_frame6x12_profile.xlsx.  Different laws; their
+numbers are not comparable.  Run 01 and the comparison table are the plain one.
+
+-------------------------------------------------------------------------------
+RUN 34 -- optimal_diagonal_control, cap 0.95, FRF update ON    (repeat of run 19)
+-------------------------------------------------------------------------------
+Profile : profile_03_optdiag_capon.xlsx
+Script  : control_laws/optimal_diagonal_control.py   Function: optimal_diagonal_control
+Params  : 1e-6,0.05,20,1.0,0.95               Update System ID During Control : Y
+
+  SAVE AS  run34_optdiag_capon_guards_{sysid,spec,stream}.nc4
+
+WHY.  This is the ONLY cheap way to see the two live-FRF guards run on a law other than
+optimal_diagonal_control_fast.  Class hierarchy, checked rather than assumed:
+
+    optimal_diagonal_control                          <- guards live here
+    optimal_diagonal_control_fast(optimal_diagonal_control)   inherits
+    octave_band_switching_control(optimal_diagonal_control)   inherits
+    match_diagonal_congruence                         standalone, does NOT inherit
+    match_trace_pseudoinverse                         a function, does NOT inherit
+
+Run 19 (09-18 17:28) predates commit 7dbd1d5e, so it ran without them.
+
+NOTE  profile_03 sets frf_update_threshold explicitly to 0.05, so the default change to
+0.5 does NOT apply here.  At 0.05 expect the drift step to claim its full half-budget
+every call (cum_frf_updates climbing by 10) exactly as it did in run 19 -- that is the
+profile's setting, not a regression.
+
+EXPECTED, from runs 03 and 19 which agree closely:
+  rms 5.62-5.68, 19.1% outside +/-3 dB, level +0.1 to +0.2, max V ~4.4,
+  drive ~67 V^2, easy six 2.44-2.50.
+A third point in that band confirms the benchmark is stable across three code
+generations.
+
+WHAT WOULD BE A PROBLEM:  the guards firing repeatedly in band.  On run 32 they fired
+three times in 281 calls, all during the startup transient.  Anything beyond that here
+means the guards are too tight for a law whose scheduler behaves differently, and the
+limit needs revisiting before this goes any further.
+
+-------------------------------------------------------------------------------
+LAUNCH -- capture the console this time
+-------------------------------------------------------------------------------
+  cd ~/Code/python/rattlesnake-vibration-controller
+  ./restart_rattlesnake.sh        # then ctrl-C
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/<PROFILE> \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run<NN>_console.log
+
+Spec file is ~11 MB, stream is hundreds of MB.  If the sizes look backwards in the save
+dialog, they are -- run 29 was saved with the two names swapped.
+
+-------------------------------------------------------------------------------
+WHAT THESE RUNS DO NOT DO
+-------------------------------------------------------------------------------
+Neither refreshes match_diagonal_congruence, which is already on current code: nothing
+has touched control_laws.py or diagonal_congruence_control.py since 45d417a3, which run
+20 already included.  Congruence run-to-run repeatability is unmeasured and worth a run
+some time, but it is not a refresh.
+
+Neither touches the plant question.  All 34 runs will still be on
+sdynpy_frame6x12_system.npz, the low-damping plant.
