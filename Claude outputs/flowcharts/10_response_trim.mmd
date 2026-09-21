@@ -1,0 +1,29 @@
+flowchart TD
+    A["control() is called<br/>Rattlesnake passes last_response_cpsd —<br/>the response to the command issued last cycle"] --> B{"response_trim_gain &gt; 0 ?<br/>default 0.0"}
+    B -->|"no"| Z["target = specification<br/>y_trim stays None, nothing is cached,<br/>the solve is bit-identical to the pre-trim code"]
+    B -->|"yes"| C{"frozen after a<br/>test-level change?"}
+    C -->|"yes"| C2["decrement, drop the cached pairing, return<br/>a frame spanning the ramp is divided by the<br/>wrong test level and is not comparable"]
+    C -->|"no"| D["z = diag(last_response_cpsd)<br/>p = prediction cached for the command<br/>actually issued, AFTER the startup cap<br/>t_c = the target that command was solved against"]
+    D --> E{"in band, and z, p, t_c, S all &gt; 0 ?"}
+    E -->|"no"| Z2["not scored<br/>out of band there is no drive energy, so the<br/>measured diagonal is noise and the ratio is unbounded"]
+    E -->|"yes"| F{"SOLVER-AGREEMENT GATE<br/>|10·log₁₀(p / t_c)| ≤ error_threshold_db ?<br/>did the solver get what it asked for?"}
+    F -->|"no"| G["EXCLUDED — and this is the whole design.<br/>A shortfall the solver ITSELF predicted is an<br/>achievability limit, not model error. This frame is<br/>rank 5 with 6 drives; at a structural null the error<br/>never clears, and a plain integrator would run to<br/>its clamp demanding drive that buys nothing."]
+    F -->|"yes"| H["e = 10·log₁₀(z / S)<br/>measured against SPECIFICATION"]
+    H --> I{"|e| &gt; response_trim_deadband_db ?<br/>default 0.5 dB"}
+    I -->|"no"| J["left alone — do not chase the frame-to-frame<br/>scatter of a short-average CPSD"]
+    I -->|"yes"| K["step = clip(−gain·e, ±response_trim_step_db)<br/>trim_db = clip(trim_db + step, ±response_trim_limit_db)"]
+    K --> L["realize the COMMON part of each bin's change<br/>at once: scaling X by a positive scalar scales<br/>diag(H X Hᴴ) by exactly that scalar, and leaves<br/>drive coherence and rank untouched"]
+    L --> M["the per-channel SHAPE waits for a re-solve:<br/>the changed target shows up in _err_db against<br/>the current H and step 3 picks the bin up worst-first"]
+    M --> N["_refine_batch runs on the corrected target"]
+    Z --> N
+    N --> O["command issued → cache p and t_c for next cycle"]
+    W1["<b>WHY NOT measured-vs-PREDICTED.</b> For a constant<br/>multiplicative plant bias b, 10·log₁₀(z/p) reads<br/>10·log₁₀(b) for ever no matter what the trim does —<br/>shrinking the target shrinks prediction and measurement<br/>together. It is a model-mismatch READOUT, not an error:<br/>an integrator driven by it runs to its clamp and stops.<br/>10·log₁₀(z/S) drives to zero, and is what the test is<br/>actually judged on and what Rattlesnake's own Response<br/>Error panel shows."] -.-> H
+    W2["<b>WHAT THIS FIXES.</b> Everything above this loop is<br/>driven by H. Error the FRF does not explain — H1 bias,<br/>extraneous input, drive clipping, a nonlinearity that<br/>never appears in a linear FRF — was invisible, because<br/>the law never looked at the measured response. There<br/>was no integral action, so the offset simply stood."] -.-> A
+    W3["<b>MEASURED OFFLINE.</b> Against a plant 2.0 dB hotter<br/>than the model it was handed: on the channel-bins the<br/>solver reached, 2.13 dB rms error → 0.25 dB, trim<br/>settling at −1.76 dB and stopped by the deadband, in 12<br/>updates. At provably unreachable channel-bins (two<br/>response channels given the same row of H and targets<br/>10 dB apart) the trim held at exactly 0.0000 dB."] -.-> G
+    style Z fill:#eef6ee,stroke:#4a9e4a
+    style G fill:#fde8e8,stroke:#e34948
+    style C2 fill:#fdf6ec,stroke:#eda100
+    style L fill:#e8f0fd,stroke:#3b6fd4
+    style W1 fill:#fdf6ec,stroke:#eda100
+    style W2 fill:#fdf6ec,stroke:#eda100
+    style W3 fill:#fdf6ec,stroke:#eda100

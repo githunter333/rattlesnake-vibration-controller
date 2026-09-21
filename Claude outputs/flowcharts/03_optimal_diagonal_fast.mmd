@@ -1,15 +1,27 @@
 flowchart TD
-    A["_solve_one_bin(H, y)"] --> B{"has H changed<br/>since the last call?"}
-    B -->|"NO · nothing is<br/>re-estimating H live"| C["FAST PATH<br/>Burer-Monteiro: X = L Lᴴ,<br/>L is N×r, r = bm_rank"]
-    C --> D["L-BFGS-B on<br/>f(L) = ‖diag(HLLᴴHᴴ) − y‖² + reg‖X‖²_F<br/>analytic gradient ∇_L = 2·gX·L"]
-    D --> E["X = L Lᴴ<br/>PSD by construction,<br/>no cone constraint needed"]
-    B -->|"YES · a live H1 estimator<br/>is running"| F["SAFE PATH<br/>fall back to the base class SDP"]
-    F --> G["coherence-capped SDP<br/>as optimal_diagonal_control"]
-    E --> H["return X"]
-    G --> H
-    I["WHY: unconstrained BM drives<br/>pairwise drive coherence to exactly 1.0,<br/>which makes a live H1 reference<br/>CPSD singular"] -.-> B
-    style C fill:#fdf1e8,stroke:#eb6834
+    A["_refine_batch(H)"] --> B["_h_moved(H): relative Frobenius change<br/>rel = ‖H − H_cache‖_F / ‖H_cache‖_F<br/><b>IN-BAND BINS ONLY</b> — 901 of 2049 here"]
+    B --> C{"rel &gt; frf_update_threshold?<br/>default 0.5"}
+    C -->|"NO — ~95% of calls<br/>nothing is meaningfully<br/>re-estimating H"| D["<b>FAST PATH</b> · latched for the whole call"]
+    C -->|"YES — a genuine excursion"| R["<b>SAFE PATH</b> · every bin this call<br/>falls back to the base-class SDP"]
+    D --> E["_restricted_basis(H)<br/>thin SVD H = U Σ Vᴴ<br/>keep k directions with σ ≥ rc·σ₁"]
+    E --> F["_effective_drive_rcond<br/>rc = drive_rcond × plant spread<br/>spread = smallest STRUCTURAL direction,<br/>found by the largest gap in the σ spectrum<br/>(σ₅/σ₁ = 0.0152 here, ×2.0 → 0.030)"]
+    F --> G["Burer-Monteiro in the restricted basis<br/>X_k = L Lᴴ,  L is k × r,  r = min(bm_rank, k)<br/>PSD by construction — no cone constraint"]
+    G --> H["L-BFGS-B, analytic Wirtinger gradient<br/>min ‖diag(H X Hᴴ) − y‖² + reg‖X‖²_F<br/>maxiter 50, ftol 1e-9, gtol 1e-7"]
+    H --> I["map back: X = V_k X_k V_kᴴ<br/>PSD preserved by congruence"]
+    R --> S["coherence-capped SDP, CLARABEL<br/>+ IRLS if error_domain = db"]
+    I --> Z["return X for this bin"]
+    S --> Z
+    W1["<b>WHY the gate exists</b><br/>The unconstrained factored solve can drive<br/>pairwise drive coherence toward 1, which makes<br/>a live H1 estimator's reference CPSD singular.<br/>Safe only while nothing re-estimates H."] -.-> C
+    W2["<b>WHY the restriction exists</b><br/>Unrestricted, the solve buys accuracy with drive<br/>down near-null directions. The answer is not wrong,<br/>it is UNREALIZABLE: run 22 predicted −0.39 dB and<br/>measured +14.29 dB at 17.8 V. A 1% drive<br/>perturbation predicts +16.69 dB."] -.-> F
+    W3["<b>WHY in-band only</b><br/>1148 out-of-band bins carry no drive energy,<br/>so the live estimate there is noise. Measured over<br/>the whole array the metric read median 4.37 against<br/>the base class's 0.17 on the same data — a factor<br/>of 25 — and runs 21 and 28 demoted on 99% of calls."] -.-> B
     style D fill:#fdf1e8,stroke:#eb6834
-    style F fill:#fde8e8,stroke:#e34948
-    style G fill:#fde8e8,stroke:#e34948
-    style I fill:#fdf6ec,stroke:#eda100
+    style E fill:#fdf1e8,stroke:#eb6834
+    style F fill:#fdf1e8,stroke:#eb6834
+    style G fill:#fdf1e8,stroke:#eb6834
+    style H fill:#fdf1e8,stroke:#eb6834
+    style I fill:#fdf1e8,stroke:#eb6834
+    style R fill:#fde8e8,stroke:#e34948
+    style S fill:#fde8e8,stroke:#e34948
+    style W1 fill:#fdf6ec,stroke:#eda100
+    style W2 fill:#fdf6ec,stroke:#eda100
+    style W3 fill:#fdf6ec,stroke:#eda100

@@ -95,8 +95,13 @@ works for both laws:
     startup_test_level_cap_db - ceiling on the FIRST control command only,
               in dB re the specification trace (default -9.0). Handled
               entirely in the base class; see its docstring, including the
-              caveat that this law is open loop so the ceiling does not bind
-              after cycle 1.
+              caveat that the ceiling keys on "first command" so it does not
+              bind after cycle 1.
+response_trim_gain and its three companions (fields 11-14) are inherited
+              unchanged from the base class, which owns the whole
+              response-error trim: this subclass overrides only the per-bin
+              solve, and the trim acts on the TARGET handed to that solve.
+              Off by default, as in the base class.
 max_drive_coherence still applies to the SDP fallback path exactly as in
 the base class; it has no effect on the fast path (which is, by design,
 unconstrained).

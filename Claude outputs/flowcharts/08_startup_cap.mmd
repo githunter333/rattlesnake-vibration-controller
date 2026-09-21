@@ -1,0 +1,13 @@
+flowchart TD
+    A["first control command<br/>last_output_cpsd is None"] --> B["solve as that law normally would"]
+    B --> C["<b>drive-coherence cap FIRST</b><br/>shrink |X_ij| to ρ·√(X_ii X_jj),<br/>then re-project onto the PSD cone"]
+    C --> D["<b>startup level cap LAST</b><br/>predicted response Y = H X Hᴴ<br/>s = min(1, 10^(cap_db/10) · tr(spec) / tr(Y))<br/>X ← s·X &nbsp;&nbsp;(s ≤ 1, reduce only)"]
+    D --> E["return the first command"]
+    F["<b>ORDER MATTERS — this was a real bug.</b><br/>Until 2026-09-17 the coherence cap ran AFTER the<br/>level cap and lifted the level straight back through it.<br/>With the clamp correct and the cap at 0.95, the first<br/>command still measured +6.72 dB re spec for<br/>match_trace and worst lines at +22.41 dB —<br/>against a −9.00 dB ceiling. Uncapped, both hit<br/>−9.00 exactly. The coherence cap shrinks off-diagonal<br/>drive terms while preserving the diagonal, destroying<br/>the inter-drive cancellation the solve relies on, so the<br/>same drive produces far more response."] -.-> D
+    G["<b>AND THE UNITS WERE WRONG.</b><br/>The clamp originally compared tr(spec), in response<br/>units², against tr(X), in V². That ratio is not<br/>dimensionless — it tracked plant gain. On run 01 the<br/>raw solve sat −2.04 dB re spec, the old clamp took it<br/>to a median −18.88 dB; the corrected clamp lands on<br/>−9.00 dB exactly. Roughly 10 dB too aggressive,<br/>and unit-dependent on top of that."] -.-> D
+    H["<b>IT BINDS ONCE.</b> Gated on last_output_cpsd<br/>being None, so cycle 2 onward is uncapped.<br/>It guards the one command issued before anyone<br/>has seen the rig respond — not the level of the run.<br/>For the optimal-diagonal family the clamp is applied<br/>to the RETURNED command only; the stored solution<br/>is left unscaled so SDP refinement is not dragged down."] -.-> E
+    style C fill:#fdf1e8,stroke:#eb6834
+    style D fill:#fde8e8,stroke:#e34948
+    style F fill:#fdf6ec,stroke:#eda100
+    style G fill:#fdf6ec,stroke:#eda100
+    style H fill:#fdf6ec,stroke:#eda100

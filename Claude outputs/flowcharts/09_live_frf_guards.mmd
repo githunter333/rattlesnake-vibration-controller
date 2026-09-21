@@ -1,0 +1,19 @@
+flowchart TD
+    A["live FRF arrives<br/>Rattlesnake republishes an incrementally<br/>averaged H every cycle when<br/>Update Transfer Function During Control is on"] --> B{"GUARD 1<br/>per bin, in-band only<br/>‖H_live − H_sysid‖/‖H_sysid‖ &gt; 10 ?"}
+    B -->|"yes"| C["that bin uses the SYSTEM-ID FRF this call<br/>not latched — recovers by itself as soon as<br/>the live estimate comes back inside the limit"]
+    B -->|"no"| D["use the live estimate"]
+    C --> E["scheduler runs on the patched H"]
+    D --> E
+    E --> F{"GUARD 2<br/>predicted response ≥ 20 dB under spec<br/>AND no bin scheduled<br/>— for 10 consecutive calls?"}
+    F -->|"yes"| G["DEADLOCK ESCAPE<br/>rebuild the buzz baseline from the system-ID FRF,<br/>reset H_cache, clear every refinement flag"]
+    F -->|"no"| H["normal return"]
+    W1["<b>WHY GUARD 1</b> — the estimate is formed from the<br/>drive the law itself commands, so a bad solve feeds a<br/>bad estimate which feeds a worse solve. Run 30 closed<br/>that loop: the live H reached a median 39,834× and a<br/>max 500,217× its system-ID value, the law solved<br/>against it, and commanded 1.8e5 V. Scored after the<br/>fact that run sits at 94.21 dB rms and +151 dB level.<br/>A healthy run stays under 1 — run 28 logged a median<br/>of 0.1752 and a max of 0.8920 over its whole length."] -.-> B
+    W2["<b>WHY GUARD 2</b> — run 30's end state was absorbing:<br/>corrupted H → near-zero drive (0.0015 V) → no<br/>excitation → the live FRF stops moving → nothing trips<br/>the drift threshold → nothing scheduled → the same<br/>dead solution, 70+ consecutive calls, bit-identical.<br/>Recovery requires excitation the law is no longer<br/>commanding, so nothing in the loop can restart it."] -.-> F
+    W3["<b>NEITHER GUARD EXPLAINS THE DIVERGENCE.</b><br/>They bound the damage and say so in the log.<br/>Run 30 remains the only instance; runs 31, 32 and 34<br/>on the same profile were clean. In the field the guards<br/>have only ever fired on the startup transient —<br/>run 32 on calls 7-9, run 34 on call 7, then silent."] -.-> G
+    W4["<b>THE MASK IS NOT OPTIONAL.</b> Guard 1 shipped<br/>scoring all 2049 bins and fired on ~1050 of them every<br/>call while run 31 controlled perfectly. 1148 bins are out<br/>of band: no drive energy, so the estimate there is noise<br/>and its relative change is unbounded. Third time this<br/>same mistake was made in this file and its subclass."] -.-> B
+    style C fill:#fde8e8,stroke:#e34948
+    style G fill:#fde8e8,stroke:#e34948
+    style W1 fill:#fdf6ec,stroke:#eda100
+    style W2 fill:#fdf6ec,stroke:#eda100
+    style W3 fill:#fdf6ec,stroke:#eda100
+    style W4 fill:#fdf6ec,stroke:#eda100

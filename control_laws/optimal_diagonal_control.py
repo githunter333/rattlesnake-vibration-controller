@@ -100,12 +100,55 @@ extra_parameters (string): comma-separated
                              the stored solution self.output_cpsd is left
                              unscaled so the SDP refinement continues from
                              the real solve.
-                             CAVEAT: this law is OPEN LOOP, so the ceiling
-                             binds on the first command only; cycle 2 returns
+                             CAVEAT: the ceiling binds on the FIRST command
+                             only -- it keys on last_output_cpsd being None,
+                             which is true exactly once -- so cycle 2 returns
                              the uncapped solution. It guards the one command
                              issued before anyone has seen the rig respond,
                              not the level of the run.
+response_trim_gain - fraction of the measured response error folded into
+              the solver's target each control cycle (field 11, default 0.0
+              = OFF).  See "What kind of loop this is" below.
+response_trim_limit_db - total authority of the trim, +/- dB (field 12,
+              default 3.0).  Hard clamp on the accumulated correction.
+response_trim_step_db - most the trim may move in one cycle, dB (field 13,
+              default 0.5).
+response_trim_deadband_db - measured errors smaller than this are left alone
+              (field 14, default 0.5), so the trim does not chase the
+              frame-to-frame scatter of a short-average CPSD.
 A bare single value (no comma) is accepted too, read as `reg`.
+
+WHAT KIND OF LOOP THIS IS
+-------------------------
+Two different things can be called "closed loop" here and this law has
+historically been mislabelled on both counts.  Reports before 2026-09-17
+called it a feedback law; the correction made then over-shot and called it
+open loop, which understates it just as badly.  Precisely:
+
+  CLOSED on the identified plant model.  control() and system_id_update()
+  both hand the LIVE transfer function to _refine_batch every cycle.  Bins
+  whose H has moved more than frf_update_threshold since their own last
+  solve are re-solved (step 1), and bins whose predicted error has degraded
+  against the CURRENT H are re-solved worst-first (step 3) even when their H
+  moved less than the gate.  Step 3 is the one that matters for a plant that
+  softens with level: the drift can sit under the gate and still be caught,
+  because the error is always recomputed with the new H.  This is what runs
+  29/31/32 demonstrated -- 17.03 / 18.44 / 16.22 V^2 with the FRF update on,
+  against 153 / 485 / 245 V^2 with it off.
+
+  OPEN on the response error, unless response_trim_gain is set.  The solve
+  minimizes the PREDICTED response diag(H X H^H) against the target.  With
+  the gain at 0 (the default) last_response_cpsd is accepted and never read,
+  so any error the FRF does not explain -- bias in the H1 estimate,
+  extraneous input, drive clipping, nonlinear cross terms that never appear
+  in a linear FRF -- is invisible to the law and sits there uncorrected.
+  _update_response_trim closes that half: see its docstring for why it
+  integrates measured-vs-SPECIFICATION error but gates on
+  predicted-vs-TARGET agreement, and why that distinction is what keeps it
+  from winding up at bins the plant simply cannot reach.
+
+The honest one-line description is an indirect adaptive (self-tuning)
+regulator: fast model update, optional slow error trim.
 """
 
 import numpy as np
@@ -132,6 +175,15 @@ _FRF_DIVERGENCE_LIMIT = 10.0
 # +/-3 dB), and 10 consecutive calls rules out a transient.
 _DEADLOCK_ESCAPE_DB = 20.0
 _DEADLOCK_ESCAPE_CALLS = 10
+
+# RESPONSE-ERROR TRIM FREEZE.  components/data_collector.py divides every
+# acquired frame by the CURRENT test level, so everything this law sees --
+# FRF, last_response_cpsd, last_drive_cpsd -- is referred to FULL level and
+# the trim ratio is level-consistent in steady state.  It is NOT consistent
+# across a level change: a frame that spans the ramp is normalized by the
+# wrong number.  Rattlesnake calls set_test_level_db on every change, so the
+# trim sits out this many control cycles afterwards.
+_TRIM_FREEZE_CALLS = 3
 
 # Rattlesnake loads a control-law file with importlib.spec_from_file_location,
 # i.e. as a standalone module with NO package context, so a relative import
@@ -178,13 +230,16 @@ class optimal_diagonal_control:
                  multiple_coherence: np.ndarray = None,
                  frames=None,
                  total_frames=None,
-                 # ACCEPTED AND NEVER READ. This law is OPEN LOOP: it refines
-                 # each bin against its own PREDICTED response,
-                 # diag(H X H^H), not against the measured response. Nothing
-                 # in this class or optimal_diagonal_control_fast reads
-                 # last_response_cpsd or last_output_cpsd -- verified
-                 # 2026-09-17, they appear only in signatures. The only thing
-                 # that changes between calls is H.
+                 # NEVER READ HERE, and read in control() only when
+                 # response_trim_gain > 0.  __init__ runs before the rig has
+                 # responded to anything, so there is nothing to read.  With
+                 # the trim off the solve is driven entirely by H: each bin
+                 # is refined against its own PREDICTED response,
+                 # diag(H X H^H), and the only thing that changes between
+                 # calls is H.  With the trim on, control() folds the
+                 # measured response error into the target -- see
+                 # _update_response_trim and "WHAT KIND OF LOOP THIS IS" in
+                 # the module docstring.
                  last_response_cpsd: np.ndarray = None,
                  last_output_cpsd: np.ndarray = None,
                  ):
@@ -231,6 +286,14 @@ class optimal_diagonal_control:
         # differently conditioned article without re-tuning.  Negative means
         # an absolute ratio, |value|.
         self.drive_rcond = 2.0
+        # RESPONSE-ERROR TRIM -- fields 11-14, OFF by default.  Every
+        # behaviour change in this file ships defaulted off (commit
+        # 45d417a3); this one is no exception, so an archived profile that
+        # names ten fields or fewer reproduces exactly.
+        self.response_trim_gain = 0.0
+        self.response_trim_limit_db = 3.0
+        self.response_trim_step_db = 0.5
+        self.response_trim_deadband_db = 0.5
         if extra_parameters:
             try:
                 parts = [p.strip() for p in str(extra_parameters).split(',') if p.strip() != '']
@@ -245,10 +308,24 @@ class optimal_diagonal_control:
                     'linear' if float(parts[7]) == 0 else 'db')
                 if len(parts) >= 9: self.n_irls_passes = max(0, int(float(parts[8])))
                 if len(parts) >= 10: self.drive_rcond = float(parts[9])
+                if len(parts) >= 11: self.response_trim_gain = max(0.0, float(parts[10]))
+                if len(parts) >= 12: self.response_trim_limit_db = abs(float(parts[11]))
+                if len(parts) >= 13: self.response_trim_step_db = abs(float(parts[12]))
+                if len(parts) >= 14: self.response_trim_deadband_db = abs(float(parts[13]))
             except ValueError:
                 pass  # keep defaults if the string doesn't parse
 
         self.output_cpsd = None    # (F, N, N) current best drive CPSD per bin
+        # Response-error trim state.  y_trim stays None while the trim is
+        # off, and _eff_target then returns the specification slice itself,
+        # so the solve is bit-identical to the pre-trim code.
+        self.y_trim = None            # (F, M) multiplicative correction on the target
+        self._p_commanded = None      # (F, M) predicted diagonal of the command actually issued
+        self._target_commanded = None # (F, M) target that command was solved against
+        self._trim_frozen_calls = 0
+        self._test_level_db = None
+        self._H_last_used = None
+        self.n_trim_updates = 0
         # Console throttling -- see _should_log.  Once every bin is solved and
         # the FRF is frozen, _refine_batch does no work but still ran two print
         # statements per control cycle, which on run 14 buried the terminal in
@@ -462,7 +539,7 @@ class optimal_diagonal_control:
         Y = np.einsum('fmn,fnk,flk->fml', H_clean[indices], self.output_cpsd[indices],
                        H_clean[indices].conj())
         achieved = np.maximum(np.real(np.einsum('fmm->fm', Y)), 1e-30)
-        target = np.maximum(self.y_diag_target[indices], 1e-30)
+        target = np.maximum(self._eff_target(indices), 1e-30)
         return np.max(np.abs(10 * np.log10(achieved / target)), axis=1)
 
     # ------------------------------------------------------------------
@@ -637,6 +714,7 @@ class optimal_diagonal_control:
         self._n_calls += 1
         H_clean = np.nan_to_num(transfer_function, nan=0.0, posinf=0.0, neginf=0.0)
         H_clean = self._reject_diverged_frf(H_clean)
+        self._H_last_used = H_clean
         H_changed = self.H_cache is None or not np.array_equal(H_clean, self.H_cache)
         budget = self.max_bins_per_update
 
@@ -673,7 +751,7 @@ class optimal_diagonal_control:
         n_fix = min(drifted.size, drift_budget, budget)
         fixed_this_call = drifted[:n_fix]
         for f in fixed_this_call:
-            self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self.y_diag_target[f],
+            self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self._eff_target(f),
                                                      X_warm=self.output_cpsd[f])
             self.H_cache[f] = H_clean[f]
         if n_fix > 0:
@@ -695,7 +773,7 @@ class optimal_diagonal_control:
             n_refine = min(order.size, budget)
             self.n_deferred = int(order.size - n_refine)
             for f in order[:n_refine]:
-                self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self.y_diag_target[f],
+                self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self._eff_target(f),
                                                      X_warm=self.output_cpsd[f])
                 self.sdp_refined[f] = True
                 self.H_cache[f] = H_clean[f]
@@ -734,7 +812,7 @@ class optimal_diagonal_control:
             n_stale = min(stale_order.size, budget)
             self.n_stale_deferred = int(stale_order.size - n_stale)
             for f in stale_order[:n_stale]:
-                self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self.y_diag_target[f],
+                self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self._eff_target(f),
                                                      X_warm=self.output_cpsd[f])
                 self.H_cache[f] = H_clean[f]
             if n_stale > 0:
@@ -752,7 +830,7 @@ class optimal_diagonal_control:
             Y_all = np.einsum('fmn,fnk,flk->fml', H_clean[in_band], self.output_cpsd[in_band],
                                H_clean[in_band].conj())
             achieved_all = np.maximum(np.real(np.einsum('fmm->fm', Y_all)), 1e-30)
-            target_all = np.maximum(self.y_diag_target[in_band], 1e-30)
+            target_all = np.maximum(self._eff_target(in_band), 1e-30)
             err_db_all = 10 * np.log10(achieved_all / target_all)
             self_rms_per_channel = np.sqrt(np.mean(err_db_all ** 2, axis=0))
         else:
@@ -791,8 +869,224 @@ class optimal_diagonal_control:
               f"cum_sdp_refinements={self.n_sdp_refinements}, cum_frf_updates={self.n_frf_updates}, "
               f"cum_stale_refinements={self.n_stale_refinements}, "
               f"cum_solver_failures={self.n_solver_failures}, n_refined_total={int(np.sum(self.sdp_refined))}/{self.F}, "
-              f"self_predicted_rms_db_per_channel={np.array2string(self_rms_per_channel, precision=2)}",
+              f"self_predicted_rms_db_per_channel={np.array2string(self_rms_per_channel, precision=2)}"
+              f"{self._trim_log_fragment()}",
               flush=True)
+
+    # ------------------------------------------------------------------
+    # THE RESPONSE-ERROR TRIM -- the second loop.  Added 2026-09-21.
+    # ------------------------------------------------------------------
+    def _eff_target(self, indices):
+        """The target the solver actually aims at.
+
+        The specification diagonal, times the response-error trim when it is
+        enabled.  With response_trim_gain == 0 self.y_trim is None and this
+        returns the specification slice itself -- the same object the
+        pre-trim code passed -- so every solve is bit-identical.
+        """
+        if self.y_trim is None:
+            return self.y_diag_target[indices]
+        return self.y_diag_target[indices] * self.y_trim[indices]
+
+    def _trim_log_fragment(self):
+        if self.y_trim is None:
+            return ""
+        in_band = self.y_diag_target.max(axis=1) > 0
+        t_db = 10*np.log10(np.maximum(self.y_trim[in_band], 1e-30))
+        return (f", trim_db[median={np.median(t_db):+.2f}, "
+                f"min={t_db.min():+.2f}, max={t_db.max():+.2f}], "
+                f"cum_trim_updates={self.n_trim_updates}")
+
+    def set_test_level_db(self, test_level_db):
+        """Rattlesnake calls this on every test-level change (see
+        components/random_vibration_sys_id_data_analysis.py:149).  Nothing
+        else in this law depends on level -- the data collector already
+        refers everything to full level -- but the trim does: a frame
+        acquired across the ramp is divided by the wrong number, so its
+        diagonal cannot be compared with a prediction cached before the
+        change.  Sit out _TRIM_FREEZE_CALLS cycles and drop the stale
+        pairing.
+        """
+        prev = self._test_level_db
+        self._test_level_db = test_level_db
+        if self.response_trim_gain > 0 and prev is not None and test_level_db != prev:
+            self._trim_frozen_calls = _TRIM_FREEZE_CALLS
+            self._p_commanded = None
+            self._target_commanded = None
+            print(f"[optimal_diagonal_control] test level {prev:g} -> "
+                  f"{test_level_db:g} dB; response-error trim frozen for "
+                  f"{_TRIM_FREEZE_CALLS} cycles (level-ramp frames are not "
+                  f"comparable). Accumulated trim is kept.", flush=True)
+
+    def _cache_commanded_prediction(self, output, transfer_function):
+        """Record what THIS command is predicted to produce, so the next
+        cycle's measurement can be compared against the right thing.
+
+        It has to be the command as RETURNED -- after the startup cap --
+        because that is what the rig is about to be driven with, and it has
+        to be paired with the target that command was solved against, which
+        is not necessarily the target in force by the time the measurement
+        comes back.
+        """
+        if self.response_trim_gain <= 0 or output is None:
+            self._p_commanded = None
+            self._target_commanded = None
+            return
+        H = self._H_last_used if self._H_last_used is not None else transfer_function
+        if H is None:
+            self._p_commanded = None
+            self._target_commanded = None
+            return
+        H = np.nan_to_num(H, nan=0.0, posinf=0.0, neginf=0.0)
+        if H.shape[0] != output.shape[0] or H.shape[1] != self.M:
+            self._p_commanded = None
+            self._target_commanded = None
+            return
+        Y = np.einsum('fmn,fnk,flk->fml', H, output, H.conj())
+        self._p_commanded = np.maximum(np.real(np.einsum('fmm->fm', Y)), 0.0)
+        self._target_commanded = (self.y_diag_target.copy() if self.y_trim is None
+                                  else self.y_diag_target * self.y_trim)
+
+    def _update_response_trim(self, last_response_cpsd):
+        """Close the loop on the RESPONSE ERROR.
+
+        WHAT IT CORRECTS.  Everything above this method is driven by H.  If
+        the plant delivers something other than diag(H X H^H) for reasons H
+        does not capture -- bias in the H1 estimate, extraneous input, drive
+        clipping, a nonlinearity that never shows up in a linear FRF -- the
+        law cannot see it, because it never looks at the measured response.
+        There is no integral action, so that offset simply stands.  This
+        method is the integrator.
+
+        WHAT IT INTEGRATES, AND WHY THAT PARTICULAR SIGNAL.  Two candidate
+        error signals, and the difference matters:
+
+          measured vs PREDICTED, 10log10(z/p).  For a constant multiplicative
+          plant bias b this reads 10log10(b) forever, no matter what the trim
+          does -- shrinking the target shrinks prediction and measurement
+          together.  It is a model-mismatch READOUT, not an error: it never
+          goes to zero, so an integrator driven by it just runs to its clamp
+          and stops there.  Worked through on paper 2026-09-21 before any of
+          this was written; the clamp happening to sit at the right value is
+          a coincidence, not a design.
+
+          measured vs SPECIFICATION, 10log10(z/S).  This is the thing the
+          test is actually judged on, it is what Rattlesnake's own Response
+          Error panel shows, and it drives to zero: trim_db converges
+          geometrically to -10log10(b), at which point the measurement sits
+          on the specification.  This is what is used.
+
+        WHY IT STILL NEEDS A GATE.  Integrating measured-vs-specification on
+        its own winds up at every bin the plant cannot reach.  This frame is
+        rank 5 with 6 drives; at a structural null the law lands short of
+        specification no matter what is asked of it, the error never clears,
+        and the trim would climb to its clamp demanding drive that buys
+        nothing.  So the trim is applied only where the solver reached what
+        it aimed at -- |10log10(p/target)| <= error_threshold_db, both sides
+        cached from the cycle that issued the command.  A shortfall the
+        SOLVER already predicted is an achievability limit and is none of
+        this loop's business; only the part the solver thought it had and
+        did not get is model error.
+
+        SPEED.  The per-channel correction is realized by the ordinary
+        scheduler: a changed target shows up in _err_db against the current
+        H, and step 3 picks those bins up worst-first.  That runs at the
+        refinement budget's pace (max_bins_per_update per cycle), which is
+        slow across 901 in-band bins.  The COMMON part of each bin's change
+        is therefore applied directly to the stored drive CPSD instead:
+        scaling X by a positive scalar scales diag(H X H^H) by exactly that
+        scalar, so the overall level correction -- the dominant term, and
+        the one an operator notices -- is exact and immediate, and only the
+        channel-to-channel shape waits for a re-solve.  Scaling by a real
+        positive scalar leaves drive coherence and rank untouched, so it
+        cannot walk around max_drive_coherence or drive_rcond.
+
+        IN-BAND ONLY.  Out of band there is no drive energy, the measured
+        diagonal is noise, and the ratio is unbounded.  This is the fourth
+        statistic in this file that has had to learn that lesson.
+        """
+        if self.response_trim_gain <= 0 or last_response_cpsd is None:
+            return
+        if self._trim_frozen_calls > 0:
+            self._trim_frozen_calls -= 1
+            self._p_commanded = None
+            self._target_commanded = None
+            return
+        if self._p_commanded is None or self._target_commanded is None:
+            return
+
+        z = np.real(np.einsum('fmm->fm', last_response_cpsd))
+        if z.shape != self.y_diag_target.shape:
+            return
+        z = np.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0)
+        p = self._p_commanded
+        tc = self._target_commanded
+        spec = self.y_diag_target
+        if p.shape != z.shape or tc.shape != z.shape:
+            return
+
+        in_band = spec.max(axis=1) > 0
+        ok = (np.broadcast_to(in_band[:, None], z.shape)
+              & (z > 0) & (p > 0) & (tc > 0) & (spec > 0))
+        n_scored = int(ok.sum())
+        if n_scored == 0:
+            return
+
+        # GATE: did the solver get what it asked for on this bin/channel?
+        shortfall_db = np.zeros_like(z)
+        shortfall_db[ok] = 10*np.log10(p[ok]/tc[ok])
+        ok &= np.abs(shortfall_db) <= self.error_threshold_db
+        n_gated = int(ok.sum())
+
+        # The error the test is judged on.
+        err_db = np.zeros_like(z)
+        err_db[ok] = 10*np.log10(z[ok]/spec[ok])
+        ok &= np.abs(err_db) > self.response_trim_deadband_db
+        n_moving = int(ok.sum())
+        if n_moving == 0:
+            self._p_commanded = None
+            self._target_commanded = None
+            return
+
+        if self.y_trim is None:
+            self.y_trim = np.ones_like(spec)
+        trim_db = 10*np.log10(np.maximum(self.y_trim, 1e-30))
+        step_db = np.clip(-self.response_trim_gain*err_db,
+                          -self.response_trim_step_db, self.response_trim_step_db)
+        step_db[~ok] = 0.0
+        new_trim_db = np.clip(trim_db + step_db,
+                              -self.response_trim_limit_db, self.response_trim_limit_db)
+        applied_db = new_trim_db - trim_db
+        self.y_trim = 10.0**(new_trim_db/10.0)
+        self.n_trim_updates += 1
+
+        # Realize the common part of each bin's change immediately (see
+        # SPEED above).  Mean over the channels that actually moved.
+        n_bins_scaled = 0
+        if self.output_cpsd is not None and self.output_cpsd.shape[0] == spec.shape[0]:
+            cnt = ok.sum(axis=1)
+            rows = np.where(cnt > 0)[0]
+            if rows.size:
+                g_db = applied_db[rows].sum(axis=1)/cnt[rows]
+                g = 10.0**(g_db/10.0)
+                self.output_cpsd[rows] *= g[:, None, None]
+                n_bins_scaled = int(rows.size)
+
+        if self.n_trim_updates <= 5 or self.n_trim_updates % 20 == 0:
+            moved = applied_db[ok]
+            at_clamp = int(np.sum(np.abs(new_trim_db[in_band]) >=
+                                  self.response_trim_limit_db - 1e-9))
+            print(f"[optimal_diagonal_control] response-error trim #{self.n_trim_updates}: "
+                  f"{n_scored} in-band channel-bins scored, {n_gated} passed the "
+                  f"solver-agreement gate, {n_moving} outside the "
+                  f"{self.response_trim_deadband_db:g} dB deadband; "
+                  f"applied median {np.median(moved):+.3f} dB "
+                  f"(max |{np.abs(moved).max():.3f}|), {n_bins_scaled} bins rescaled "
+                  f"in place, {at_clamp} channel-bins at the "
+                  f"+/-{self.response_trim_limit_db:g} dB clamp.", flush=True)
+
+        self._p_commanded = None
+        self._target_commanded = None
 
     # ------------------------------------------------------------------
     def system_id_update(self,
@@ -821,12 +1115,20 @@ class optimal_diagonal_control:
                 last_output_cpsd: np.ndarray = None) -> np.ndarray:
         if not self._initialized:
             self._initialize(transfer_function, None)
-            return self._startup_capped(self.output_cpsd, transfer_function,
-                                        last_output_cpsd)
+            out = self._startup_capped(self.output_cpsd, transfer_function,
+                                       last_output_cpsd)
+            self._cache_commanded_prediction(out, transfer_function)
+            return out
+        # The trim runs BEFORE the refinement, so every bin the scheduler
+        # touches this call is solved against the corrected target rather
+        # than against one the measurement has already contradicted.
+        self._update_response_trim(last_response_cpsd)
         if transfer_function is not None:
             self._refine_batch(transfer_function)
-        return self._startup_capped(self.output_cpsd, transfer_function,
-                                    last_output_cpsd)
+        out = self._startup_capped(self.output_cpsd, transfer_function,
+                                   last_output_cpsd)
+        self._cache_commanded_prediction(out, transfer_function)
+        return out
 
     def _startup_capped(self, output, transfer_function, last_output_cpsd):
         """Ceiling on the first command only -- see

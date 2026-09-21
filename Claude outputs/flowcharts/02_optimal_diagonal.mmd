@@ -1,13 +1,21 @@
-flowchart LR
-    A["control()<br/>called"] --> B["<b>STEP 1 · instant baseline</b><br/>every bin gets the closed-form<br/>buzz solve — H⁺ synthesis, cross-terms<br/>from survey or zero. Effectively free."]
-    B --> C{"SDP budget<br/>max_bins_<br/>per_update<br/>= 20"}
-    C -->|"priority,<br/>≤ half budget"| D["<b>STEP 4 · drifted bins</b><br/>already-refined bins whose H moved<br/>past frf_update_threshold"]
-    C -->|"main use"| E["<b>STEP 2 · worst-error new bins</b><br/>predicted error above<br/>error_threshold_db, worst first"]
-    C -->|"leftover only"| F["<b>STEP 5 · stale re-triage</b><br/>re-check already-refined bins<br/>against the CURRENT H"]
-    D --> G["<b>per-bin SDP</b> · CLARABEL, warm-started<br/>min ‖diag(HXHᴴ) − y‖² + reg‖X‖²_F<br/>s.t. X ⪰ 0 and |X_ij| ≤ ρ√(X_ii X_jj)"]
-    E --> G
-    F --> G
-    G --> H["replace that bin's buzz<br/>solution with the optimal X"]
-    H --> I["return drive CPSD:<br/>refined bins + buzz elsewhere"]
-    style B fill:#fdf1e8,stroke:#eb6834
-    style G fill:#fdf1e8,stroke:#eb6834
+flowchart TD
+    A["_refine_batch(H)"] --> G1["<b>GUARD 1 · _reject_diverged_frf</b><br/>per bin, in-band only:<br/>‖H_live − H_sysid‖ / ‖H_sysid‖ &gt; 10 ?<br/>→ that bin reverts to the system-ID FRF<br/>for this call. Not latched; recovers by itself."]
+    G1 --> B["budget = max_bins_per_update = 20"]
+    B --> S1["<b>STEP 1 · drifted refined bins</b><br/>‖H − H_at_last_solve‖/‖H_at_last_solve‖<br/>&gt; frf_update_threshold<br/><b>capped at half the budget</b> so persistent<br/>drift cannot starve new-bin coverage"]
+    S1 --> S2["<b>STEP 2 · worst-error new bins</b><br/>not-yet-refined bins whose predicted<br/>dB error exceeds error_threshold_db,<br/>worst first, with whatever budget remains"]
+    S2 --> S3["<b>STEP 3 · stale re-triage</b><br/>already-refined bins now more than<br/>error_threshold_db WORSE than at their<br/>own last solve — judged against that bin's<br/>own history, not an absolute floor"]
+    S3 --> SDP["<b>per-bin SDP</b> · cvxpy + CLARABEL<br/>variable X is the 6×6 drive CPSD itself<br/>min ‖diag(H X Hᴴ) − y‖² + reg‖X‖²_F<br/>s.t. X ⪰ 0<br/>and |X_ij| ≤ ρ·√(X_ii X_jj) for all i≠j"]
+    SDP --> IRLS{"error_domain<br/>= db?"}
+    IRLS -->|"yes"| RW["reweight w_m = y_m / ŷ_m, clip [0.1, 10]<br/>re-solve · 1 + n_irls_passes times<br/>Gauss-Newton on the dB objective while<br/>every subproblem stays a convex SDP"]
+    IRLS -->|"no — default"| DONE["keep the linear-domain solve"]
+    RW --> G2
+    DONE --> G2["<b>GUARD 2 · _escape_deadlock_if_starved</b><br/>predicted response 20 dB under spec<br/>AND nothing scheduled, 10 calls running<br/>→ discard the live FRF, rebuild the buzz<br/>baseline from the system ID, clear all refinement"]
+    G2 --> OUT["return: refined bins + buzz baseline elsewhere<br/>first command only, clamp to startup_test_level_cap_db"]
+    BZ["<b>BEFORE ANY OF THIS</b> · _buzz_solve_all<br/>every one of the 2049 bins gets a closed-form<br/>X = H⁺ S H⁺ᴴ synthesis at initialization, where S<br/>carries the target diagonal and the survey's<br/>cross-term structure. Control can start on cycle 1<br/>instead of waiting 5-10 s for a full-band SDP."] -.-> B
+    NOTE["<b>OPEN LOOP.</b> Every error above is the law's<br/>own prediction diag(H X Hᴴ) against the target.<br/>last_response_cpsd is accepted and never read.<br/>The only thing that changes between calls is H."] -.-> SDP
+    style BZ fill:#dbe9fa,stroke:#2a78d6
+    style SDP fill:#fdf1e8,stroke:#eb6834
+    style RW fill:#fdf1e8,stroke:#eb6834
+    style G1 fill:#fde8e8,stroke:#e34948
+    style G2 fill:#fde8e8,stroke:#e34948
+    style NOTE fill:#fdf6ec,stroke:#eda100

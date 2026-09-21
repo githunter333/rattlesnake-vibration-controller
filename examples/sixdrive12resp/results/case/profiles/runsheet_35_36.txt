@@ -1,0 +1,127 @@
+RUNS 35 and 36 -- the response-error trim, first time on the rig
+================================================================================
+The trim was written 2026-09-21 and has NEVER been run on hardware.  Four offline
+tests pass, but offline the plant bias was uniform, constant and exactly known.
+On the rig it is none of those.  These two runs are a control pair: the same
+profile with the trim off and on, back to back, same session, same plant.
+
+WHY IT EXISTS.  optimal_diagonal_control is closed on the identified plant model
+-- it re-solves against the live FRF every cycle, which is what runs 29/31/32
+measured -- and was open on the response error.  Error the FRF does not explain
+(H1 bias, extraneous input, drive clipping, a nonlinearity that never appears in
+a linear FRF) was invisible to the law and stood uncorrected, because nothing
+compared the measured response with the specification.  The trim is the missing
+integrator.
+
+--------------------------------------------------------------------------------
+RUN 35 -- optimal_diagonal_control_fast, trim OFF          (baseline, repeat of 32)
+--------------------------------------------------------------------------------
+Profile : profile_26_optdiagfast_updateon_gatefix.xlsx      UNEDITED
+Script  : control_laws/optimal_diagonal_control_fast.py
+Params  : 1e-6,0.5,20,1.0,0.95,6               Update System ID During Control : Y
+
+  SAVE AS  run35_optdiagfast_trimoff_{sysid,spec,stream}.nc4
+
+PRE-REGISTERED.  This is a fourth point on a band measured three times already
+(runs 29, 31, 32).  It must land inside it or the comparison in run 36 is void:
+
+    drive        17.2 V^2 +/- 15%          i.e. 14.6 to 19.8
+    rms dB       within 0.3 dB of run 32
+    level dB     within 0.3 dB of run 32
+    guards       fire only in the startup transient (run 32: calls 7-9)
+
+If run 35 falls outside this, STOP.  Something has changed in the rig or the
+code since 2026-09-20 and the trim is not the thing to be investigating.
+
+THE TRIM MUST BE PROVABLY ASLEEP.  With ten parameter fields or fewer the gain is
+0, y_trim is never allocated and the command is bit-identical to the committed
+code (verified offline, max |new - committed| = 0.000e+00 on real run-29 data).
+The console must show NO line containing "response-error trim" anywhere in run
+35.  One such line means the default is not off and everything downstream of it
+is suspect.
+
+--------------------------------------------------------------------------------
+RUN 36 -- same law, trim ON, gain 0.5                              (the actual test)
+--------------------------------------------------------------------------------
+Profile : profile_27_optdiagfast_trim.xlsx      NEW, created 2026-09-21
+Script  : control_laws/optimal_diagonal_control_fast.py
+Params  : 1e-6,0.5,20,1.0,0.95,6,-9.0,0,2,2.0,0.5,3.0,0.5,0.5
+          fields 7-10 are written out explicitly ONLY so that fields 11-14 can be
+          reached; -9.0 / 0 / 2 / 2.0 are the defaults, so nothing but the trim
+          differs from profile_26.
+          field 11  response_trim_gain        0.5
+          field 12  response_trim_limit_db    3.0
+          field 13  response_trim_step_db     0.5
+          field 14  response_trim_deadband_db 0.5
+Update System ID During Control : Y
+
+  SAVE AS  run36_optdiagfast_trimon_{sysid,spec,stream}.nc4
+
+START AT -12 dB as usual, let it settle, then go to 0 dB.  The level change is
+part of the test: the trim is supposed to stand itself down for three cycles
+across it and then resume with its accumulated correction intact.
+
+PRE-REGISTERED PREDICTIONS.  Written before the run.
+
+  1. LEVEL.  Rattlesnake's Response Error panel overall should come CLOSER to
+     0 dB than run 35, by at least 0.3 dB.  This is the one thing the trim is
+     for and it is the primary outcome.
+  2. TRIM MAGNITUDE.  console trim_db median should settle somewhere inside
+     +/-1.5 dB.  A median sitting at the +/-3.0 dB clamp means either the model
+     bias on this rig is larger than the trim's authority, or the trim is
+     integrating something it should not be -- either way, do not raise the
+     clamp before understanding which.
+  3. STABILITY.  drive within 25% of run 35.  The trim has a 0.5 dB per-cycle
+     step limit and only 3 dB of total authority, so it cannot move the drive
+     far; a large move means it is fighting the FRF-update loop.
+  4. NO WIND-UP.  "at the +/-3 dB clamp" in the console should stay a small
+     minority of in-band channel-bins.  Offline, at provably unreachable
+     channel-bins the trim held at exactly 0.0000 dB; on the rig the gate has to
+     do that job against real noise instead of an exact construction.  This is
+     the prediction most likely to fail.
+  5. LEVEL CHANGE.  exactly one "test level ... trim frozen" line per level
+     change, and the trim must resume afterwards rather than sitting dead.
+
+WHAT WOULD BE A PROBLEM, in order of seriousness:
+
+  a. Drive climbing monotonically.  Two integrators (the trim, and the FRF
+     update feeding the solve) can chase each other.  Nothing in the design
+     prevents this; the step and total clamps only bound how fast and how far.
+     ABORT if drive exceeds run 35 by more than 50%.
+  b. The trim oscillating -- trim_db median swinging sign cycle to cycle.  That
+     is the gain too high for this measurement noise.  Retry at gain 0.2.
+  c. Most in-band channel-bins failing the solver-agreement gate, so the trim
+     never gets to act.  That would mean error_threshold_db (1.0 dB) is too
+     tight a gate on live data, which offline testing could not have shown.
+  d. The trim correcting and the Response Error panel NOT improving.  That would
+     mean the measured diagonal the law is fed and the one the panel displays
+     are not the same quantity, and the whole premise needs re-checking.
+
+CAPTURE THE CONSOLE.  The trim prints one line per update for the first five
+updates and then one in twenty; the gate counts on those lines are the only
+record of how much of the band the trim was allowed to touch.
+
+--------------------------------------------------------------------------------
+LAUNCH
+--------------------------------------------------------------------------------
+  cd ~/Code/python/rattlesnake-vibration-controller
+  ./restart_rattlesnake.sh        # then ctrl-C
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/<PROFILE> \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run<NN>_console.log
+
+Spec file is ~11 MB, stream is hundreds of MB.  If the sizes look backwards in
+the save dialog, they are -- run 29 was saved with the two names swapped.
+
+--------------------------------------------------------------------------------
+WHAT THESE RUNS DO NOT DO
+--------------------------------------------------------------------------------
+They do not test the trim against a KNOWN bias.  On this rig the true model error
+is whatever it is; if it happens to be small, run 36 will show a small correction
+and prove only that the trim does no harm.  That is still worth having, but it is
+not a measurement of the loop's gain or bandwidth.  A deliberate mismatch run --
+control on a system ID taken at a different level, so the bias is real and in a
+known direction -- would be the honest next step and is not attempted here.
+
+They do not touch the plant question.  All 36 runs remain on
+sdynpy_frame6x12_system.npz, the low-damping plant.

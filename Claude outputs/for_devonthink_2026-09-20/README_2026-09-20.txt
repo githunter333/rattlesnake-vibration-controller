@@ -1,0 +1,72 @@
+Rattlesnake control-law documentation, 2026-09-20
+=================================================
+Two documents, each in PDF, Word and self-contained HTML. For DevonThink the PDFs
+index and render most reliably; the HTML files are single files with every image
+embedded, so they import cleanly too and need no companion folder.
+
+  law_comparison_report_2026-09-20.*   10 pp  What the laws measured, 31 runs
+  control_law_reference_2026-09-20.*   30 pp  How each law works, with flow charts
+
+READ THE COMPARISON FIRST if you want results; read the reference first if you are
+about to modify a control law.
+
+Supersedes law_comparison_report_2026-09-15.* and control_law_reference.* (undated,
+built 2026-09-15). Keep the old ones: the numbers are unchanged where they overlap,
+but the older pair contains two claims now known to be wrong, listed below.
+
+WHAT CHANGED, AND WHY YOU SHOULD NOT TRUST THE 09-15 PAIR ON THESE POINTS
+-------------------------------------------------------------------------
+1. Runs 05 and 06 are labelled optimal_diagonal_control_fast in the 09-15 report.
+   They ran the base class. The fast law's demotion gate was bitwise equality, and
+   with the FRF update on -- which is how all twelve runs were taken -- the array was
+   never bit-identical, so every bin fell through to the SDP. The real fast-law
+   measurement is in section 3 of the new comparison report.
+
+2. Both optimal-diagonal laws are classified as feedback laws in the 09-15 report.
+   They are open loop: they refine against their own predicted response and never
+   read the measured one. Corrected 2026-09-17.
+
+NEW SINCE 09-15
+---------------
+ * The fast law measured properly, and the realizability failure that made run 22
+   land at +14.29 dB against -0.39 predicted.
+ * drive_rcond, and why the threshold is now a multiple of the plant's own
+   singular-value spread rather than an absolute ratio.
+ * The startup level cap, including the two bugs found in it on 2026-09-17.
+ * The two live-FRF guards, and run 30 -- which scores 94.21 dB rms and +151 dB.
+ * A method finding: the "achievable floor" is not a property of the rig. It tracks
+   the system identification, so error-against-floor is not comparable across runs
+   whose identifications differ in quality.
+ * All nine flow charts regenerated against the current code. Four of them were
+   wrong, including the fast law's, which showed a gate the code no longer uses.
+
+PROVENANCE
+----------
+Every number recomputed by examples/sixdrive12resp/code/compute_report_data.py over
+all 31 runs under one method; 15 spot-checks against the run files pass. Source read
+at branch control-law-development-2026-09, commit 9d2b522c. Flow chart sources are
+versioned at "Claude outputs/flowcharts/*.mmd".
+
+
+REVISION 2026-09-21
+-------------------
+Both documents were rebuilt on 2026-09-21. Filenames are unchanged, so these
+replace the copies of the day before rather than sitting beside them.
+
+What changed:
+
+1. THE LOOP CLASSIFICATION, corrected a second time. The 2026-09-15 report
+   called the optimal-diagonal laws feedback laws; the 2026-09-17 correction
+   called them open loop, which over-shot. They are closed on the identified
+   plant model -- they re-solve against the live FRF every cycle, which is
+   what runs 29/31/32 were about -- and open on the response error. The
+   comparison report's "loop" column now reads model / error / none instead
+   of open / feedback, and section 2 carries the full note. No measured
+   result changed; only the label.
+
+2. A NEW SECTION 7 in the comparison report, and a new subsection plus a
+   tenth flow chart in the reference, covering the response-error trim added
+   2026-09-21. It closes the open half of the loop. Off by default, four
+   offline tests passing, NOT YET RUN ON THE RIG.
+
+Sections 7 and 8 of the comparison report are renumbered 8 and 9.
