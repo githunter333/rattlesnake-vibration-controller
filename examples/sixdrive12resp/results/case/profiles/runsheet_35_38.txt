@@ -1,0 +1,198 @@
+RUNS 35-38 -- the response-error trim on both optimal-diagonal laws
+================================================================================
+The trim was written 2026-09-21 and has NEVER run on hardware.  Four offline
+tests pass, but offline the plant bias was uniform, constant and exactly known.
+On the rig it is none of those.
+
+Four runs, two matched pairs -- each law with the trim off and then on, back to
+back in the same session on the same plant.  The off runs are not padding: the
+code change gave both laws a set_test_level_db method where they had none, and
+Rattlesnake gates on hasattr(control_function,'set_test_level_db'), so a code
+path that never executed before now executes on every level change.  Offline
+testing cannot reach that, because it never instantiates the framework.
+
+--------------------------------------------------------------------------------
+AT A GLANCE
+--------------------------------------------------------------------------------
+ run  law                             profile                              trim
+ 35   optimal_diagonal_control_fast   profile_26_optdiagfast_updateon_gatefix.xlsx   OFF
+ 36   optimal_diagonal_control_fast   profile_27_optdiagfast_trim.xlsx               ON
+ 37   optimal_diagonal_control        profile_03_optdiag_capon.xlsx                  OFF
+ 38   optimal_diagonal_control        profile_28_optdiag_trim.xlsx                   ON
+
+ SAVE AS
+   run35_optdiagfast_trimoff_{sysid,spec,stream}.nc4
+   run36_optdiagfast_trimon_{sysid,spec,stream}.nc4
+   run37_optdiag_trimoff_{sysid,spec,stream}.nc4
+   run38_optdiag_trimon_{sysid,spec,stream}.nc4
+
+ Update System ID During Control : Y on all four.
+ Start at -12 dB, settle, then go to 0 dB on all four.  On 36 and 38 the level
+ change is part of the test: the trim must stand down for three cycles and then
+ resume with its accumulated correction intact.
+
+ PARAMS
+   35  1e-6,0.5,20,1.0,0.95,6                              (unedited profile_26)
+   36  1e-6,0.5,20,1.0,0.95,6,-9.0,0,2,2.0,0.5,3.0,0.5,0.5
+   37  1e-6,0.05,20,1.0,0.95                               (unedited profile_03)
+   38  1e-6,0.05,20,1.0,0.95,6,-9.0,0,2,2.0,0.5,3.0,0.5,0.5
+
+ In 36 and 38 fields 6-10 are written out explicitly ONLY so that fields 11-14
+ can be reached -- the parser is positional and will not skip.  Every one of
+ them is the value the shorter string already produced:
+   6  bm_rank                   6      read only by the fast subclass; the base
+                                       class parses past it (inert in 38)
+   7  startup_test_level_cap_db -9.0   the default
+   8  error_domain              0      linear, the default
+   9  n_irls_passes             2      the default
+   10 drive_rcond               2.0    factored path only (inert in 38)
+ So 36 differs from 35, and 38 from 37, in the trim and nothing else.
+   11 response_trim_gain        0.5
+   12 response_trim_limit_db    3.0
+   13 response_trim_step_db     0.5
+   14 response_trim_deadband_db 0.5
+
+ NOTE THE THRESHOLD DIFFERENCE, which is inherited from the baselines and is
+ deliberate: the fast pair runs frf_update_threshold 0.5, the base pair 0.05.
+ That is not a typo and must not be "fixed" -- 0.05 is what runs 03, 19 and 34
+ used, and comparability with them is the whole point of run 37.
+
+--------------------------------------------------------------------------------
+RUNS 35 and 37 -- trim OFF.  The hardware regression.
+--------------------------------------------------------------------------------
+Both profiles UNEDITED.  These are the controls, and each is also a fresh point
+on a band already measured three times.
+
+PRE-REGISTERED, from the scored runs (report_data.json, all recomputed under one
+method).  These are measured values, not expectations:
+
+  run 35, against runs 29 / 31 / 32
+      rms            6.036 - 6.082        accept 5.9 - 6.2
+      % out +/-3 dB  12.24 - 12.51        accept 11.9 - 12.9
+      level dB       -0.105 - +0.010      accept -0.30 - +0.20
+      drive_trace    0.018 - 0.020        accept 0.016 - 0.022
+      reach_rms      3.445 - 3.684        accept 3.35 - 3.80
+
+  run 37, against runs 03 / 19 / 34
+      rms            5.624 - 5.684        accept 5.50 - 5.80
+      % out +/-3 dB  10.92 - 11.17        accept 10.6 - 11.5
+      level dB       +0.079 - +0.172      accept -0.05 - +0.30
+      drive_trace    0.075 (all three)    accept 0.070 - 0.080
+      reach_rms      3.639 - 3.766        accept 3.55 - 3.86
+
+  Console figure for the fast law, which is a DIFFERENT quantity from
+  drive_trace above: runs 29/31/32 reported 17.03 / 18.44 / 16.22 V^2.
+  Run 35 should land in 14.6 - 19.8.
+
+THE TRIM MUST BE PROVABLY ASLEEP.  With ten parameter fields or fewer the gain
+is 0, y_trim is never allocated, and the command is bit-identical to commit
+9d2b522c -- verified offline on real run-29 data, max |new - pre-trim| =
+0.000e+00.  On the rig the check is simply:
+
+    grep -c "response-error trim" run35_console.log     must print 0
+    grep -c "response-error trim" run37_console.log     must print 0
+
+One such line means the default is not off, and everything downstream is
+suspect.  Also expect NO "test level ... trim frozen" line on 35 or 37: that
+message is gated on the gain as well.
+
+IF EITHER OFF RUN FALLS OUTSIDE ITS BAND, STOP.  Something changed in the rig
+or the code since 2026-09-20, and the trim is not the thing to investigate.
+
+--------------------------------------------------------------------------------
+RUNS 36 and 38 -- trim ON.  The actual test.
+--------------------------------------------------------------------------------
+PRE-REGISTERED PREDICTIONS.  Written before the runs.  Each is judged against
+that law's OWN off run (36 vs 35, 38 vs 37), never against run 32 or run 34,
+which were taken on the pre-trim code.
+
+  1. LEVEL -- the primary outcome.  Rattlesnake's Response Error panel overall
+     should come closer to 0 dB than the paired off run by at least 0.3 dB.
+     This is the one thing the trim exists to do.
+  2. TRIM MAGNITUDE.  console trim_db median settling inside +/-1.5 dB.  A
+     median parked at the +/-3.0 dB clamp means either the model bias here
+     exceeds the trim's authority or it is integrating something it should not.
+     Do NOT raise the clamp before knowing which.
+  3. STABILITY.  drive_trace within 25% of the paired off run.  A 0.5 dB
+     per-cycle step and 3 dB total authority cannot move the drive far; a large
+     move means the trim is fighting the FRF-update loop.
+  4. NO WIND-UP.  "at the +/-3 dB clamp" in the console should stay a small
+     minority of in-band channel-bins.  Offline, at provably unreachable
+     channel-bins the trim held at exactly 0.0000 dB -- but that was an exact
+     algebraic construction, and here the solver-agreement gate has to do the
+     same job against measurement noise.  THIS IS THE PREDICTION MOST LIKELY
+     TO FAIL.
+  5. LEVEL CHANGE.  exactly one "trim frozen" line per level change, and the
+     trim resuming afterwards rather than sitting dead.
+  6. GATE COVERAGE.  the console reports "N passed the solver-agreement gate"
+     out of the scored total.  Offline that was 596-710 of 960.  If on the rig
+     it collapses to a small fraction, error_threshold_db (1.0 dB) is too tight
+     a gate on live data and the trim will barely act -- a null result caused
+     by the gate, not by the plant, and it must not be read as "no bias".
+
+EXPECT 38 TO CORRECT SHAPE MORE SLOWLY THAN 36, and this is predicted, not a
+fault.  The overall level part of the correction is applied straight to the
+stored drive CPSD and is immediate in both.  The per-channel shape part rides
+the scheduler's step 3, and profile_03's frf_update_threshold of 0.05 has the
+drift step claiming its full half-budget (10 of 20 bins) every call, leaving
+step 3 much less room than in run 36 at threshold 0.5.  If 38's level improves
+like 36's but its per-channel spread does not, that is the budget, not the trim.
+
+WHAT WOULD BE A PROBLEM, in order of seriousness:
+
+  a. Drive climbing monotonically.  Two integrators -- the trim, and the FRF
+     update feeding the solve -- can chase each other.  Nothing in the design
+     prevents that; the clamps only bound how fast and how far.
+     ABORT if drive exceeds the paired off run by more than 50%.
+  b. trim_db median swinging sign cycle to cycle: gain too high for this
+     measurement noise.  Retry at gain 0.2 (field 11).
+  c. Gate coverage collapsing -- see prediction 6.
+  d. The trim correcting while the Response Error panel does not improve.  That
+     would mean the measured diagonal the law is fed and the one the panel
+     shows are not the same quantity, and the premise needs re-checking.
+
+CAPTURE THE CONSOLE.  The trim prints one line for each of its first five
+updates and then one in twenty.  The gate counts on those lines are the only
+record of how much of the band the trim was allowed to touch, and none of it is
+recoverable from the saved nc4 files afterwards.
+
+--------------------------------------------------------------------------------
+LAUNCH
+--------------------------------------------------------------------------------
+  cd ~/Code/python/rattlesnake-vibration-controller
+  ./restart_rattlesnake.sh        # then ctrl-C
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/<PROFILE> \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run<NN>_console.log
+
+Spec file is ~11 MB, stream is hundreds of MB.  If the sizes look backwards in
+the save dialog, they are -- run 29 was saved with the two names swapped.
+
+Run 38 is the slow one: optimal_diagonal_control solves every bin through the
+SDP, with no factored path.  Run 34 took the same route, so budget accordingly.
+
+--------------------------------------------------------------------------------
+IF TIME IS SHORT
+--------------------------------------------------------------------------------
+Drop run 37.  Run 35 already tests the one thing the code change put at risk --
+the new set_test_level_db hook, which lives in the base class and is shared --
+and run 38 can then be read against run 34.  The cost is real and should be
+stated in whatever gets written up: run 34 was taken on pre-trim code, so a
+38-vs-34 comparison cannot separate the trim's effect from any effect of the
+change itself.  Do not drop 35.
+
+--------------------------------------------------------------------------------
+WHAT THESE RUNS DO NOT DO
+--------------------------------------------------------------------------------
+They do not test the trim against a KNOWN bias.  On this rig the true model
+error is whatever it is; if it is small, 36 and 38 will show small corrections
+and prove only that the trim does no harm.  Worth having, but it is not a
+measurement of the loop's gain or bandwidth.  The honest next step -- not
+attempted here -- is a deliberate-mismatch run: control against a system ID
+taken at a different test level, so the bias is real and in a known direction.
+
+They do not test octave_band_switching_control, which also inherits the trim and
+has still never been run at all.
+
+They do not touch the plant question.  All 38 runs remain on
+sdynpy_frame6x12_system.npz, the low-damping plant.
