@@ -21,11 +21,24 @@ TEST 4  LEVEL-CHANGE FREEZE.  The data collector divides each frame by the
         CURRENT test level, so a frame spanning a ramp is normalized by the
         wrong number.  set_test_level_db must stand the trim down.
 """
-import sys, os, numpy as np, netCDF4 as nc4, importlib.util
+import sys, os, subprocess, tempfile, numpy as np, netCDF4 as nc4, importlib.util
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
-HEAD = os.path.join(os.path.expanduser('~'), 'work', 'head')   # git-HEAD copies
+# The regression reference is PINNED to the last commit before the trim went
+# in, not to HEAD.  Once the trim is committed, HEAD is the new code and test 1
+# would compare it against itself and pass for free.  Extracted here rather
+# than left as a directory someone has to remember to rebuild.
+PRE_TRIM = '9d2b522c'
+HEAD = os.path.join(tempfile.gettempdir(), f'odc_ref_{PRE_TRIM}', 'control_laws')
+if not os.path.isdir(HEAD):
+    os.makedirs(HEAD)
+    for f in ('optimal_diagonal_control.py', 'optimal_diagonal_control_fast.py',
+              'control_laws.py'):
+        blob = subprocess.run(['git', '-C', ROOT, 'show', f'{PRE_TRIM}:control_laws/{f}'],
+                              capture_output=True, check=True).stdout
+        open(os.path.join(HEAD, f), 'wb').write(blob)
+    print(f'extracted the pre-trim reference from {PRE_TRIM}')
 RUNS = os.path.join(ROOT, 'examples', 'sixdrive12resp', 'results', 'runs')
 
 d = nc4.Dataset(os.path.join(RUNS, 'run29_optdiagfast_updateon_gatefix_sysid.nc4'))
@@ -48,14 +61,14 @@ def load(path, name):
     sp.loader.exec_module(m); return m
 
 live = load(os.path.join(ROOT, 'control_laws', 'optimal_diagonal_control_fast.py'), 'odcf_live')
-base = load(os.path.join(HEAD, 'control_laws', 'optimal_diagonal_control_fast.py'), 'odcf_head')
+base = load(os.path.join(HEAD, 'optimal_diagonal_control_fast.py'), 'odcf_head')
 
 def build(mod, params, sp=spec, hh=H, ch=coh, s_r=sr, n_r=nr):
     w = np.zeros(sp.shape[:2]); a = np.zeros(sp.shape[:2])
     return mod.optimal_diagonal_control_fast(sp, w, a, params, hh, n_r, nf, s_r, rr, ch, 100, 100, None, None)
 
 print('=' * 74)
-print('TEST 1 -- gain 0 (the default): bit-identical to the committed code')
+print('TEST 1 -- gain 0 (the default): bit-identical to the PRE-TRIM code')
 print('=' * 74)
 P10 = '1e-6,0.5,20,1.0,0.95,6'          # ten fields or fewer: no trim named at all
 lo = build(live, P10); hd = build(base, P10)
@@ -65,7 +78,7 @@ for call in range(4):
 delta = float(np.max(np.abs(o_lo - o_hd)))
 print(f'  y_trim is None                {lo.y_trim is None}')
 print(f'  _p_commanded is None          {lo._p_commanded is None}')
-print(f'  max |new - committed|         {delta:.3e}')
+print(f'  max |new - pre-trim|          {delta:.3e}')
 assert lo.y_trim is None, 'trim state allocated while the trim is off'
 assert lo._p_commanded is None, 'prediction cached while the trim is off'
 assert delta == 0.0, 'THE TRIM CHANGED THE COMMAND WITH THE GAIN AT ZERO'

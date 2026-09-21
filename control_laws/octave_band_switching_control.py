@@ -190,6 +190,14 @@ class octave_band_switching_control(optimal_diagonal_control):
     # can be exercised directly (tests, notebooks, a wrapping script).
     # ------------------------------------------------------------------
     def set_test_level_db(self, level_db):
+        # Chain FIRST.  The base class uses this same hook to stand its
+        # response-error trim down across a level ramp (frames spanning the
+        # ramp are normalised by the wrong test level).  Overriding without
+        # chaining left the base class's _test_level_db at None for ever, so
+        # the freeze could never arm -- harmless while response_trim_gain is
+        # 0, which is the default, and a silent trap the moment it is not.
+        # Added 2026-09-21 with the trim itself.
+        super().set_test_level_db(level_db)
         self.current_test_level_db = None if level_db is None else float(level_db)
 
     # ------------------------------------------------------------------
