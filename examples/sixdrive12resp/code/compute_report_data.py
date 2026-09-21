@@ -50,14 +50,50 @@ SHORT = {'match_trace_pseudoinverse': 'match_trace',
          'optimal_diagonal_control_fast': 'optimal_diagonal_fast',
          'match_diagonal_congruence': 'congruence',
          'pseudoinverse_control': 'pseudoinverse', 'buzz_control': 'buzz'}
-# Laws with NO error feedback: none of these reads last_response_cpsd.
-# optimal_diagonal_control and its fast subclass were misclassified as
-# feedback laws until 2026-09-17 -- they refine each bin against their own
-# PREDICTED response, diag(H X H^H), never against the measured one, so only
-# match_trace_pseudoinverse (trace ratio) and match_diagonal_congruence
-# (per-drive log error) actually close a loop.
-OPEN_LOOP = {'pseudoinverse_control', 'buzz_control',
-             'optimal_diagonal_control', 'optimal_diagonal_control_fast'}
+# WHAT EACH LAW CLOSES ON.  This has now been got wrong twice in opposite
+# directions, so it is spelled out rather than expressed as one boolean.
+# Before 2026-09-17 the optimal-diagonal family was called feedback; the
+# correction made then called it open loop, which over-shot, because it reads
+# as though the plant model were frozen when re-solving against a moving FRF
+# is exactly what those laws do.  Two separate loops:
+#
+#   'error'  -- integrates the measured response error.  match_trace_
+#               pseudoinverse (trace ratio) and match_diagonal_congruence
+#               (per-drive log error).
+#   'model'  -- closed on the IDENTIFIED PLANT MODEL, open on the response
+#               error.  The optimal-diagonal family hands the live FRF to
+#               _refine_batch every cycle and re-solves drifted and degraded
+#               bins, but its objective is the PREDICTED response
+#               diag(H X H^H) and, with response_trim_gain at 0 (the
+#               default, and what every run scored here used), it never reads
+#               last_response_cpsd.
+#   'none'   -- one-shot synthesis, replayed unchanged.  pseudoinverse_control
+#               and buzz_control.
+#
+# A run taken with response_trim_gain > 0 is NOT 'model' -- it closes both
+# loops.  Detected from the parameter string below rather than assumed, since
+# from 2026-09-21 the same law can be run either way.
+LOOP = {'match_trace_pseudoinverse': 'error',
+        'match_diagonal_congruence': 'error',
+        'optimal_diagonal_control': 'model',
+        'optimal_diagonal_control_fast': 'model',
+        'pseudoinverse_control': 'none',
+        'buzz_control': 'none'}
+# Position of response_trim_gain in the parameter string, for the two laws
+# that have one.
+TRIM_POS = {'optimal_diagonal_control': 10, 'optimal_diagonal_control_fast': 10}
+
+
+def _loop_of(law, par):
+    base = LOOP.get(law, 'none')
+    i = TRIM_POS.get(law)
+    if i is not None and len(par) > i:
+        try:
+            if float(par[i]) > 0:
+                return 'model+error'
+        except ValueError:
+            pass
+    return base
 
 # How each law applies the drive-coherence cap. This, not the loop type, is
 # what predicts whether the cap costs anything: the optimal-diagonal laws
@@ -137,7 +173,7 @@ def one(path):
     cap = float(par[CAPPOS[law]])
     return dict(
         run=os.path.basename(path)[:5], law=SHORT[law], law_full=law,
-        loop='open' if law in OPEN_LOOP else 'feedback',
+        loop=_loop_of(law, par),
         cap_mode='in-solve' if law in CAP_IN_SOLVE else 'post-process',
         cap='off' if cap >= 1.0 else f'{cap:g}', params=','.join(par),
         rms=flat['rms'], pout=flat['pout'], mean_db=flat['mean_db'],

@@ -129,7 +129,7 @@ def scored(law, z, specd):
     teff = specd if law.y_trim is None else specd*law.y_trim
     ok = inb_s[:, None] & (p > 0) & (teff > 0) & (z > 0) & (specd > 0)
     gate = np.zeros_like(p, dtype=bool)
-    gate[ok] = np.abs(10*np.log10(p[ok]/teff[ok])) <= law.error_threshold_db
+    gate[ok] = np.abs(10*np.log10(p[ok]/teff[ok])) <= law.response_trim_gate_db
     e = 10*np.log10(z[gate]/specd[gate])
     return gate.sum(), float(np.sqrt(np.mean(e**2)))
 
@@ -139,7 +139,7 @@ print('TEST 2 -- a plant 2.0 dB hotter than the model: does it come back?')
 print('=' * 74)
 BIAS_DB = 2.0
 Htrue = HS * np.sqrt(10.0**(BIAS_DB/10.0))
-PT = '1e-6,0.5,20,1.0,0.95,6,-9.0,0,2,2.0,0.5,3.0,0.5,0.5'   # gain 0.5
+PT = '1e-6,0.5,20,1.0,0.95,6,-9.0,0,2,2.0,0.5,3.0,0.5,0.5,0.5'  # gain 0.5, gate 0.5
 law_on = build_s(live, PT, S)
 z_on, specd = run_loop(law_on, Htrue, 30)
 law_off = build_s(live, '1e-6,0.5,20,1.0,0.95,6,-9.0,0,2,2.0', S)
@@ -199,12 +199,12 @@ short = 10*np.log10(pw[np.ix_(hot_bins, [CH_A, CH_B])] /
 # that pooled set is ~0 and says nothing -- score the magnitude.
 print(f'  solver shortfall there            {np.median(short[:, 0]):+.2f} / '
       f'{np.median(short[:, 1]):+.2f} dB on the two channels, '
-      f'median |{np.median(np.abs(short)):.2f}| (gate is +/-{law_w.error_threshold_db:g})')
+      f'median |{np.median(np.abs(short)):.2f}| (gate is +/-{law_w.response_trim_gate_db:g})')
 print(f'  trim on the conflicting channels  max |{np.abs(hot).max():.4f}| dB '
       f'over {hot.size} channel-bins')
 print(f'  trim on the reachable channels    median {np.median(cold):+.2f} dB')
 print(f'  clamp is                          +/-{law_w.response_trim_limit_db:g} dB')
-assert np.median(np.abs(short)) > law_w.error_threshold_db, (
+assert np.median(np.abs(short)) > law_w.response_trim_gate_db, (
     'the construction is not actually unreachable -- test is not testing the gate')
 assert np.all(hot == 0.0), 'THE TRIM WOUND UP AT BINS THE PLANT CANNOT REACH'
 assert np.median(cold) < -1.0, 'reachable channels should have corrected'

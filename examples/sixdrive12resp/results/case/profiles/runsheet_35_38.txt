@@ -33,9 +33,9 @@ AT A GLANCE
 
  PARAMS
    35  1e-6,0.5,20,1.0,0.95,6                              (unedited profile_26)
-   36  1e-6,0.5,20,1.0,0.95,6,-9.0,0,2,2.0,0.5,3.0,0.5,0.5
+   36  1e-6,0.5,20,1.0,0.95,6,-9.0,0,2,2.0,0.5,3.0,0.5,0.5,0.5
    37  1e-6,0.05,20,1.0,0.95                               (unedited profile_03)
-   38  1e-6,0.05,20,1.0,0.95,6,-9.0,0,2,2.0,0.5,3.0,0.5,0.5
+   38  1e-6,0.05,20,1.0,0.95,6,-9.0,0,2,2.0,0.5,3.0,0.5,0.5,0.5
 
  In 36 and 38 fields 6-10 are written out explicitly ONLY so that fields 11-14
  can be reached -- the parser is positional and will not skip.  Every one of
@@ -51,6 +51,7 @@ AT A GLANCE
    12 response_trim_limit_db    3.0
    13 response_trim_step_db     0.5
    14 response_trim_deadband_db 0.5
+   15 response_trim_gate_db     0.5   added after run 35; see RUN 35 RESULT
 
  NOTE THE THRESHOLD DIFFERENCE, which is inherited from the baselines and is
  deliberate: the fast pair runs frf_update_threshold 0.5, the base pair 0.05.
@@ -100,15 +101,85 @@ IF EITHER OFF RUN FALLS OUTSIDE ITS BAND, STOP.  Something changed in the rig
 or the code since 2026-09-20, and the trim is not the thing to investigate.
 
 --------------------------------------------------------------------------------
+RUN 35 RESULT -- 2026-09-21.  PASSED, and it changed what 36 is testing.
+--------------------------------------------------------------------------------
+Every pre-registered band passed, and the regression check is clean:
+
+  grep -c "response-error trim" run35_console.log  ->  0
+  grep -c "trim frozen"         run35_console.log  ->  0
+
+                 run29    run31    run32  |  run35    band          verdict
+  rms             6.059    6.036    6.082 |  6.009    5.90-6.20     pass
+  % out +/-3 dB  12.347   12.236   12.514 | 12.417   11.90-12.90    pass
+  level dB       -0.105   -0.067   +0.010 | -0.023   -0.30-+0.20    pass
+  drive_trace     0.019    0.020    0.018 |  0.020    0.016-0.022   pass
+  reach_rms       3.445    3.649    3.684 |  3.711    3.35-3.80     pass
+
+  guards fired twice, early, then "back inside the divergence limit" --
+  the same startup-transient pattern as runs 32 and 34.  cum_solver_failures 0.
+  901/901 in-band bins refined.  76% fast solves, 6% demoted.
+
+  Saved as un35_* -- the leading "r" was dropped in the save dialog, as it was
+  on un21.  Renamed.  File sizes match run 32's signature exactly (spec
+  10,959,828 / sysid 10,959,482), so the names were not swapped.
+
+THE FINDING THAT MATTERS.  The law's own per-bin prediction was reconstructed
+from the saved FRF and drive CPSD, diag(H D H^H), and compared with the
+measured response, bin by bin and channel by channel:
+
+    MODEL MISMATCH, 10log10(measured / law-predicted), 7208 in-band channel-bins
+        median  +0.008 dB     mean  +0.024 dB
+        rms      0.060 dB     90th pct |mismatch|  0.054 dB
+
+There is essentially NO model error on this plant.  The FRF-update loop is
+already doing the whole job.  The residual 6.0 dB rms is the law's own
+optimisation limit -- rank 5 against 8 channels, and a diagonal-only objective
+trading them off -- not a gap between the model and the rig.
+
+That is the first time the self-consistency diagnostic has been checked
+against measurement rather than trusted, and it vindicates it.
+
+CONSEQUENCES, both of which invalidate predictions written before the run:
+
+  Prediction 1 is VOID.  It asked for overall level to improve by at least
+  0.3 dB.  Run 35's level is -0.023 dB.  There is nothing there to correct,
+  and no trim setting can produce that improvement.  Do not read its absence
+  as a failure.
+
+  The gate needed its own threshold, and now has one (field 15,
+  response_trim_gate_db, default 0.5).  It previously reused
+  error_threshold_db = 1.0.  Swept against run 35's real data:
+
+     gate dB   gated  %band   err-vs-spec rms   mismatch rms   outside deadband
+        1.00    3357  46.6%         0.541            0.041          43.6%
+        0.50    1896  26.3%         0.290            0.043           1.6%
+        0.25     954  13.2%         0.153            0.047           0.3%
+
+  At 1.0 dB the trim would have spent the whole run integrating error that is
+  thirteen times larger than the model mismatch it is meant to correct -- the
+  SOLVER's own sub-threshold shortfall -- second-guessing the optimiser that
+  is already trading these channels against each other.  At 0.5 dB only 1.6%
+  of gated channel-bins clear the deadband.  A real bias still opens the gate
+  just as wide, because the shortfall is predicted-vs-target and is computed
+  entirely from H and X: a plant that does not match H cannot change it.
+
+  profile_27 and profile_28 now carry 15 fields, the last being 0.5.
+
+--------------------------------------------------------------------------------
 RUNS 36 and 38 -- trim ON.  The actual test.
 --------------------------------------------------------------------------------
 PRE-REGISTERED PREDICTIONS.  Written before the runs.  Each is judged against
 that law's OWN off run (36 vs 35, 38 vs 37), never against run 32 or run 34,
 which were taken on the pre-trim code.
 
-  1. LEVEL -- the primary outcome.  Rattlesnake's Response Error panel overall
-     should come closer to 0 dB than the paired off run by at least 0.3 dB.
-     This is the one thing the trim exists to do.
+  1. WITHDRAWN -- see RUN 35 RESULT above.  This asked for a 0.3 dB level
+     improvement against a run whose level is already -0.023 dB.
+     REPLACED BY: run 36 is now a DOES-NO-HARM test, not a does-it-correct
+     test.  rms, % out and level must all stay inside run 35's bands, and the
+     console trim lines must show the trim acting on only a small minority of
+     the band -- of order 1-2% of gated channel-bins clearing the deadband,
+     from the sweep above.  A trim that stays nearly silent on this rig is
+     the CORRECT result and is what the gate was retuned to produce.
   2. TRIM MAGNITUDE.  console trim_db median settling inside +/-1.5 dB.  A
      median parked at the +/-3.0 dB clamp means either the model bias here
      exceeds the trim's authority or it is integrating something it should not.
@@ -157,19 +228,73 @@ record of how much of the band the trim was allowed to touch, and none of it is
 recoverable from the saved nc4 files afterwards.
 
 --------------------------------------------------------------------------------
-LAUNCH
+LAUNCH -- the four commands, in order
 --------------------------------------------------------------------------------
+Before each run, clear anything left over.  restart_rattlesnake.sh does this and
+then launches the GUI with no --profile, so running it means ctrl-C'ing its own
+launch; the kill on its own is less fuss and does not depend on the execute bit:
+
   cd ~/Code/python/rattlesnake-vibration-controller
-  ./restart_rattlesnake.sh        # then ctrl-C
+  pkill -9 -f "envs/rattlesnake/bin/python" || true ; sleep 1
+
+Then, one per run.  The absolute interpreter path is used deliberately, so no
+conda activate is needed and the environment cannot be ambiguous.  -u is what
+makes the trim and guard lines appear in the log as they happen rather than in
+a block at the end.
+
+RUN 35  fast, trim OFF
   /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
-      --profile examples/sixdrive12resp/results/case/profiles/<PROFILE> \
-      2>&1 | tee examples/sixdrive12resp/results/notes/run<NN>_console.log
+      --profile examples/sixdrive12resp/results/case/profiles/profile_26_optdiagfast_updateon_gatefix.xlsx \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run35_console.log
+  SAVE  run35_optdiagfast_trimoff_sysid.nc4
+        run35_optdiagfast_trimoff_spec.nc4
+        run35_optdiagfast_trimoff_stream.nc4
 
-Spec file is ~11 MB, stream is hundreds of MB.  If the sizes look backwards in
-the save dialog, they are -- run 29 was saved with the two names swapped.
+RUN 36  fast, trim ON
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/profile_27_optdiagfast_trim.xlsx \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run36_console.log
+  SAVE  run36_optdiagfast_trimon_sysid.nc4
+        run36_optdiagfast_trimon_spec.nc4
+        run36_optdiagfast_trimon_stream.nc4
 
-Run 38 is the slow one: optimal_diagonal_control solves every bin through the
-SDP, with no factored path.  Run 34 took the same route, so budget accordingly.
+RUN 37  base, trim OFF
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/profile_03_optdiag_capon.xlsx \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run37_console.log
+  SAVE  run37_optdiag_trimoff_sysid.nc4
+        run37_optdiag_trimoff_spec.nc4
+        run37_optdiag_trimoff_stream.nc4
+
+RUN 38  base, trim ON     (the slow one -- every bin goes through the SDP)
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/profile_28_optdiag_trim.xlsx \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run38_console.log
+  SAVE  run38_optdiag_trimon_sysid.nc4
+        run38_optdiag_trimon_spec.nc4
+        run38_optdiag_trimon_stream.nc4
+
+CHECK THE OFF RUNS BEFORE GOING ON.  This is the whole point of 35 and 37:
+
+  cd ~/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/results/notes
+  grep -c "response-error trim" run35_console.log     # must print 0
+  grep -c "trim frozen"          run35_console.log     # must print 0
+
+and the same two on run37_console.log after that run.  Anything other than 0
+means the trim is not off by default and nothing after it can be trusted.
+
+ON THE TRIM RUNS, the lines to watch scroll past as:
+
+  grep "response-error trim" run36_console.log | head
+  grep "trim_db"             run36_console.log | tail -5
+  grep "trim frozen"         run36_console.log
+
+The first gives the gate counts per update, the second the settled trim, the
+third should show exactly one line per level change.
+
+SAVING.  Spec file is ~11 MB, stream is hundreds of MB.  If the sizes look
+backwards in the save dialog, they are -- run 29 was saved with the two names
+swapped, and it is the size that tells you which is which, not the dialog.
 
 --------------------------------------------------------------------------------
 IF TIME IS SHORT
@@ -184,12 +309,20 @@ change itself.  Do not drop 35.
 --------------------------------------------------------------------------------
 WHAT THESE RUNS DO NOT DO
 --------------------------------------------------------------------------------
-They do not test the trim against a KNOWN bias.  On this rig the true model
-error is whatever it is; if it is small, 36 and 38 will show small corrections
-and prove only that the trim does no harm.  Worth having, but it is not a
-measurement of the loop's gain or bandwidth.  The honest next step -- not
-attempted here -- is a deliberate-mismatch run: control against a system ID
-taken at a different test level, so the bias is real and in a known direction.
+They do not test the trim against a KNOWN bias -- and run 35 has now MEASURED
+how small the unknown one is: 0.060 dB rms.  So 36 and 38 can only show that
+the trim does no harm and stays quiet.  That is worth having, and it is not a
+measurement of the loop's gain or bandwidth.  Nothing about this loop should
+be claimed on the strength of these two runs.
+
+The informative test needs a plant whose FRF genuinely moves, and this
+directory already has the means to build one:
+build_nonlinear_frf_system.py, build_shifted_frf_system.py, and the untouched
+sdynpy_frame6x12_system_higherz.npz.  A run on a level-dependent plant would
+give the trim a real, directional bias to correct and would exercise the
+interaction between the two loops, which is the thing nobody has seen yet.
+That is the run to design next, and it also starts on the five-untouched-plants
+open item.
 
 They do not test octave_band_switching_control, which also inherits the trim and
 has still never been run at all.

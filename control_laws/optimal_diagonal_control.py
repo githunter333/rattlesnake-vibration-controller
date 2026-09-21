@@ -116,6 +116,12 @@ response_trim_step_db - most the trim may move in one cycle, dB (field 13,
 response_trim_deadband_db - measured errors smaller than this are left alone
               (field 14, default 0.5), so the trim does not chase the
               frame-to-frame scatter of a short-average CPSD.
+response_trim_gate_db - how close the solver must have come to its own target
+              before the error left over is treated as model error rather
+              than as the solver's own business (field 15, default 0.5).
+              Deliberately NOT error_threshold_db, which is the scheduler's
+              "worth refining" bar and answers a different question -- see
+              the comment in __init__ and what run 35 measured.
 A bare single value (no comma) is accepted too, read as `reg`.
 
 WHAT KIND OF LOOP THIS IS
@@ -294,6 +300,27 @@ class optimal_diagonal_control:
         self.response_trim_limit_db = 3.0
         self.response_trim_step_db = 0.5
         self.response_trim_deadband_db = 0.5
+        # The solver-agreement gate has its OWN threshold, and the separation
+        # is not cosmetic.  It first reused error_threshold_db, on the
+        # reasoning that the scheduler's "worth refining" bar and "the solver
+        # reached what it aimed at" were the same question.  Run 35 says they
+        # are not.  Reconstructing this law's own per-bin prediction from
+        # that run's saved FRF and drive and comparing it with the measured
+        # response: model mismatch is 0.060 dB rms across all 7208 in-band
+        # channel-bins, median +0.008 -- the FRF-update loop leaves
+        # essentially nothing for an error trim to correct on this plant.
+        # Yet at a 1.0 dB gate, 43.6% of gated channel-bins sat outside the
+        # 0.5 dB deadband, with error-vs-spec 0.541 dB rms against a model
+        # mismatch of 0.041 dB rms.  Thirteen to one: the trim would have
+        # spent the entire run integrating the SOLVER's own sub-threshold
+        # shortfall -- second-guessing the optimizer that is already trading
+        # these channels against each other -- and calling it model error.
+        # At 0.5 dB only 1.6% of gated channel-bins clear the deadband, so on
+        # a healthy rig the trim stays quiet.  A real bias still wakes it:
+        # the shortfall is predicted-vs-target, computed entirely from H and
+        # X, so a plant that does not match H cannot change it.  The gate
+        # stays open exactly as wide while the error grows.
+        self.response_trim_gate_db = 0.5
         if extra_parameters:
             try:
                 parts = [p.strip() for p in str(extra_parameters).split(',') if p.strip() != '']
@@ -312,6 +339,7 @@ class optimal_diagonal_control:
                 if len(parts) >= 12: self.response_trim_limit_db = abs(float(parts[11]))
                 if len(parts) >= 13: self.response_trim_step_db = abs(float(parts[12]))
                 if len(parts) >= 14: self.response_trim_deadband_db = abs(float(parts[13]))
+                if len(parts) >= 15: self.response_trim_gate_db = abs(float(parts[14]))
             except ValueError:
                 pass  # keep defaults if the string doesn't parse
 
@@ -982,11 +1010,19 @@ class optimal_diagonal_control:
         specification no matter what is asked of it, the error never clears,
         and the trim would climb to its clamp demanding drive that buys
         nothing.  So the trim is applied only where the solver reached what
-        it aimed at -- |10log10(p/target)| <= error_threshold_db, both sides
-        cached from the cycle that issued the command.  A shortfall the
+        it aimed at -- |10log10(p/target)| <= response_trim_gate_db, both
+        sides cached from the cycle that issued the command.  A shortfall the
         SOLVER already predicted is an achievability limit and is none of
         this loop's business; only the part the solver thought it had and
         did not get is model error.
+
+        THE GATE HAS ITS OWN THRESHOLD, not error_threshold_db, and run 35 is
+        why -- see the comment on response_trim_gate_db in __init__.  Briefly:
+        a gate loose enough to serve as the scheduler's "worth refining" bar
+        is loose enough to let the solver's own sub-threshold shortfall
+        through, and on a rig whose model mismatch measures 0.06 dB rms that
+        shortfall is thirteen times larger than the thing this loop exists to
+        correct.
 
         SPEED.  The per-channel correction is realized by the ordinary
         scheduler: a changed target shows up in _err_db against the current
@@ -1035,7 +1071,7 @@ class optimal_diagonal_control:
         # GATE: did the solver get what it asked for on this bin/channel?
         shortfall_db = np.zeros_like(z)
         shortfall_db[ok] = 10*np.log10(p[ok]/tc[ok])
-        ok &= np.abs(shortfall_db) <= self.error_threshold_db
+        ok &= np.abs(shortfall_db) <= self.response_trim_gate_db
         n_gated = int(ok.sum())
 
         # The error the test is judged on.
@@ -1078,7 +1114,8 @@ class optimal_diagonal_control:
                                   self.response_trim_limit_db - 1e-9))
             print(f"[optimal_diagonal_control] response-error trim #{self.n_trim_updates}: "
                   f"{n_scored} in-band channel-bins scored, {n_gated} passed the "
-                  f"solver-agreement gate, {n_moving} outside the "
+                  f"{self.response_trim_gate_db:g} dB solver-agreement gate, "
+                  f"{n_moving} outside the "
                   f"{self.response_trim_deadband_db:g} dB deadband; "
                   f"applied median {np.median(moved):+.3f} dB "
                   f"(max |{np.abs(moved).max():.3f}|), {n_bins_scaled} bins rescaled "
