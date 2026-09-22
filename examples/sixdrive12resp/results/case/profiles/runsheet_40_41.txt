@@ -1,0 +1,156 @@
+RUN 40 (and 41 if needed) -- match_trace_pseudoinverse with the gated refresh ON
+================================================================================
+Run 39 supplied the threshold, and in the process found the mechanism behind
+this law's drive problem.  Read that first.
+
+--------------------------------------------------------------------------------
+WHAT RUN 39 ESTABLISHED
+--------------------------------------------------------------------------------
+Per-line SHAPE change of the in-band FRF, 175 cycles, match_trace's own drive:
+
+    settled noise floor (since previous cycle)   median 0.0070, 95th 0.0339
+    pure-noise expectation for since-cycle-1     sqrt(2)*0.0070 = 0.0100
+    ACTUAL since-cycle-1, settled                0.0522   -- 5.2x that
+
+and the ratio widens through the run (2.3 -> 6.0 -> 7.0 -> 8.2) as the
+estimator quiets while the offset persists.  It decays from 0.135 to a stable
+asymptote, so this is a STEP, not continuous drift: cycle 1 uses the badly
+averaged startup FRF, the converged estimate settles about 5% away in shape,
+and stays there.  match_trace freezes its drive shape at exactly that moment.
+
+Confirmed independently, from the saved files rather than the live diagnostic:
+sysid FRF vs final control FRF gives a shape change of median 0.0485, 95th
+0.1713 -- against 0.0522 from the npz.  Two sources, same answer.
+
+No level-change artifact: the largest post-settling jump in the per-cycle
+metric is 0.0123 at cycle 26 against neighbours 0.0121 and 0.0112.  The
+-12 -> 0 dB transition leaves no fingerprint, so the 5% offset is
+startup-estimate error, not level dependence.
+
+THE MECHANISM, and this is the part that matters:
+
+              median sigma_k/sigma_1, in band        sigma_6    pinv keeps
+    system ID [1, 0.319, 0.085, 0.032, 0.015, 0.0017]  0.00167   6 directions
+    converged [1, 0.314, 0.084, 0.032, 0.015, 0.00014] 0.00014   5 directions
+
+The system-ID estimate's sixth singular value is inflated by estimation noise
+-- 20 averages.  It sits at 0.00167, just ABOVE rcond = 1e-3, so the cycle-1
+pseudoinverse retains a sixth direction that is noise.  After 175 cycles of
+averaging, sigma_6 collapses by a factor of twelve to 0.00014, well BELOW
+rcond, and the same pinv would keep only five.
+
+That is the origin of everything odd about this law's startup solve: drives 5
+and 6 at 40-90x the power of drives 1-4, 98.6% coherent with each other and
+about 115 degrees apart -- a large, nearly-cancelling pair poured into a
+direction that does not exist.  It is also why match_trace commands the most
+drive on the board.  Not the law's structure: a noise-inflated sigma_6, frozen
+in at cycle 1 and never revisited.
+
+--------------------------------------------------------------------------------
+RUN 40 -- the test
+--------------------------------------------------------------------------------
+Profile : profile_30_matchtrace_refresh005.xlsx      NEW, 2026-09-22
+Script  : control_laws/control_laws.py     Function: match_trace_pseudoinverse
+Params  : 1e-3,0.95,-9.0,,1,0.05,1
+          field 4  refresh_shape      1      ON
+          field 5  refresh_threshold  0.05   from run 39: 53.1% of lines
+                                             refreshed, 1.78% false trips on
+                                             noise -- about 7:1 separation
+          field 6  frf_diag           1      keep recording
+Update System ID During Control : Y        Start at -12 dB, settle, then 0 dB.
+
+  SAVE AS  run40_matchtrace_refresh005_sysid.nc4
+           run40_matchtrace_refresh005_spec.nc4
+           run40_matchtrace_refresh005_stream.nc4
+  Saves to   examples/sixdrive12resp/results/runs/
+  Console to examples/sixdrive12resp/results/notes/run40_console.log
+
+  BEFORE STARTING, move run 39's drift file aside or it will be overwritten:
+      cd ~/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/results/notes
+      mv match_trace_frf_drift.npz run39_match_trace_frf_drift.npz
+  The law always writes to the same name.  Run 39's copy is the only record of
+  the threshold's provenance and is not recoverable from the nc4 files.
+
+--------------------------------------------------------------------------------
+PRE-REGISTERED.  Written before the run.
+--------------------------------------------------------------------------------
+1. DRIVE SHOULD FALL, AND FALL A LOT.  This is the primary prediction and it
+   is specific: refreshed lines re-solve against a converged FRF whose sigma_6
+   is below rcond, so the pinv drops from six directions to five and stops
+   feeding the cancelling 5/6 pair.  Swept offline on run 33's identification,
+   crossing that boundary took the raw drive trace from 2.37 to 0.24 -- a
+   factor of ten.  Expect scored drive_trace well below run 39's 0.168.
+   Anything from 0.02 to 0.10 would be consistent.  If drive does NOT fall,
+   the refresh is not reaching the lines that carry the drive and the
+   threshold is wrong.
+
+2. ACCURACY IS GENUINELY OPEN, and it could go either way.  Dropping to rank 5
+   removes a control direction: fewer degrees of freedom, possibly worse rms.
+   Against that, the retained direction was noise, and a shape matched to the
+   real plant should help.  Runs 01/33/39 sit at rms 8.22/8.15/8.17 and 27.5%
+   of lines outside +/-3 dB.  No prediction is registered.  Both outcomes are
+   informative and neither is a failure of the mechanism.
+
+3. LEVEL MUST HOLD.  level dB within -0.15 to +0.35, as runs 01/33/39.  The
+   level loop is untouched by the refresh and the refreshed lines have their
+   level set explicitly from the final array.  A level excursion means
+   _set_predicted_response_trace is not doing its job.
+
+4. REFRESH COUNTS.  The console reports refreshed_lines per cycle.  Expect a
+   burst early -- roughly half of 901 -- then a decline to near zero as each
+   refreshed line's reference moves to the current FRF.  A count that stays
+   near 450 every cycle means the threshold is below the noise floor and the
+   law is re-solving on scatter; stop and go to run 41.
+
+5. NO RUNAWAY ON ILL-CONDITIONED LINES.  _cap_drive_coherence is not
+   idempotent and its PSD re-projection moves the level; that is why the level
+   is set from the FINAL array.  Before that fix one line (bin 134) went
+   +0.33 dB at cycle 5 and +28.44 dB at cycle 6 and dragged a law sitting at
+   +0.0001 dB to +2.49 dB.  That path is now guarded, but this is the first
+   run to exercise it on hardware with a partial refresh.  ABORT if the level
+   walks monotonically.
+
+--------------------------------------------------------------------------------
+RUN 41 -- only if run 40 trips prediction 4
+--------------------------------------------------------------------------------
+Profile : profile_31_matchtrace_refresh010.xlsx      threshold 0.10
+          run 39: 19.0% of lines refreshed, 0.16% false trips
+  SAVE AS  run41_matchtrace_refresh010_{sysid,spec,stream}.nc4
+  Console  run41_console.log
+Take it only if 40 shows continuous re-solving or instability.  If 40 is
+clean, 41 is not needed and the pair 39/40 is the result.
+
+--------------------------------------------------------------------------------
+PROFILE PROVENANCE
+--------------------------------------------------------------------------------
+profile_30 and profile_31 are each profile_01 with exactly ONE cell changed,
+B14, verified cell by cell.  All four parameter strings were parsed and
+compared field by field: run 40 and run 41 differ from run 39 only in
+refresh_shape and refresh_threshold, and from run 01/33 additionally in
+frf_diag.  Nothing else moves.
+
+--------------------------------------------------------------------------------
+LAUNCH
+--------------------------------------------------------------------------------
+  cd ~/Code/python/rattlesnake-vibration-controller
+  pkill -9 -f "envs/rattlesnake/bin/python" || true ; sleep 1
+
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/profile_30_matchtrace_refresh005.xlsx \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run40_console.log
+
+AFTER
+  grep "refreshed_lines" examples/sixdrive12resp/results/notes/run40_console.log | tail -5
+  ls -la examples/sixdrive12resp/results/notes/match_trace_frf_drift.npz
+
+--------------------------------------------------------------------------------
+WHAT THIS RUN DOES NOT DO
+--------------------------------------------------------------------------------
+It does not sweep rcond.  Run 39 showed rcond = 1e-3 sits right on this
+plant's noise-floor boundary -- above sigma_6 at system ID, below it once
+converged -- which makes the law's rank depend on how well averaged the
+estimate happens to be.  That is worth fixing properly rather than relying on
+the refresh to walk into the right answer, and it is a profile-only sweep.
+Separate runsheet, after 40.
+
+It does not touch the plant.  Still sdynpy_frame6x12_system.npz.

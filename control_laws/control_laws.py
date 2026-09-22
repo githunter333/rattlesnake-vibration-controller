@@ -146,7 +146,33 @@ def _parse_match_trace_parameters(extra_parameters, default_startup_test_level_c
         refresh_shape = bool(float(parts[4])) if len(parts) >= 5 and parts[4].strip() != '' else False
     except ValueError:
         refresh_shape = False
-    return rcond, max_drive_coherence, startup_cap_db, refresh_shape
+    # Position 5 -- refresh_threshold.  Per-LINE relative Frobenius change in H
+    # since the line's shape was last solved, above which that line is
+    # re-solved.  0 (the default) means every line every cycle, which is what
+    # refresh_shape did on its own, so an existing five-field string is
+    # unchanged.  Only consulted when refresh_shape is on.
+    #
+    # Why gated at all: the published FRF is already exponentially averaged
+    # (spectral_processing.py, coefficient 0.04 on the spectral matrices), and
+    # run 35 still measured in-band cycle-to-cycle movement at median 0.185,
+    # 90th 0.277.  Re-solving on that is re-solving on estimator noise.  The
+    # same argument, and the same metric, as optimal_diagonal_control's
+    # frf_update_threshold -- where 0.05 proved far too tight and 0.5 works.
+    try:
+        refresh_threshold = (float(parts[5])
+                             if len(parts) >= 6 and parts[5].strip() != '' else 0.0)
+    except ValueError:
+        refresh_threshold = 0.0
+    refresh_threshold = max(0.0, refresh_threshold)
+    # Position 6 -- frf_diag.  Pure instrumentation: record the per-line FRF
+    # movement distribution so a threshold can be chosen from measurement
+    # rather than by analogy.  Changes NOTHING about the command.  Default off.
+    try:
+        frf_diag = bool(float(parts[6])) if len(parts) >= 7 and parts[6].strip() != '' else False
+    except ValueError:
+        frf_diag = False
+    return (rcond, max_drive_coherence, startup_cap_db, refresh_shape,
+            refresh_threshold, frf_diag)
 
 
 def _apply_running_ceiling(output, specification, transfer_function,
@@ -233,7 +259,8 @@ def _parse_open_loop_parameters(extra_parameters,
     4th value (e.g. 3.0) to switch it on.  The startup cap still governs the
     first command either way.
     """
-    rcond, max_drive_coherence, startup_cap_db, _ = _parse_match_trace_parameters(
+    (rcond, max_drive_coherence, startup_cap_db,
+     _, _, _) = _parse_match_trace_parameters(
         extra_parameters, default_startup_test_level_cap_db)
     parts = extra_parameters.split(',') if extra_parameters else []
     try:
@@ -480,7 +507,7 @@ def _refresh_drive_shape(specification, transfer_function, rcond):
     """
     if transfer_function is None:
         return None
-    tf_pinv = np.linalg.pinv(transfer_function, rcond)
+    tf_pinv = _mt_pinv(transfer_function, rcond)
     return tf_pinv@specification@tf_pinv.conjugate().transpose(0, 2, 1)
 
 
@@ -515,6 +542,265 @@ def _set_predicted_response_trace(output, transfer_function, target_trace):
     unscalable = (~np.isfinite(scale)) | (current <= 0) | (~np.isfinite(current))
     scale = np.where(unscalable, 1.0, scale)
     return output*scale[:, np.newaxis, np.newaxis]
+
+
+
+# ---------------------------------------------------------------------------
+# RANK SELECTION BY SINGULAR-VALUE GAP.  Added 2026-09-22 after run 39/40.
+#
+# THE PROBLEM.  rcond is an ABSOLUTE ratio, and on this article the plant's
+# sixth singular value straddles it.  Measured on run 39, in band:
+#
+#                        median sigma_k/sigma_1                sigma_6
+#     system ID   [1, 0.319, 0.085, 0.032, 0.015, 0.0017]      0.00167
+#     converged   [1, 0.314, 0.084, 0.032, 0.015, 0.00014]     0.00014
+#
+# sigma_6 is inflated by estimation noise at system ID (20 averages) and
+# collapses by a factor of twelve once the live estimate has averaged down.
+# rcond = 1e-3 sits BETWEEN the two.  So the same threshold keeps six
+# directions on 72% of in-band lines from the system-ID estimate and five on
+# 90% from the converged one -- the two agree on only 24.5% of lines.  The
+# law's RANK becomes a readout of how well averaged the FRF happens to be,
+# which is how run 40 arrived at rank 5: luck, not design.
+#
+# THE FIX.  Cut at the largest gap in the spectrum instead.  The structural
+# directions here are separated by factors of 2-3; the noise floor is
+# separated by 11x on the NOISY estimate and 101x once converged.  That gap is
+# a property of the plant -- improving the estimator makes it cleaner, not
+# different -- whereas an absolute threshold has to be placed inside a gap
+# whose position it cannot know.
+#
+# TWO GUARDS, both needed, both found by measurement.  Unrestricted gap
+# detection picks rank 1 or 2 on a quarter of system-ID lines, because at a
+# resonance sigma_1 genuinely dominates and the largest gap is at the TOP of
+# the spectrum.  So a direction above `protect` (relative to sigma_1) is never
+# discarded, and a gap must exceed _MT_GAP_MIN to be believed at all --
+# otherwise every direction is kept.  Swept over four saved FRFs (run 33 and
+# run 39 system ID, run 39 and run 40 converged):
+#
+#     criterion                     sysid/converged agreement   modal rank
+#     absolute rcond 1e-3                    24.5%              6 / 5 / 5 / 6
+#     gap, unrestricted                      80.0%              5 on all four
+#     gap, protect 0.10, min 3               82.7%              5 on all four
+#     gap, protect 0.05, min 3               88.7%              5 on all four
+#     gap, protect 0.03, min 2               89.3%              5 on all four
+#
+# The surface is flat across protect 0.02-0.05 and min_gap 2-3, so this is a
+# plateau rather than a tuned corner.  0.05/3.0 is one step conservative of
+# the peak on both constants, deliberately: the peak was found on THIS plant
+# and the point of the change is to stop depending on this plant.
+# ---------------------------------------------------------------------------
+_MT_GAP_MIN = 3.0
+
+
+def _mt_gap_rank(r, protect):
+    """Per-line rank from the largest believable singular-value gap.
+
+    r is sigma_k/sigma_1 per line, descending.  Returns the number of
+    directions to keep.
+    """
+    K = r.shape[1]
+    g = r[:, :-1]/np.maximum(r[:, 1:], 1e-300)
+    # Only cut where the direction being DISCARDED is already small.
+    gm = np.where(r[:, 1:] < protect, g, -1.0)
+    k = np.argmax(gm, axis=1) + 1
+    best = gm[np.arange(k.shape[0]), k - 1]
+    return np.where(best >= _MT_GAP_MIN, k, K)
+
+
+def _mt_pinv(H, rcond):
+    """The pseudoinverse this law family uses.
+
+    rcond >= 0 -- an absolute ratio, np.linalg.pinv exactly as before.  Every
+    archived run used a positive value and is reproduced bit for bit.
+
+    rcond < 0  -- rank by singular-value gap, with |rcond| as the `protect`
+    threshold.  -0.05 is the measured default; see the block comment above.
+    """
+    if rcond is None or rcond >= 0:
+        return np.linalg.pinv(H, rcond)
+    protect = abs(rcond)
+    try:
+        U, sg, Vh = np.linalg.svd(np.nan_to_num(H, nan=0.0, posinf=0.0,
+                                                neginf=0.0),
+                                  full_matrices=False)
+    except np.linalg.LinAlgError:
+        return np.linalg.pinv(H, protect)
+    s1 = np.maximum(sg[:, :1], 1e-300)
+    k = _mt_gap_rank(sg/s1, protect)
+    keep = np.arange(sg.shape[1])[None, :] < k[:, None]
+    sinv = np.where(keep & (sg > 0), 1.0/np.where(sg > 0, sg, 1.0), 0.0)
+    return (Vh.conj().transpose(0, 2, 1)
+            @ (sinv[:, :, None]*U.conj().transpose(0, 2, 1)))
+
+
+# ---------------------------------------------------------------------------
+# match_trace_pseudoinverse FRF-drift state.  A MODULE-LEVEL dict because this
+# law is a plain function with no instance to hang state on.  Reset on every
+# cycle-1 call (last_output_cpsd is None), which is the run boundary; one
+# environment controls at a time, so there is nothing to key it by.
+# ---------------------------------------------------------------------------
+_MT_FRF_STATE = {}
+
+
+def _mt_line_change(H_now, H_ref, normalize=False):
+    """Per-LINE change in H.  PER LINE, not over the whole array: the global
+    norm the fast law uses is the right object for its single global demotion
+    decision and the wrong one here, because match_trace is a per-line law --
+    one real scalar per frequency -- so the refresh decision is per line too.
+
+    normalize=False gives the plain relative Frobenius change,
+    ||H_now[f]-H_ref[f]||/||H_ref[f]||.
+
+    normalize=True divides each line by its own Frobenius norm first, so the
+    metric sees only a change in the SHAPE of H across the drives and is
+    blind to a pure per-line gain change.  That is the one the refresh gate
+    uses, and the reason is structural rather than cosmetic: this law's
+    steady state is output = last_output * trace_ratio with trace_ratio
+    computed PER LINE, so a per-line gain change in the plant is already
+    absorbed exactly by the level loop, with no re-solve needed.  Measured
+    while writing the tests for this: drifting H by a pure scalar on a subset
+    of lines and refreshing them changed the command by 7e-11 -- i.e. not at
+    all.  A gate on the un-normalised metric would have fired on every one of
+    those lines and bought nothing.  Only a change in the relative magnitudes
+    and phases ACROSS the drives makes the frozen pseudoinverse shape wrong,
+    and that is what survives the normalisation.
+
+    Lines with a zero reference score 0 rather than infinity.
+    """
+    F = H_now.shape[0]
+    A = H_now.reshape(F, -1)
+    B = H_ref.reshape(F, -1)
+    if normalize:
+        na = np.linalg.norm(A, axis=1); nb = np.linalg.norm(B, axis=1)
+        good = np.isfinite(na) & np.isfinite(nb) & (na > 0) & (nb > 0)
+        A = np.where(good[:, None], A/np.where(na[:, None] > 0, na[:, None], 1.0), 0.0)
+        B = np.where(good[:, None], B/np.where(nb[:, None] > 0, nb[:, None], 1.0), 0.0)
+        out = np.zeros(F)
+        out[good] = np.linalg.norm((A - B)[good], axis=1)
+        return out
+    num = np.linalg.norm(A - B, axis=1)
+    den = np.linalg.norm(B, axis=1)
+    out = np.zeros(F)
+    ok = np.isfinite(den) & (den > 0)
+    out[ok] = num[ok]/den[ok]
+    return out
+
+
+def _mt_in_band(specification):
+    return np.real(np.einsum('fmm->fm', specification)).max(axis=1) > 0
+
+
+def _mt_refresh_mask(specification, transfer_function, refresh_shape,
+                     refresh_threshold):
+    """Which frequency lines re-solve their drive shape this cycle.
+
+    None means "no refresh at all" -- the historical default path.
+
+    refresh_threshold <= 0 returns every line, which is exactly what
+    refresh_shape did before this gate existed, so a five-field parameter
+    string reproduces bit for bit.
+
+    Above 0 the reference is the H each line's CURRENT shape was solved
+    from, not the previous cycle's H.  That distinction is the whole point:
+    a cycle-to-cycle comparison can never see slow monotonic drift, because
+    each individual step is small.  Same structure as
+    optimal_diagonal_control's step 1.
+    """
+    if not refresh_shape or transfer_function is None:
+        return None
+    F = transfer_function.shape[0]
+    if refresh_threshold <= 0:
+        return np.ones(F, dtype=bool)
+    st = _MT_FRF_STATE
+    H_solve = st.get('H_solve')
+    if H_solve is None or H_solve.shape != transfer_function.shape:
+        st['H_solve'] = transfer_function.copy()
+        return np.ones(F, dtype=bool)
+    # SHAPE change only -- see _mt_line_change.  A per-line gain change is
+    # absorbed exactly by trace_ratio and needs no re-solve.
+    d = _mt_line_change(transfer_function, H_solve, normalize=True)
+    mask = d > refresh_threshold
+    # IN BAND ONLY.  Out of band there is no drive energy, the live estimate
+    # is noise and its relative change is unbounded -- the mistake this file's
+    # subclass made three separate times.  Those lines are not controlled, so
+    # refreshing them buys nothing and only muddies the diagnostics.
+    mask &= _mt_in_band(specification)
+    if mask.any():
+        st['H_solve'] = H_solve.copy()
+        st['H_solve'][mask] = transfer_function[mask]
+    st['last_mask_count'] = int(mask.sum())
+    return mask
+
+
+def _mt_frf_diagnostics(specification, transfer_function, enabled):
+    """Record the per-line FRF movement distribution.  Instrumentation only:
+    it never touches the command.
+
+    Two references, because they answer different questions and only the pair
+    settles the design:
+      d_prev -- change since the previous cycle.  This is the NOISE scale.
+      d_ref  -- change since cycle 1, the H the frozen drive shape was
+                actually built from.  This is the DRIFT scale, and it is the
+                quantity that decides whether refreshing this law's shape is
+                worth anything at all on a given article.
+    If d_ref grows through the run while d_prev stays flat, there is real
+    plant drift and a gated refresh earns its place.  If d_ref simply sits at
+    the d_prev level, the movement is estimator noise and refreshing chases
+    it.  Run 35 measured the fast law's GLOBAL d_prev at median 0.185; nothing
+    has ever measured either quantity per line.
+    """
+    if not enabled or transfer_function is None:
+        return
+    st = _MT_FRF_STATE
+    H = transfer_function
+    in_band = _mt_in_band(specification)
+    if st.get('H_ref') is None or st['H_ref'].shape != H.shape:
+        st['H_ref'] = H.copy()
+        st['H_prev'] = H.copy()
+        st['n'] = 0
+        st['rec'] = []
+        return
+    d_prev = _mt_line_change(H, st['H_prev'], normalize=True)
+    d_ref = _mt_line_change(H, st['H_ref'], normalize=True)
+    d_ref_raw = _mt_line_change(H, st['H_ref'])
+    st['H_prev'] = H.copy()
+    st['n'] = st.get('n', 0) + 1
+    ib = in_band
+    q = [10, 25, 50, 75, 90, 95, 99]
+    pp = np.percentile(d_prev[ib], q) if ib.any() else np.zeros(len(q))
+    pr = np.percentile(d_ref[ib], q) if ib.any() else np.zeros(len(q))
+    st['rec'].append((st['n'], d_prev[ib].astype(np.float32),
+                      d_ref[ib].astype(np.float32),
+                      d_ref_raw[ib].astype(np.float32)))
+    print(f"[match_trace_pseudoinverse] FRF drift cycle {st['n']}: "
+          f"in-band lines {int(ib.sum())}; "
+          f"since_prev pct(10/25/50/75/90/95/99)="
+          f"{np.array2string(pp, precision=4, separator='/')}; "
+          f"since_cycle1 pct="
+          f"{np.array2string(pr, precision=4, separator='/')}; "
+          f"since_cycle1_RAW median={np.median(d_ref_raw[ib]):.4f}; "
+          f"refreshed_lines={st.get('last_mask_count', 0)}", flush=True)
+    if st['n'] % 25 == 0:
+        try:
+            import os as _os
+            outdir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                   '..', 'examples', 'sixdrive12resp',
+                                   'results', 'notes')
+            outdir = _os.path.normpath(outdir)
+            if _os.path.isdir(outdir):
+                np.savez_compressed(
+                    _os.path.join(outdir, 'match_trace_frf_drift.npz'),
+                    cycle=np.array([r[0] for r in st['rec']]),
+                    d_prev=np.stack([r[1] for r in st['rec']]),
+                    d_ref=np.stack([r[2] for r in st['rec']]),
+                    d_ref_raw=np.stack([r[3] for r in st['rec']]),
+                    in_band=in_band)
+                print(f"[match_trace_pseudoinverse] wrote match_trace_frf_drift.npz "
+                      f"({st['n']} cycles)", flush=True)
+        except Exception as exc:
+            print(f"[match_trace_pseudoinverse] drift dump failed: {exc!r}",
+                  flush=True)
 
 
 def match_trace_pseudoinverse(specification, # Specifications
@@ -628,14 +914,22 @@ def match_trace_pseudoinverse(specification, # Specifications
         (num_frequencies x num_excitation_channels x num_excitation_channels)
     
     """
-    (rcond, max_drive_coherence, startup_test_level_cap_db,
-     refresh_shape) = _parse_match_trace_parameters(extra_parameters)
+    (rcond, max_drive_coherence, startup_test_level_cap_db, refresh_shape,
+     refresh_threshold, frf_diag) = _parse_match_trace_parameters(extra_parameters)
     # If it's the first time through, do the actual control
     apply_startup_cap = False
     target_response_trace = None
+    # None means "the level-setting step applies to every line".  A boolean
+    # array restricts it to the refreshed lines, and the rest are then left
+    # untouched rather than multiplied by a scale that is merely very close
+    # to 1.  Measured: the multiply-by-1.0 version disagreed with the
+    # no-refresh path by one ulp on a single line at cycle 2, and the closed
+    # loop grew that to 1.7e-11 by cycle 4.  Exactness here is structural,
+    # not incidental.
+    level_mask = None
     if last_output_cpsd is None:
         # Invert the transfer function using the pseudoinverse
-        tf_pinv = np.linalg.pinv(transfer_function,rcond)
+        tf_pinv = _mt_pinv(transfer_function, rcond)
         # Return the least squares solution for the new output CPSD
         output = tf_pinv@specification@tf_pinv.conjugate().transpose(0,2,1)
         # Startup guard (added 2026-09-02): this branch has no prior
@@ -659,10 +953,17 @@ def match_trace_pseudoinverse(specification, # Specifications
         # documented takes it to exactly -9.00 dB. Roughly 10 dB too
         # aggressive, and unit-dependent on top of that.
         apply_startup_cap = True
+        # Cycle 1 is the run boundary: drop any drift state a previous run
+        # left behind and seed this run's references from the H the startup
+        # shape is being solved from.
+        _MT_FRF_STATE.clear()
+        if transfer_function is not None:
+            _MT_FRF_STATE['H_solve'] = transfer_function.copy()
     else:
         # Scale the last output cpsd by the trace ratio between spec and last response
         trace_ratio = trace(specification)/trace(last_response_cpsd)
         trace_ratio[np.isnan(trace_ratio)] = 0
+        _mt_frf_diagnostics(specification, transfer_function, frf_diag)
         # Refresh the drive SHAPE against the CURRENT transfer function, and
         # carry the level forward explicitly rather than by inheritance -- see
         # _refresh_drive_shape and _set_predicted_response_trace.  Without this
@@ -670,15 +971,32 @@ def match_trace_pseudoinverse(specification, # Specifications
         # so "Update Transfer Function During Control" did nothing at all.
         # Exactly equivalent to output = last_output_cpsd*trace_ratio whenever
         # the FRF is not being updated.
-        shape = (_refresh_drive_shape(specification, transfer_function, rcond)
-                 if refresh_shape else None)
-        if shape is None:
+        refresh_mask = _mt_refresh_mask(specification, transfer_function,
+                                        refresh_shape, refresh_threshold)
+        if refresh_mask is None or not refresh_mask.any():
             output = last_output_cpsd*trace_ratio[:,np.newaxis,np.newaxis]
             target_response_trace = None
-        else:
-            output = shape
+        elif refresh_mask.all():
+            output = _refresh_drive_shape(specification, transfer_function, rcond)
             target_response_trace = trace_ratio*_predicted_response_trace(
                 transfer_function, last_output_cpsd)
+        else:
+            # PARTIAL refresh.  Refreshed lines take the new shape and have
+            # their level set explicitly from the final array; every other
+            # line keeps the level-only update it would have had anyway.
+            # NaN marks "leave this line alone" -- it is filled in after the
+            # coherence cap with the line's own post-cap predicted trace, so
+            # the scale works out to exactly 1.0 and an unrefreshed line
+            # cannot be nudged by the level-setting step.
+            shape = _refresh_drive_shape(specification, transfer_function, rcond)
+            output = last_output_cpsd*trace_ratio[:,np.newaxis,np.newaxis]
+            output[refresh_mask] = shape[refresh_mask]
+            pred_prev = _predicted_response_trace(transfer_function,
+                                                  last_output_cpsd)
+            target_response_trace = np.zeros(output.shape[0], dtype=complex)
+            target_response_trace[refresh_mask] = (
+                trace_ratio[refresh_mask]*pred_prev[refresh_mask])
+            level_mask = refresh_mask
     # Note: a uniform per-bin real scalar (the trace_ratio branch, and the
     # startup guard above) leaves pairwise coherence ratios unchanged, so
     # this cap is only ever "doing work" on the raw pseudoinverse itself --
@@ -689,8 +1007,13 @@ def match_trace_pseudoinverse(specification, # Specifications
     # Level is set AFTER the cap, never inherited through it -- see
     # _set_predicted_response_trace.
     if not apply_startup_cap and target_response_trace is not None:
-        output = _set_predicted_response_trace(output, transfer_function,
-                                               target_response_trace)
+        if level_mask is None:
+            output = _set_predicted_response_trace(output, transfer_function,
+                                                   target_response_trace)
+        elif level_mask.any():
+            output[level_mask] = _set_predicted_response_trace(
+                output[level_mask], transfer_function[level_mask],
+                target_response_trace[level_mask])
     # The startup ceiling goes LAST -- see _apply_startup_level_cap.
     if apply_startup_cap:
         output = _apply_startup_level_cap(output, specification,

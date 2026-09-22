@@ -70,3 +70,37 @@ What changed:
    offline tests passing, NOT YET RUN ON THE RIG.
 
 Sections 7 and 8 of the comparison report are renumbered 8 and 9.
+
+
+REVISION 2026-09-21, SECOND PASS
+--------------------------------
+Rebuilt again the same day, after run 35. Filenames unchanged, so these
+replace the earlier copies rather than sitting beside them.
+
+3. RUN 35 SCORED AND ADDED. optimal_diagonal_control_fast with the trim
+   present in the code but off. It passed every pre-registered band and is
+   now the fourth point in the FRF-update sequence in section 4 of the
+   comparison report. Its regression value: zero occurrences of either trim
+   log line in a full run, so the trim is provably asleep inside the
+   framework, not only in an offline harness.
+
+4. THE MODEL-MISMATCH MEASUREMENT. Reconstructing the law's own per-bin
+   prediction from run 35's saved FRF and drive and comparing it with the
+   measured response gives a mismatch of 0.060 dB rms over 7208 in-band
+   channel-bins. There is essentially no model error on this plant: the
+   FRF-update loop already does the whole job, and the residual 6.0 dB rms
+   is the law's own optimisation limit. First time the self-consistency
+   diagnostic has been checked against measurement rather than trusted.
+
+5. THE TRIM'S GATE NOW HAS ITS OWN THRESHOLD, response_trim_gate_db,
+   default 0.5 (parameter field 15). It had reused error_threshold_db at
+   1.0 dB, which run 35's data showed would have had the trim integrating
+   the solver's own sub-threshold shortfall -- thirteen times larger than
+   the model error it exists to correct. Documented in section 7 of the
+   comparison report, in section 2 of the reference, in the tenth flow
+   chart, and in the parameter table.
+
+Both documents now say plainly that the trim has been half-tested: the
+default path is confirmed on hardware, the gain has never been on, and on
+this plant there is too little model error for run 36 to show much. That is
+a limitation of the plant, not of the loop, and the documents say which.
