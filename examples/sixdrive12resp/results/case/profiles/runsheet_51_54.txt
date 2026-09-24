@@ -1,0 +1,163 @@
+RUNS 51-54 -- the OPTIMAL DIAGONAL laws on the bounded-softening plant,
+              and the first real test of the response-error trim
+================================================================================
+Built 2026-09-24, after runs 49 and 50 established the plant and the pair.
+
+WHY THIS IS THE RIGHT NEXT EXPERIMENT
+--------------------------------------------------------------------------------
+optimal_diagonal is CLOSED on the identified plant model and OPEN on the
+response error.  It re-solves against the live FRF every cycle (so it tracks a
+moving plant) but its objective is the PREDICTED response, diag(H X H^H) -- it
+never reads what the rig actually measured.  The response-error trim exists to
+close exactly that gap.
+
+On the LINEAR plant the trim had nothing to do.  Run 35 measured the
+model-vs-measurement gap at 0.060 dB rms, which is why the trim was built with a
+0.5 dB deadband and why runs 36-38 were allocated and never taken: there was no
+error worth trimming.
+
+On THIS plant there is.  Run 49 measured coherence falling from 0.996 to 0.938
+at 0 dB and 0.684 at +4 dB, and the stream showed why -- the plant generates
+harmonic and intermodulation content, out-of-band energy rising from -32.9 to
+-16.5 dB.  Response power uncorrelated with the drive is not in diag(H X H^H),
+so the model UNDER-PREDICTS the measured response by 10log10(1/gamma^2).  That
+is a real, physical, one-sided error and it is precisely the trim's job.
+
+--------------------------------------------------------------------------------
+PRE-REGISTERED: THE ERROR THE TRIM WILL SEE
+--------------------------------------------------------------------------------
+Computed from run 49's measured in-band coherence.  The trim acts only where
+|error| exceeds its 0.5 dB deadband.
+
+  level    median gap dB   frac >0.5 dB   frac >1 dB   frac >3 dB
+   -18         0.018          0.004         0.000        0.000
+   -12         0.018          0.004         0.000        0.000
+    -6         0.030          0.006         0.000        0.000
+     0         0.278          0.316         0.108        0.006
+    +2         0.699          0.568         0.396        0.093
+    +4         1.650          0.684         0.595        0.310
+    +8         6.993          0.877         0.831        0.742
+  (run 40, LINEAR plant at 0 dB, for scale: 0.018 dB, 0.005 above deadband)
+
+READ THIS BEFORE CHOOSING THE LEVEL SCHEDULE.
+
+  * Below -6 dB the trim WILL DO NOTHING.  The gap is 0.02-0.03 dB against a
+    0.5 dB deadband; fewer than 1% of channel-bins qualify.  Expect trim-on and
+    trim-off to be bit-comparable there, and treat that as a PASS -- it is the
+    same null the verification suite checks (verify_response_trim.py: the trim
+    is bit-identical when it does not fire).
+  * At 0 dB the median gap is 0.278 dB, still BELOW the deadband.  Only 32% of
+    channel-bins qualify, 11% exceed 1 dB.  The trim will act on the tail only.
+    This is the interesting marginal case.
+  * At +4 dB the median gap is 1.65 dB, 68% of bins above deadband and 31% above
+    3 dB -- which is the trim's TOTAL AUTHORITY.  This is where the trim has real
+    work, and also where it will start clamping.
+  * +8 dB: the gap is 7 dB, more than twice the clamp.  The trim will saturate
+    everywhere.  Run 49 reached +8 safely but coherence there was 0.200 and the
+    FRF is not usable.  DO NOT plan on +8 for these runs.
+
+SCHEDULE: -18 (null check), 0 (marginal), +4 (the real test).  -12 and -6 can
+be skipped -- the table says they carry no information for this question.  If
+time is short, -18 and +4 alone answer it.
+
+--------------------------------------------------------------------------------
+THE FOUR RUNS
+--------------------------------------------------------------------------------
+Two laws, trim off/on each.  The pair structure is what makes it readable: the
+trim's effect is the DIFFERENCE within a pair, not the absolute number.
+
+RUN 51 -- optimal_diagonal, trim OFF          (baseline for 52)
+  Profile : profile_42_optdiag_bsoft_trimoff.xlsx
+  Params  : 1e-6,0.05,20,1.0,0.95,6,-9.0,0,2,2.0,0,3.0,0.5,0.5,0.5
+  SAVE AS  run51_optdiag_bsoft_trimoff_{sysid,spec_m18,spec,spec_p04,stream}.nc4
+
+RUN 52 -- optimal_diagonal, trim ON gain 0.5  (THE TEST)
+  Profile : profile_43_optdiag_bsoft_trimon.xlsx
+  Params  : 1e-6,0.05,20,1.0,0.95,6,-9.0,0,2,2.0,0.5,3.0,0.5,0.5,0.5
+  SAVE AS  run52_optdiag_bsoft_trimon_{sysid,spec_m18,spec,spec_p04,stream}.nc4
+
+RUN 53 -- optimal_diagonal_fast, trim OFF     (baseline for 54)
+  Profile : profile_44_optdiagfast_bsoft_trimoff.xlsx
+  Params  : 1e-6,0.5,20,1.0,0.95,6,-9.0,0,2,2.0,0,3.0,0.5,0.5,0.5
+  SAVE AS  run53_optdiagfast_bsoft_trimoff_{sysid,spec_m18,spec,spec_p04,stream}.nc4
+
+RUN 54 -- optimal_diagonal_fast, trim ON      (THE TEST)
+  Profile : profile_45_optdiagfast_bsoft_trimon.xlsx
+  Params  : 1e-6,0.5,20,1.0,0.95,6,-9.0,0,2,2.0,0.5,3.0,0.5,0.5,0.5
+  SAVE AS  run54_optdiagfast_bsoft_trimon_{sysid,spec_m18,spec,spec_p04,stream}.nc4
+
+All four: strength 1, system ID at 0.794 V rms (already in the profiles),
+Update System ID During Control = Y.
+
+The trim prints a line whenever it moves.  Watch for it; it names the gate, the
+deadband and the clamp.  If it never prints at 0 dB, that is consistent with the
+table above and is not a fault.
+
+--------------------------------------------------------------------------------
+PRE-REGISTERED PREDICTIONS
+--------------------------------------------------------------------------------
+1. AT -18 dB THE TRIM MUST NOT FIRE.  Trim-on and trim-off should score the
+   same to within run-to-run scatter.  If they differ materially, the trim is
+   acting on something other than a real response error -- stop and look.
+2. AT 0 dB the trim fires on roughly a third of channel-bins and should produce
+   a SMALL improvement, well under 1 dB.  Median gap 0.278 dB is below the
+   deadband by design.
+3. AT +4 dB the trim has 1.65 dB of median error to correct and 3 dB of
+   authority.  This is where it should show clearly -- or fail clearly.
+4. THE TRIM CORRECTS A ONE-SIDED ERROR.  Distortion only ADDS response power,
+   so the measured response is always at or above the model.  The trim should
+   move drive DOWN, monotonically, and clamp at -3 dB where the gap exceeds it.
+   If it moves drive up anywhere, something is wrong with the sign or the gate.
+5. NO ACCURACY PREDICTION vs match_trace.  These are different laws with
+   different objectives; run 49/50 is not the baseline for these.  The baseline
+   for each is its own trim-off partner.
+6. SCORE ON THE COHERENT COLUMN.  Raw rms counts distortion as signal -- that is
+   what wrecked run 49's Result 2, and at these levels the distortion is larger,
+   not smaller.  Any claim made on raw rms here will be wrong in the same way.
+
+--------------------------------------------------------------------------------
+LAUNCH
+--------------------------------------------------------------------------------
+  cd ~/Code/python/rattlesnake-vibration-controller
+  pkill -9 -f "envs/rattlesnake/bin/python" || true ; sleep 1
+
+  RATTLESNAKE_NONLINEARITY_STRENGTH=1 \
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/profile_42_optdiag_bsoft_trimoff.xlsx \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run51_console.log
+
+  (and likewise profiles 43, 44, 45 -> run52, run53, run54 console logs)
+
+CHECK ON STARTUP: the console must print
+    BOUNDED SOFTENING alpha=0.350 (27/33 modes softened ...)
+If it says CUBIC the profile is pointing at the wrong npz -- check Hardware B2.
+
+DO NOT pkill -9 a run whose stream you want.  Run 48's 83.6 MB was unrecoverable
+because the chunk index never flushed; runs 49 and 50 were shut down cleanly and
+both streams read fine.
+
+--------------------------------------------------------------------------------
+PROFILE PROVENANCE
+--------------------------------------------------------------------------------
+profile_42 and 43 are profile_28_optdiag_trim.xlsx; profile_44 and 45 are
+profile_27_optdiagfast_trim.xlsx.  Cells changed, verified cell by cell across
+all sheets by the script that wrote them:
+
+  trim-ON  profiles (43, 45) -- 3 cells:
+     [Hardware] B1                  6 -> 7
+     [Hardware] B2                  linear npz -> boundedsoften npz
+     [Frame 6x12 Random] B21        1 -> 0.794
+  trim-OFF profiles (42, 44) -- the same 3, plus:
+     [Frame 6x12 Random] B14        field 11 (trim gain) 0.5 -> 0
+
+Nothing else differs.  The trim parameters other than the gain are unchanged
+from the values run 35 established: 3.0 dB clamp, 0.5 dB step, 0.5 dB deadband,
+0.5 dB solver-agreement gate.
+
+--------------------------------------------------------------------------------
+WHAT THESE RUNS DO NOT DO
+--------------------------------------------------------------------------------
+They do not test the FRF refresh -- that is match_trace's parameter and these
+laws re-solve against the live FRF every cycle by construction.
+They do not revisit the +4 dB hysteresis question from run 49.
+They do not test octave_band_switching_control, which has still never been run.
