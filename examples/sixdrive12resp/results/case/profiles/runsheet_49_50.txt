@@ -1,0 +1,241 @@
+RUNS 49 and 50 -- match_trace on the BOUNDED-SOFTENING nonlinear plant
+================================================================================
+Fifth attempt at this experiment.  Runs 42, 44, 46 and 48 all failed.  42 for
+lack of effect (single-mode article, q_rms/q0_ref = 0.0067); 44, 46 and 48 by
+ESCAPE -- overflow in k3s*q**3 as the softening cubic's restoring force went
+negative past q_esc = wn/sqrt(|k3|).
+
+This article cannot escape.  Not "has more margin" -- cannot.  The restoring
+force is bounded below by alpha*wn^2*q and never changes sign, so the potential
+well is infinitely deep and there is no runaway state to reach.  Verified by
+direct time integration at strength 400 and +12 dB: finite, with the shift
+saturating at 40.84% = 1 - sqrt(0.35), exactly the alpha asymptote.
+
+--------------------------------------------------------------------------------
+THE ARTICLE
+--------------------------------------------------------------------------------
+sdynpy_frame6x12_system_nonlinear_boundedsoften.npz, built 2026-09-24 by
+code/build_nonlinear_frf_system_boundedsoften.py.
+
+    g(q) = alpha + (1-alpha) exp(-(q/qt)^2)      alpha = 0.35
+    F(q) = wn^2 q g(q)
+
+    33 flexible modes, 120.0 - 899.5 Hz
+    27 SOFTENED  (all modes above 300 Hz)
+     6 EXACTLY LINEAR at 120.0, 159.8, 214.4, 246.9, 249.2, 286.2 Hz
+
+The six below 300 Hz carry qt = inf, so their nonlinear term is identically
+zero -- measured shift 2e-13 %, which is machine zero, not "small".  They are a
+LINEAR CONTROL GROUP inside the same FRF measurement: anything that moves down
+there is the estimator or the loop, not the plant.  That distinction previously
+needed a second run.
+
+    design target        1.0% shift at 0 dB on every softened mode
+    system ID level      0.794 V rms  (1.0 V backed off -2.0 dB) -- SEE BELOW
+    strength             1  (but there is no ceiling; see below)
+
+--------------------------------------------------------------------------------
+WHY THE TARGET IS 1% AND NOT MORE -- the constraint is no longer escape
+--------------------------------------------------------------------------------
+First build targeted 5%.  Time integration measured 29%.  Two feedbacks were
+missing from the calibration, both amplifying:
+
+  1. Softening lowers modal stiffness -> response grows -> softens further.
+     Mild alone (sigma ~ g^-0.75, fixed point near 5.8%).
+  2. The control drive is SHAPED.  match_trace notches it at each resonance to
+     flatten the response, so a moving resonance slides OFF ITS OWN NOTCH into
+     a much hotter part of the drive.  That is the large term, and no
+     white-noise amplitude estimate can see it.
+
+The calibration is now self-consistent -- qt is sized on the modal response AT
+the softened resonance, not at the linear one.  That exposed the real limit:
+
+    target     max loop gain     modes unstable
+     0.50%         0.187              0/33
+     1.00%         0.507              0/33      <-- BUILT HERE
+     1.50%         0.764              0/33
+     2.00%         0.996              0/33      <-- cliff
+     3.00%         1.695              3/33
+     5.00%         2.650              9/33      <-- jumped to 29%
+
+Above gain 1.0 the design point is unstable: the plant does not settle there,
+it JUMPS past to the far-softened stable state.  The builder now aborts if the
+gain reaches 1 and warns above 0.7.
+
+STRENGTH HAS NO CEILING ON THIS FILE.  It scales qt by 1/sqrt(strength) and
+leaves alpha untouched, so the plant stays bounded at any value.  But strength
+also multiplies the effective shift, and the loop-gain limit still applies --
+raising strength walks toward the same 2% cliff.  USE 1.  Anything else needs
+the builder re-run at that strength to re-check the gain.
+
+--------------------------------------------------------------------------------
+VERIFICATION BEFORE THE RUN (code/verify_bounded_softening.py)
+--------------------------------------------------------------------------------
+Modal RK4, same N_SUB=4 as the virtual hardware, modal forces synthesised from
+run 40's MEASURED drive CPSD.  Shift measured as k_eq = E[F(q)q]/E[q^2], the
+realised equivalent stiffness -- not a PSD peak, which at 0.5 Hz resolution
+cannot see 0.06%.
+
+    level     designed     measured (median, softened modes)   linear group
+    -18 dB     0.015%          0.014%   [0.010, 0.016]          2.1e-13 %
+    -12 dB     0.060%          0.057%   [0.043, 0.062]          1.2e-13 %
+     -6 dB     0.242%          0.231%   [0.172, 0.251]          2.4e-13 %
+      0 dB     1.000%          0.997%   [0.915, 1.085]          2.0e-13 %
+
+Agrees to 4%.  Five amplitude predictions have been made on this article; this
+is the first that held, and it held because integration checked it BEFORE a run
+rather than after.  Treat that as the standing procedure, not a one-off.
+
+--------------------------------------------------------------------------------
+SYSTEM ID LEVEL -- 0.794 V rms, NOT 1.0.  This is a real finding, not a tweak.
+--------------------------------------------------------------------------------
+The shift is quadratic in modal amplitude, and the FLAT system-ID drive excites
+the modes differently from the SHAPED control drive -- measured per-mode ratio
+up to 1.183.  At full level the identified FRF therefore carries softening
+already baked in, MODE-DEPENDENTLY: median 0.21%, worst 0.77% (mode 6, 300.9 Hz).
+That contaminates the very baseline the article compares against, and each
+resonance is displaced by a different amount, which reads as noise.
+
+This is a candidate explanation for run 48's system ID "looking significantly
+noisier than the linear system sysid".  Part of that was probably not noise.
+
+0.794 V rms (-2.0 dB) holds every mode under 0.5%.  Profiles 40 and 41 both
+carry it in [Frame 6x12 Random] B21.  If the system ID looks noisy anyway, that
+is now informative rather than ambiguous.
+
+--------------------------------------------------------------------------------
+PREDICTED, from the system model, before the runs
+--------------------------------------------------------------------------------
+Per-line normalised SHAPE change, the same metric the refresh gate uses,
+computed on the 12-response x 6-drive FRF (the control subset is 8 of those 12,
+so treat these as close but not exact).  Noise floor 0.0070; gate threshold 0.05.
+
+    -18 dB -> 0 dB              median 0.2311   95th 0.8722   max 1.1078
+    -12 dB -> 0 dB              median 0.2213   95th 0.8444   max 1.0711
+     -6 dB -> 0 dB              median 0.1769   95th 0.6988   max 0.9236
+    system ID -> 0 dB           median 0.2340   95th 0.8807   max 1.1225
+
+33x the noise floor and 4.6x the refresh threshold AT THE MEDIAN -- so the gate
+should fire across most of the band, not on a tail.  Escapecal predicted 0.0983
+for the same step; this is 2.4x that, from a plant that cannot fail.
+
+--------------------------------------------------------------------------------
+RUN 49 -- bounded-softening, refresh OFF     (baseline)
+--------------------------------------------------------------------------------
+Profile : profile_40_matchtrace_bsoft_norefresh.xlsx       NEW, 2026-09-24
+Params  : 1e-3,0.95,-9.0,,0,0,1        refresh OFF, diagnostics ON
+Strength: RATTLESNAKE_NONLINEARITY_STRENGTH=1
+  SAVE AS  run49_matchtrace_bsoft_norefresh_{sysid,spec,stream}.nc4
+
+--------------------------------------------------------------------------------
+RUN 50 -- bounded-softening, refresh ON t=0.05     (the test)
+--------------------------------------------------------------------------------
+Profile : profile_41_matchtrace_bsoft_refresh005.xlsx      NEW, 2026-09-24
+Params  : 1e-3,0.95,-9.0,,1,0.05,1
+Strength: THE SAME AS RUN 49.  Not recorded in the nc4 files -- console only.
+  SAVE AS  run50_matchtrace_bsoft_refresh005_{sysid,spec,stream}.nc4
+
+BOTH RUNS, the level schedule.  Start the environment at -18 dB, let it settle,
+then step -12, -6, 0, settling at each.  SAVE A SPECTRUM AT EVERY LEVEL:
+
+    run49_matchtrace_bsoft_norefresh_spec_m18.nc4
+    run49_matchtrace_bsoft_norefresh_spec_m12.nc4
+    run49_matchtrace_bsoft_norefresh_spec_m06.nc4
+    run49_matchtrace_bsoft_norefresh_spec.nc4          (0 dB, the headline)
+
+and the same pattern for run 50.  Four levels is what turns this from "the
+plant moved" into a measured shift-vs-level curve with a designed slope to
+check against: 0.014 / 0.057 / 0.231 / 0.997 %.
+
+rcond stays at 1e-3 for comparability with run 40's linear baseline.  Gap-based
+rank (rcond -0.05) is a follow-on, not this pair.
+
+Saves to   examples/sixdrive12resp/results/runs/
+Console to examples/sixdrive12resp/results/notes/run4N_console.log
+
+MOVE THE DRIFT FILE ASIDE after run 49:
+    cd ~/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/results/notes
+    mv match_trace_frf_drift.npz run49_match_trace_frf_drift.npz
+
+--------------------------------------------------------------------------------
+PRE-REGISTERED
+--------------------------------------------------------------------------------
+1. NO OVERFLOW, and this one is close to a certainty rather than a hope.  If
+   "overflow encountered" appears at all, the fault is NOT the calibration --
+   the kernel is provably bounded, so look at the integrator timestep or at a
+   plant file that is not the one intended.  Check B2 in the profile first.
+2. THE SIX MODES BELOW 300 Hz MUST NOT MOVE.  Machine zero offline.  Any FRF
+   drift the diagnostic reports below ~290 Hz is estimator behaviour, full stop.
+   This is the control group and it is the most useful single check in the run.
+3. A STEP IN THE DRIFT DIAGNOSTIC AT EVERY LEVEL CHANGE, growing with level,
+   median ~0.23 across -18 -> 0 dB against a 0.0070 floor.
+4. THE LEVEL LOOP MUST CONVERGE, level dB within -0.5 to +0.5.  A level-only
+   loop chasing a softening plant is the textbook failure mode, and the
+   softening feedback here has loop gain 0.51 -- stable, but not negligible.
+   If the level walks, that is a finding about the law.
+5. RUN 50's REFRESH COUNT SHOULD NOT DECAY toward zero the way run 40's did on
+   the linear plant (901 -> 6-18).  The plant keeps moving with level here.
+6. NO ACCURACY PREDICTION.  It is entirely possible the refresh makes things
+   WORSE -- control-level FRF estimates carry more distortion than the system
+   ID does.  That is why 49 and 50 are a pair.
+
+--------------------------------------------------------------------------------
+THE OPEN CAVEAT
+--------------------------------------------------------------------------------
+Everything above is OPEN LOOP against run 40's fixed drive.  In the closed loop
+the controller re-notches every cycle.  That could reduce the slide-off effect
+(the notch tracks the resonance) or deepen it (the notch is always one cycle
+behind a moving resonance).  The direction is not predictable from here, which
+is exactly what the 2x margin on the loop gain is for.  If the realised shift
+at 0 dB comes back well above 1%, that is the closed loop amplifying the
+feedback, and it is a result worth having rather than a setup error.
+
+--------------------------------------------------------------------------------
+LAUNCH
+--------------------------------------------------------------------------------
+  cd ~/Code/python/rattlesnake-vibration-controller
+  pkill -9 -f "envs/rattlesnake/bin/python" || true ; sleep 1
+
+  RUN 49:
+  RATTLESNAKE_NONLINEARITY_STRENGTH=1 \
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/profile_40_matchtrace_bsoft_norefresh.xlsx \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run49_console.log
+
+  RUN 50 (same strength):
+  RATTLESNAKE_NONLINEARITY_STRENGTH=1 \
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/profile_41_matchtrace_bsoft_refresh005.xlsx \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run50_console.log
+
+CHECK ON STARTUP -- the console line is new for this article and says it all:
+    grep "nonlinearity_strength" .../run49_console.log
+must print
+
+    nonlinearity_strength=1 n_modes=33 BOUNDED SOFTENING alpha=0.350
+    (27/33 modes softened, qt range=[...]) -- restoring force is bounded
+    below by alpha*wn^2*q, escape is impossible
+
+If it says CUBIC instead of BOUNDED SOFTENING, the profile is pointing at the
+wrong npz.  Stop and fix B2.
+
+Note the reminder about pkill: DO NOT pkill -9 a run you want the stream from.
+Run 48's 83.6 MB stream was unrecoverable because the chunk index never flushed.
+
+--------------------------------------------------------------------------------
+PROFILE PROVENANCE
+--------------------------------------------------------------------------------
+profile_40 and profile_41 are each profile_37 with the cells below changed, and
+NOTHING else -- verified cell by cell across all four sheets by the script that
+wrote them:
+
+    profile_40  (3 cells)
+      [Hardware] B2                  escapecal.npz -> boundedsoften.npz
+      [Frame 6x12 Random] B14        1e-3,0.95,-9.0,,1,0.05,1 -> ,,0,0,1
+      [Frame 6x12 Random] B21        1 -> 0.794          (system ID level)
+
+    profile_41  (2 cells)
+      [Hardware] B2                  escapecal.npz -> boundedsoften.npz
+      [Frame 6x12 Random] B21        1 -> 0.794
+
+They differ from each other in B14 alone.  Hardware type stays 7 (nonlinear).

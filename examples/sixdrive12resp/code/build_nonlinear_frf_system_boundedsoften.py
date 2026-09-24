@@ -82,7 +82,16 @@ TARGET_SHIFT = 0.01      # frequency shift at 0 dB on every softened mode
 ALPHA = ALPHA_DEFAULT    # 0.35; above the 0.3086 monotone-tangent-stiffness bound
 ZETA_RATIO = 1.10        # damping ratio at the design amplitude, vs linear
 ALLOW_SYSID_SHIFT = 0.005
-BAND = BAND_DEFAULT
+BAND = BAND_DEFAULT      # the CONTROL band (100-1000 Hz): drive shaping and
+                         # modal-response integration.  Do not narrow this --
+                         # a mode's response comes from the whole band.
+# Which modes are made nonlinear.  Deliberately NARROWER than the control band
+# so the article has a LINEAR CONTROL GROUP inside the same FRF measurement:
+# modes below 300 Hz stay exactly linear (qt = inf -> the nonlinear term is
+# identically zero, not merely small), so any drift seen down there is
+# estimator behaviour, not plant behaviour, and the two can be told apart in a
+# single run instead of needing a second one.
+SOFTEN_BAND = (300.0, 1.0e9)
 LEVELS_DB = (-18.0, -12.0, -6.0, 0.0)
 
 self_test(verbose=True)
@@ -197,7 +206,7 @@ chk = modal_sigma(np.ones(n_modes), SQ, f)
 print(f'modal_sigma(g=1) vs q_control: max rel dev '
       f'{np.max(np.abs(chk - q_control) / q_control):.3%}')
 
-mask = select_in_band(fn_f, BAND)
+mask = select_in_band(fn_f, SOFTEN_BAND)
 g_t = (1.0 - TARGET_SHIFT) ** 2
 sig_t = modal_sigma(np.full(n_modes, g_t), SQ, f)          # response AT the target
 u = ((1.0 - ALPHA) / (g_t - ALPHA)) ** (2.0 / 3.0)
@@ -230,8 +239,11 @@ if gmax >= 1.0:
 if gmax > 0.7:
     print(f'  WARNING: gain {gmax:.3f} leaves little margin; 1.0% target gives ~0.51.')
 
-print(f'\nsoftening {int(mask.sum())}/{n_modes} modes (band {BAND[0]:g}-{BAND[1]:g} Hz); '
+lin_modes = np.flatnonzero(~mask)
+print(f'\nsoftening {int(mask.sum())}/{n_modes} modes (above {SOFTEN_BAND[0]:g} Hz); '
       f'alpha={ALPHA:.3f}, target {100*TARGET_SHIFT:.1f}% at 0 dB')
+print(f'  LINEAR CONTROL GROUP: {len(lin_modes)} modes at '
+      + ', '.join(f'{fn_f[i]:.1f}' for i in lin_modes) + ' Hz -- exactly linear')
 print('  mode      f_Hz        qt      k3_equiv  ' +
       '  '.join(f'{d:+.0f}dB' for d in LEVELS_DB))
 shifts = {}
