@@ -1,0 +1,178 @@
+RUN 50 RESULTS -- match_trace on the bounded-softening plant, refresh ON t=0.05
+AND THE RUN 49 / RUN 50 PAIR
+================================================================================
+2026-09-24.  Profile 41, strength 1, system ID at 0.794 V rms.  ~500 control
+cycles, four spectra (-18, -12, -6, 0 dB), 217 MB stream, zero overflow.
+Stopped at 0 dB deliberately -- see COHERENCE below.
+
+Run 50 differs from run 49 in ONE parameter: refresh on at threshold 0.05
+(field 5 of the control parameter string).  Same plant file, same strength, same
+system-ID level, same level schedule up to 0 dB.  It is a clean pair.
+
+--------------------------------------------------------------------------------
+THE PAIR
+--------------------------------------------------------------------------------
+ level   rms ON/OFF   coherent ON/OFF   %out ON/OFF   coherence ON/OFF   drive V ON/OFF   oob resp ON/OFF
+  -18   7.38/ 7.89     7.40/ 7.91       22.7/26.3      0.995/0.996       13.45/12.41     -33.15/-33.32
+  -12   7.39/ 7.93     7.41/ 7.95       22.0/26.3      0.995/0.996       13.29/11.79     -31.74/-33.07
+   -6   7.28/ 7.95     7.38/ 7.99       21.8/26.2      0.987/0.993       13.55/11.58     -31.53/-32.98
+    0   5.92/ 7.72     7.47/ 8.10       20.3/26.1      0.697/0.938       14.93/12.17     -24.51/-30.85
+
+"coherent" scores only the part of the response correlated with the drive
+(response auto-spectra weighted by measured coherence).  That column exists
+because run 49's raw rms improvement with level turned out to be distortion
+being counted as signal -- see run49_results.txt, Result 2.  Every claim below
+is made on the coherent column.
+
+Machine-readable copy in run50_vs_run49_pair.json.
+
+--------------------------------------------------------------------------------
+RESULT 1 -- THE REFRESH DELIVERS REAL CONTROL IMPROVEMENT
+--------------------------------------------------------------------------------
+On the coherent column, refresh ON is better at every level, by 0.51, 0.54, 0.61
+and 0.63 dB.  At 0 dB it reaches 7.47 dB, which is better than run 49's
+NEAR-LINEAR -18 dB reference of 7.91.  So a plant softening 0.745% is being
+controlled better than the same plant was when it was effectively linear.
+
+The raw column would have claimed 1.80 dB at 0 dB.  It is 0.63.  The difference
+is distortion, and the coherent column is the honest one.
+
+WHERE the improvement lands is the useful part.  Error by band at 0 dB, rms dB:
+
+     band          ON      OFF     gain
+    100- 300 Hz   5.44    6.06     0.62     <- the 6 EXACTLY LINEAR modes
+    300- 500 Hz   5.13    7.70     2.57
+    500- 700 Hz   4.77    6.30     1.53
+    700-1000 Hz   7.23    9.36     2.13
+
+Below 300 Hz the plant does not move at all, and the refresh still buys 0.62 dB
+-- the same as it buys at -18 dB where nothing moves anywhere.  That is the gate
+REFINING THE FRF ESTIMATE against noise.  Above 300 Hz it buys 1.5-2.6 dB, and
+that increment is the gate TRACKING THE PLANT.  The two functions separate
+cleanly in frequency, and the linear control group is what makes them separable.
+
+--------------------------------------------------------------------------------
+RESULT 2 -- THE GATE RESPONDS TO RATE, NOT TO AMOUNT.  This was not anticipated.
+--------------------------------------------------------------------------------
+Refreshed lines per cycle, settled, by level:
+
+    -18 dB   ~10-20        (linear plant, run 40, for scale: 9-13)
+    -12 dB   ~7-24         NO response to the level change
+     -6 dB   ~15-38        modest response
+      0 dB   ~200-350      strong response, never decays
+
+The prediction made before the run was a spike at every level change, sized from
+run 49's settled-to-settled FRF difference: ~321 lines for -18 -> -12, ~447 for
+-12 -> -6, ~763 for -6 -> 0.  The first two did not happen.  Measured peak
+between cycles 100 and 200 was 24 lines.
+
+WHY.  The gate compares the current averaged FRF against the FRF at last solve.
+A level change ramps over 2 s and is then smoothed by exponential averaging at
+0.04, so a plant move totalling 0.037 in per-line shape arrives as roughly 25
+increments of ~0.0015 -- fifty times under the 0.05 threshold.  The gate never
+sees the step; it sees the slope.  It fired 835 lines at startup because that
+change is large AND fast.  It fires at 0 dB because the per-cycle rate finally
+clears threshold (prev_med rose from 0.006 at -6 dB to 0.020-0.032).
+
+This is a property of the design, not a fault, and it was invisible on the
+linear plant because there was no plant motion to miss.  It means the threshold
+is calibrated against RATE.  A slowly-drifting real structure -- thermal, or
+fatigue over a long test -- would slip under this gate entirely no matter how
+far it eventually drifted.  That is worth knowing before this is used on
+hardware, and it argues for an accumulated-change criterion alongside the
+per-cycle one.
+
+--------------------------------------------------------------------------------
+RESULT 3 -- WITH REFRESH ON, THE LOOP DOES NOT CONVERGE
+--------------------------------------------------------------------------------
+Run 49 at 0 dB settled: prev_med 0.007, c1_med flat, and it stayed there.
+Run 50 at 0 dB, over 211 cycles, never did:
+
+    prev_med   held 0.020-0.031 throughout, no downward trend
+    c1_med     fell to 0.26 by cycle 340, then ROSE, +0.060 per 100 cycles,
+               ranging 0.252-0.374 over the last half
+    refreshed  median 300, no decay, excursions to 668
+
+Three coupled time constants with nothing damping between them: the 0.04
+exponential averaging, the 0.165 softening feedback (response rises -> plant
+softens -> FRF moves), and the gate's own threshold.  The gate refreshes, the
+drive is re-solved, the response changes, the plant softens differently, the FRF
+moves past threshold again.
+
+The user saw this at the rig before the diagnostics showed it: "as trace levels
+get closer to target the plant changes".  That is the 0.165 loop gain, visible.
+
+The run was saved at cycle ~496, in the quietest stretch of the segment
+(prev_med 0.021-0.028, c1_med easing 0.365 -> 0.327).  It is converged in LEVEL
+and in TRACE but NOT in FRF, and should be described that way.
+
+--------------------------------------------------------------------------------
+THE TWO COSTS
+--------------------------------------------------------------------------------
+COHERENCE.  0.995 / 0.995 / 0.987 / 0.697 at -18 / -12 / -6 / 0 dB, against
+0.996 / 0.996 / 0.993 / 0.938 with refresh off.  Refreshing feeds control-time
+estimates into the solve and those carry distortion.  It still WORKS at 0.70.
+But run 49 measured 0.684 at +4 dB and 0.200 at +8, so there is very little
+headroom above 0 dB, which is why run 50 was stopped there.
+
+OUT-OF-BAND.  Response out-of-band rose to -24.51 dB against run 49's -30.85.
+The DRIVE went the other way: -23.53 ON against -18.96 OFF, i.e. the controller
+commands LESS out-of-band content with refresh on, closer to the linear plant's
+-23.71.  So the extra response is the plant's own distortion, generated because
+the drive is 23% higher (14.93 V vs 12.17) and the response sits closer to
+target.  The refresh is not injecting out-of-band energy; it is buying in-band
+accuracy with amplitude, and the plant converts amplitude into distortion.
+
+Observed at the rig as the out-of-band content falling while the trace came in:
+the 400 Hz overshoot was generating distortion in proportion to its own excess
+amplitude, and it shrank as control caught it.  400-450 Hz is where run 49's
+softening was largest (modes 9 and 10 at 412.7 and 413.6 Hz, 6.8% and 6.6%).
+
+--------------------------------------------------------------------------------
+PRE-REGISTERED SCORECARD (runsheet 49_50)
+--------------------------------------------------------------------------------
+1. NO OVERFLOW                          HELD, both runs.
+2. MODES BELOW 300 Hz MUST NOT MOVE     HELD, run 49: 0.0284 -> 0.0422.
+3. STEP AT EVERY LEVEL CHANGE           HELD in run 49's spectra; NOT in run 50's
+                                        refresh count -- see Result 2.
+4. LEVEL LOOP WITHIN +/-0.5 dB          run 49 FAILED above +4 dB; run 50 held
+                                        to +0.74 dB at 0 dB, marginal.
+5. REFRESH COUNT SHOULD NOT DECAY       HELD at 0 dB (median 300, no decay).
+                                        At -18/-12 it sat at the ~10-20 floor,
+                                        for the reason in Result 2.
+6. NO ACCURACY PREDICTION MADE          correct.  The refresh helped, by 0.63 dB
+                                        of real control, but the raw number
+                                        would have overstated it 3x.
+
+--------------------------------------------------------------------------------
+FILES
+--------------------------------------------------------------------------------
+    run50_matchtrace_bsoft_refresh005_sysid.nc4
+    run50_matchtrace_bsoft_refresh005_spec_m18 / _m12 / _m06 .nc4
+    run50_matchtrace_bsoft_refresh005_spec.nc4          (0 dB)
+    run50_matchtrace_bsoft_refresh005_stream.nc4        (217 MB)
+    run50_console.log, run50_match_trace_frf_drift.npz
+    run50_vs_run49_pair.json
+
+System ID cross-check: run 50 vs run 49 sysid agree to better than 3% against
+the linear plant (0.0547/0.1465 vs 0.0545/0.1430 in the two bands), so nothing
+drifted between the two runs.  Sysid-to-sysid repeatability on this NONLINEAR
+plant is 0.0519/0.0963, against 0.0446/0.0429 for two linear-plant sysids -- the
+softened band repeats half as well, because ~0.13% of amplitude-dependent shift
+is being identified slightly differently each time.  0.096 is the floor a
+refreshed FRF must beat to be telling you about the plant rather than about the
+identification.
+
+--------------------------------------------------------------------------------
+NEXT
+--------------------------------------------------------------------------------
+1. THE OPTIMAL LAWS on this plant.  optimal_diagonal is closed on the identified
+   plant model and open on the response error, and the response-error trim
+   (runs 36-38, allocated and never taken) has a far stronger case here than on
+   the linear plant where model mismatch measured 0.060 dB rms.  Profiles 27/28
+   exist for the trim pair; they point at the LINEAR plant and need the same
+   three-cell edit profiles 40/41 got.
+2. An accumulated-change criterion for the refresh gate, to catch slow drift
+   that the rate-sensitive threshold misses (Result 2).
+3. Run 49's +4 dB down-sweep is unresolved as a hysteresis question.
+4. A match_trace repeat: the pair is one run each.
