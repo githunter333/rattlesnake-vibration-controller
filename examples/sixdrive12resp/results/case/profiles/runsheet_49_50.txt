@@ -239,3 +239,10 @@ wrote them:
       [Frame 6x12 Random] B21        1 -> 0.794
 
 They differ from each other in B14 alone.  Hardware type stays 7 (nonlinear).
+
+run50_matchtrace_bsoft_refresh005_sysid.nc4
+run50_matchtrace_bsoft_refresh005_spec_m18.nc4
+run50_matchtrace_bsoft_refresh005_spec_m12.nc4
+run50_matchtrace_bsoft_refresh005_spec_m06.nc4
+run50_matchtrace_bsoft_refresh005_spec.nc4
+run50_matchtrace_bsoft_refresh005_stream.nc4
