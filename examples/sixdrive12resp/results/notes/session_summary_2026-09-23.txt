@@ -1,0 +1,451 @@
+SESSION SUMMARY 2026-09-21 to 2026-09-23
+Covers commits eacc20c3, fdc3b486, d36bb511, 724a94f1, 4d0194a6
+Branch control-law-development-2026-09.  Runs 35, 39, 40 taken; 42 started.
+================================================================================
+
+HEADLINE
+--------
+match_trace_pseudoinverse went from 8.15-8.22 dB rms across three runs to
+7.374 dB, with lines outside +/-3 dB falling from ~27.5% to 22.3%.  That is
+the weakest law on the board, and the FRF update path it was nominally running
+with had been a complete no-op.  It now works.
+
+Two things were measured that change how other results should be read:
+  - the model mismatch on this plant is 0.060 dB rms, so the FRF-update loop
+    already does essentially the whole job and there is almost nothing left
+    for an error-correcting trim to fix here;
+  - this plant's sixth singular value straddles rcond, so the laws' effective
+    RANK has been a readout of how well averaged the FRF happened to be.
+
+Two predictions I registered in advance were falsified.  Both are recorded
+below rather than quietly dropped, because pre-registration is worthless if
+the misses are not kept.
+
+
+1.  THE LOOP CLASSIFICATION, CORRECTED A SECOND TIME
+----------------------------------------------------
+Reports before 2026-09-17 called optimal_diagonal_control a feedback law.  The
+correction made then called it open loop.  Both are wrong.  Two separate loops:
+
+  CLOSED on the identified plant model.  control() and system_id_update() hand
+  the live FRF to _refine_batch every cycle.  Step 1 re-solves bins whose H
+  moved past the gate; step 3 re-solves bins whose predicted error degraded
+  against the CURRENT H, which is what catches a plant that softens with level
+  while drifting under the gate.  Runs 29/31/32: 17.03/18.44/16.22 V^2 with
+  the update on against 153/485/245 with it off.
+
+  OPEN on the response error.  The objective is the PREDICTED response
+  diag(H X H^H); last_response_cpsd was accepted and never read.
+
+The report's loop column now reads model / error / none instead of
+open / feedback.  No measured result changed, only the label.
+compute_report_data.py was deriving that column from an OPEN_LOOP set and
+would have silently reverted the relabel on the next assemble, since
+report_data.json is rebuilt from .floor_cache; fixed at source, and it now
+returns 'model+error' when a parameter string carries a live trim gain.
+
+
+2.  THE RESPONSE-ERROR TRIM (optimal_diagonal_control, fields 11-15)
+--------------------------------------------------------------------
+_update_response_trim closes the open half: a per-bin, per-channel
+multiplicative correction on the solver's target.  OFF by default.
+
+Two design choices carry it, both settled on paper before any code:
+
+  WHAT IT INTEGRATES.  Not measured-vs-predicted, which is the obvious choice
+  and is wrong: for a constant multiplicative bias b it reads 10log10(b) for
+  ever whatever the trim does, because shrinking the target shrinks prediction
+  and measurement together.  It is a mismatch READOUT, not an error, and an
+  integrator driven by it runs to its clamp and stops.  It integrates
+  measured-vs-SPECIFICATION, which drives to zero.
+
+  THE SOLVER-AGREEMENT GATE.  Integrating that alone winds up at every bin the
+  plant cannot reach -- this frame is rank 5 with six drives.  The trim is
+  applied only where the solver reached what it aimed at.  A shortfall the
+  solver itself predicted is an achievability limit, not model error.
+
+Speed: the COMMON part of each bin's change is applied straight to the stored
+drive CPSD, since scaling X by a positive scalar scales diag(H X H^H) by
+exactly that scalar and leaves coherence and rank untouched.  Only the
+per-channel shape waits for the scheduler.
+
+Also fixed while there: octave_band_switching_control overrode
+set_test_level_db without chaining, so the base class's trim freeze could
+never have armed on that subclass.
+
+
+3.  RUN 35 -- and the measurement that undercut run 36
+------------------------------------------------------
+optimal_diagonal_control_fast, trim off, profile_26 unedited.  Passed every
+pre-registered band: rms 6.009 (29/31/32 gave 6.036-6.082), level -0.023,
+drive_trace 0.020, reach_rms 3.711.  Guards fired twice on the startup
+transient then recovered; zero solver failures; 901/901 in-band bins refined.
+Regression check clean -- zero occurrences of "response-error trim" or "trim
+frozen" in a full run, so the trim is provably asleep inside the framework and
+not merely in an offline harness.
+
+THE FINDING.  Reconstructing the law's own per-bin prediction from the saved
+FRF and drive, diag(H D H^H), and comparing with the measured response over
+all 7208 in-band channel-bins:
+
+    model mismatch   median +0.008 dB   rms 0.060 dB   90th pct 0.054 dB
+
+There is essentially no model error on this plant.  The FRF-update loop
+already does the whole job; the residual 6.0 dB rms is the law's own
+optimisation limit -- rank 5 against eight channels with a diagonal-only
+objective -- not a model-to-rig gap.  First time the self-consistency
+diagnostic has been checked against measurement rather than trusted.
+
+CONSEQUENCE: prediction 1 for run 36 (a 0.3 dB level improvement) was
+WITHDRAWN.  Run 35's level is -0.023 dB; there is nothing there to correct.
+Runs 36-38 remain allocated and untaken.
+
+CONSEQUENCE: the trim's gate needed its own threshold.  It had reused
+error_threshold_db = 1.0 on the reasoning that the scheduler's "worth
+refining" bar and "the solver reached what it aimed at" were the same
+question.  Swept against run 35's real data:
+
+    gate 1.00 dB   46.6% of band gated   err-vs-spec 0.541 rms   43.6% clear the deadband
+    gate 0.50 dB   26.3%                 0.290 rms                1.6%
+    gate 0.25 dB   13.2%                 0.153 rms                0.3%
+
+against a model mismatch of 0.041-0.047 dB rms throughout.  At 1.0 dB the trim
+would have spent the whole run integrating the SOLVER's own sub-threshold
+shortfall -- thirteen times larger than the model error it exists to correct --
+and logging it as model correction.  Now field 15,
+response_trim_gate_db, default 0.5.
+
+
+4.  match_trace_pseudoinverse -- A WORKING FRF UPDATE PATH
+-----------------------------------------------------------
+With "Update Transfer Function During Control" on, this law read the FRF once,
+in the cycle-1 pseudoinverse, and never again.  refresh_shape (field 4) closed
+that in September but only by re-solving every line every cycle, which on an
+already-averaged FRF means re-solving on noise.
+
+New: field 5 refresh_threshold (per-line gate, change since that LINE's last
+solve -- not since the previous cycle, which can never see slow monotonic
+drift), field 6 frf_diag (instrumentation).  Both default to previous
+behaviour; an archived two-field string is bit-identical to the parent commit
+over five closed-loop cycles.
+
+THE GATE MEASURES SHAPE, NOT MAGNITUDE, and that came from a test, not from
+reasoning.  Refreshing lines whose H had drifted by a pure per-line GAIN moved
+the command by 7e-11 -- i.e. not at all, because trace_ratio is per line and
+already absorbs a per-line gain change exactly.  An un-normalised gate would
+fire on every such line and buy nothing.  The metric now normalises each line
+by its own Frobenius norm first.
+
+UNREFRESHED LINES ARE BIT-EXACT.  The first implementation used a NaN sentinel
+and let them through a multiply-by-1.0 the no-refresh path does not do.  That
+cost one ulp on one line at cycle 2, which the closed loop grew to 1.7e-11 by
+cycle 4.  Level-setting is now restricted to refreshed lines by sub-array.
+
+
+5.  RUN 39 -- measuring the per-line drift
+-------------------------------------------
+profile_29, refresh off, diagnostics on, control-identical to run 33 (verified
+by construction: max |diff| = 0.000e+00 over eight cycles).  175 cycles:
+
+    settled noise floor, since previous cycle   median 0.0070
+    pure-noise expectation for since-cycle-1    sqrt(2)*0.0070 = 0.0100
+    ACTUAL since-cycle-1, settled               0.0522   -- 5.2x
+
+Ratio widened through the run (2.3 -> 6.0 -> 7.0 -> 8.2) as the estimator
+quieted while the offset persisted.  d_ref DECAYS from 0.135 to a stable
+asymptote rather than growing, so this is a STEP, not drift: cycle 1 uses the
+badly averaged startup FRF and the converged estimate settles ~5% away in
+shape.  Confirmed independently from the saved files (sysid vs final control
+FRF: median 0.0485).  No level-change artifact -- largest post-settling jump
+0.0123 against neighbours 0.0121 and 0.0112.
+
+I had PREDICTED d_ref would sit at the noise floor, meaning nothing to track.
+Wrong.
+
+Threshold separation picked 0.05: 53.1% of lines refreshed, 1.78% false trips.
+
+ERROR OF MINE: runsheet_39's drive_trace acceptance band was wrong.  I set it
+from the startup-solve analysis (0.55) instead of the scored column (0.120 and
+0.187 on runs 01 and 33).  Run 39 scored 0.168 -- consistent -- but the band
+"failed".  Three of four bands were taken from report_data.json and were
+right; that one was not.  A pre-registered band that is wrong is worse than
+none.
+
+
+6.  RUN 40 -- the refresh on, and a prediction falsified
+---------------------------------------------------------
+profile_30, threshold 0.05.
+
+                run01    run33    run39    run40
+    rms          8.224    8.150    8.171    7.374     -9.8%
+    % out       27.54    27.55    26.62    22.32     -16.2%
+    vs floor     7.162    7.05     7.07     6.048    -14.5%
+    level dB    +0.089   +0.170   +0.130   +0.094     holds
+
+7.374 is the best this law has ever scored, well outside the +/-0.04 dB
+cluster of the three prior runs.  Refresh count decayed 901 -> 6-18 per cycle,
+matching the 1.78% false-trip rate, so run 41 was not needed.
+
+PREDICTION FALSIFIED.  I registered that drive would fall by roughly an order
+of magnitude.  It ROSE 20.6% -- and 20% is inside this law's own repeatability
+(runs 01 and 33 differ by 56% on identical settings), so drive is effectively
+unchanged.
+
+The error: I swept rcond on a FIXED FRF, watched the raw pseudoinverse drive
+fall from 2.37 to 0.24, and read that open-loop property into a closed-loop
+run.  It cannot carry over -- the refreshed line's level is set explicitly by
+_set_predicted_response_trace to whatever the trace loop demands, so the raw
+solve's magnitude never survives to steady state.  Measured efficiency is the
+opposite of what I claimed: response/drive 0.52 -> 0.31, the 5/6 pair's
+coherence 0.787 -> 0.592, drives 1-4 roughly doubling their share.  The
+refreshed shape uses all six drives instead of concentrating on two nearly
+cancelling ones.  It buys accuracy by paying drive.
+
+
+7.  RANK BY SINGULAR-VALUE GAP (rcond takes a sign)
+----------------------------------------------------
+Run 39 exposed why the drive behaviour was unstable to begin with:
+
+                   median sigma_k/sigma_1                  sigma_6
+    system ID  [1, 0.319, 0.085, 0.032, 0.015, 0.0017]     0.00167
+    converged  [1, 0.314, 0.084, 0.032, 0.015, 0.00014]    0.00014
+
+sigma_6 is inflated by estimation noise at system ID (20 averages) and
+collapses by twelve once averaged.  rcond = 1e-3 sits BETWEEN the two, so the
+same threshold keeps six directions on 72% of in-band lines from the
+system-ID estimate and five on 90% from the converged one -- agreement 24.5%.
+The law's rank was a readout of estimator quality.  Run 40 reached rank 5 by
+luck.
+
+That is also the origin of the startup solve's oddity: drives 5 and 6 at
+40-90x the power of drives 1-4, 98.6% coherent and ~115 degrees apart -- a
+large nearly-cancelling pair poured into a direction that does not exist.
+And why match_trace commands the most drive on the board.
+
+rcond now takes a sign.  Positive is the absolute ratio, unchanged, every
+archived run bit-identical.  Negative selects rank at the largest believable
+gap with |rcond| as the protect threshold.  Over four saved FRFs:
+
+    absolute rcond 1e-3         24.5% agreement   modal rank 6/5/5/6
+    gap, unrestricted           80.0%             5 on all four
+    gap, protect 0.05, min 3    88.7%             5 on all four
+    gap, protect 0.03, min 2    89.3%             5 on all four
+
+Two guards, both found by measurement: unrestricted gap detection picks rank 1
+or 2 on a quarter of system-ID lines, because at a resonance sigma_1 dominates
+and the largest gap is at the TOP of the spectrum.  So a direction above
+`protect` is never discarded, and a gap must exceed 3x to be believed.
+Constants sit on a flat plateau, one step conservative of the peak.
+
+NOT YET RUN ON THE RIG.  The residual 11% -- rank 2 on 8-10% of lines in both
+estimates -- is consistent between estimates but unexplained.  Consistent is
+not correct.
+
+
+8.  THE NONLINEAR PLANT -- BLOCKED, AND WHY
+--------------------------------------------
+Run 42 set up on sdynpy_frame6x12_system_nonlinear.npz (Hardware Type 7, not
+6).  Hardware confirmed engaged: n_modes=1, strength=1, k3=-5.6e11, c2=240.
+System ID saved.  STOPPED BEFORE THE CONTROL RUN.
+
+The nonlinearity is a softening cubic plus quadratic damping on ONE mode
+(120 Hz, zeta 0.040), calibrated to -4% frequency and x1.20 damping at twice a
+modal amplitude q0_ref corresponding to 20 V RMS of MODE-SHAPED drive.
+
+Computed from the system model and run 40's actual commanded drive:
+
+    commanded drive            13.499 V rms
+    modal amplitude q_rms      1.64e-06
+    q_rms / q0_ref             0.0067
+
+    strength    1  ->  frequency shift  -0.0000 %
+    strength   25  ->  -0.0011 %
+    strength  100  ->  -0.0045 %
+    strength  400  ->  -0.0178 %
+
+The drive is respectable but only a tiny fraction lands on that one mode --
+broadband random over 100-1000 Hz projected onto a single mode shape -- and
+the shift goes as amplitude SQUARED.  Reaching a few percent would need
+strength of order 1e5, far outside the calibration, where the Duffing term
+would stop behaving like the calibrated model.
+
+CAVEAT ON THAT NUMBER: it assumes 1 V of drive = 1 N at the drive DOF.  The
+hardware class's voltage-to-force scaling has NOT been verified, and it enters
+squared -- at 10 N/V everything above improves by 100x.  Worth checking before
+treating this as settled.
+
+DECISION: move to sdynpy_frame6x12_system_nonlinear_allmodes.npz, which
+spreads the nonlinearity across every mode so the whole drive contributes
+instead of one mode's projection.  Already built and in the tree.
+sdynpy_frame6x12_system_shifted.npz -- two fixed FRF states rather than
+amplitude dependence -- is the cruder fallback that guarantees a known shape
+change.
+
+
+9.  OPEN
+---------
+- The all-modes nonlinear run (next session).
+- Voltage-to-force scaling in the nonlinear hardware class: unverified, and it
+  decides whether the single-mode article was ever viable.
+- Gap-based rank on the rig: rcond -0.05 against run 40 as control.
+- Runs 36-38, the response-error trim pair, allocated and untaken.  Note the
+  premise is weak on this plant (0.060 dB mismatch); they can only show the
+  trim does no harm.
+- A match_trace repeat.  One run at 7.374 with 56% drive repeatability is not
+  enough to call the accuracy gain established.
+- The 11% of lines where gap detection picks rank 2, unexplained.
+- Run 30's trigger: still one instance, still unexplained.
+- Congruence per-line scatter (20.1% out at +/-6 dB) and repeatability.
+- octave_band_switching_control has still never been run.
+- Housekeeping: .probe, Claude outputs/pending/, sdynpy_scoring figures,
+  and the stray law_comparison_report.* in code/ remain untracked.
+
+
+10.  FILES
+-----------
+Code:
+  control_laws/control_laws.py          gated refresh, drift instrumentation,
+                                        gap-rank pinv
+  control_laws/optimal_diagonal_control.py   response-error trim + its gate
+  control_laws/octave_band_switching_control.py  chained set_test_level_db
+  examples/sixdrive12resp/code/verify_response_trim.py       4 tests
+  examples/sixdrive12resp/code/verify_match_trace_refresh.py 5 tests
+  examples/sixdrive12resp/code/compute_report_data.py        loop label at source
+
+Profiles: 27 (optdiagfast trim), 28 (optdiag trim), 29 (matchtrace diag),
+  30 (refresh 0.05), 31 (refresh 0.10), 32/33 (nonlinear pair)
+Runsheets: 35_38, 39, 40_41, 42_43
+Data: run39_match_trace_frf_drift.npz, run40_match_trace_frf_drift.npz
+  -- the law always writes match_trace_frf_drift.npz, so each run's copy must
+  be moved aside or it is lost.  Not recoverable from the nc4 files.
+Documents: both rebuilt twice, in Claude outputs/for_devonthink_2026-09-20/
+
+
+================================================================================
+ADDENDUM -- the nonlinear-plant attempts, same day
+Runs 44, 46 (twice), 48.  All four ended in escape.  No usable control run.
+================================================================================
+
+THE TRAP, which cost all four runs and which I did not see until run 44 had
+already failed:
+
+    shift  ~ (3/8)|k3| A^2 / wn^2      rises linearly with |k3|
+    q_esc  =  wn / sqrt(|k3|)          falls as 1/sqrt(|k3|)
+
+so the frequency shift available AT escape is 3/8 = 37.5%, FIXED, whatever k3
+is.  Turning up RATTLESNAKE_NONLINEARITY_STRENGTH raises the shift and moves
+the cliff toward you at exactly the same rate.  You cannot buy effect with
+strength.  With random-drive peaks near 4 sigma the usable shift caps around
+2.3%, and with real margin nearer 0.5-1%.  A softening cubic has a FINITE
+potential well; the Duffing JUMP criterion (shift/zeta -> 1), which I used to
+pick strength 100, never binds -- escape binds first, by a wide margin.
+
+RUN 44  all-modes article, strength 100.  Overflowed in system ID.  k3 reached
+-2.55e21.  Strength 25, which I had recommended first, would also have failed
+(margin 0.81).  The binding mode was #31 at 837 Hz, where the randomised k3
+draw landed at 2.7e18 -- and that mode carries almost none of the shape
+change.  A single uniform multiplier cannot serve both.
+
+THE PLANT WAS CALIBRATED THREE TIMES (build_nonlinear_frf_system_escapecal.py):
+  1. per-mode reference against the CONTROL drive, MARGIN 6.  Overflowed in
+     run 46's system ID.  A flat sysid drive and the shaped control drive
+     excite the modes completely differently (per-mode ratios 0.25 to 1.2), so
+     referencing one does not bound the other.  Tightest mode had 1.267x on
+     4-sigma peaks; the integration starts from rest and the switch-on
+     transient ate it.
+  2. single global amplitude scale.  Safe and useless -- all the shift lands
+     on the one strongest mode, the median LINE barely moves, d_shape 0.0025,
+     below the 0.0070 noise floor.
+  3. per-mode against the WORST CASE over both drives, MARGIN 10.  Shift
+     0.268-0.375% on every mode, margin 2.500 everywhere.  This is the file
+     that now exists.
+
+RUN 46 (attempt 3 of the plant, rcond +1e-3) escaped at control cycle 3, at
+-12 dB.  Mechanism, and this one the model finally retrodicted correctly:
+  - the startup cap deliberately holds cycle 1 NINE dB low;
+  - trace_ratio is an unclamped unity-gain integrator with no rate limit, so
+    it recovers the whole 9 dB in ONE step (cycle 2 drive ~8x cycle 1 power);
+  - rcond = 1e-3 retained the distortion-inflated 6th direction on 97% of
+    lines, so the pinv commands enormous drive for little response.
+  Together: cycle-2 amplitude 1.09x the calibration amplitude, margin 0.99.
+  Predicted escape at cycle 2-3; observed overflow right after drift cycle 3.
+
+RUN 48  same plant, GAP RANK (rcond -0.05).  Margin at cycle 2 went 0.99 ->
+3.68.  Ran clean through system ID and 175 control cycles at -18 and -12 dB.
+Escaped on the step to 0 dB.
+
+  MY PREDICTION OF 7.5x MARGIN AT 0 dB WAS WRONG.  I scaled run 40's modal
+  amplitudes by the ratio of TOTAL drive rms (4.38 V vs 13.50 V = 0.324).
+  Projecting run 48's actual drive through the mode shapes instead:
+
+        per-mode q(run48)/q(run40):  min 0.37  median 0.51  MAX 1.47
+
+  Mode 1 at 120 Hz gets 47% MORE amplitude than run 40 despite three times
+  less total drive, because the gap-rank drive is shaped differently across
+  frequency and across the six drives.  True margin at 0 dB was 1.70, not 7.5.
+  A scalar drive ratio cannot predict modal amplitude.  Fourth different
+  amplitude error of mine on this article; my predictions here went 0 for 4.
+
+  1.70 is above 1, so 4-sigma peaks alone should not have escaped.  What
+  probably finished it is the level ramp: data_collector.py divides each frame
+  by the CURRENT test level, so frames spanning the 2 s ramp are normalised by
+  the wrong number, trace_ratio sees corrupted data, and the unclamped level
+  loop overshoots through a 1.7x margin.  Same mechanism the response-error
+  trim needs its freeze for.
+
+WHAT RUN 48 DID ESTABLISH, and it is worth keeping:
+
+  THE DISTORTION-INFLATED SPECTRUM IS A SYSTEM-ID ARTIFACT, NOT THE PLANT.
+      coherence     sysid 0.9432  ->  control 0.9976
+      sigma_k/s1    sysid [1, .328, .101, .045, .0209, .00654]
+                    ctrl  [1, .320, .0856, .0323, .0147, .000572]
+                    linear plant sysid [1, .319, .0850, .0324, .0150, .00167]
+  The control-time estimate is essentially the linear plant's, and sigma_6 is
+  LOWER than the linear plant's.  A 20-average identification inflates the
+  noise floor; exponential averaging at 0.04 dissolves it.  Gap rank recovers
+  from 42% rank-5 on the sysid to 78-79% in control.  So the rank pathology is
+  a STARTUP problem -- which is exactly when match_trace freezes its shape.
+
+  DRIFT NOISE FLOOR was 0.0047-0.0065, not the ~0.035 I predicted from the
+  sysid coherence.  I treated each control cycle as an independent 20-average
+  identification; exponential averaging makes it far better.  d_ref sat rock
+  steady at 0.378 for 70+ cycles -- that is the startup-estimate offset
+  (0.052 on the linear plant), fully converged, not plant motion.
+
+  -18 dB -> -12 dB produced no detectable change, as predicted (4.7% of the
+  full shift).  rms 7.06 -> 7.02, level +0.065 -> +0.051, sigma_6/sigma_1
+  5.7e-4 -> 5.3e-4.  The measured d_shape of 0.0289 between the two saves is
+  consistent with random-walk accumulation of estimator noise over the ~30
+  cycles separating them, not with softening.
+
+  OUT-OF-BAND RESPONSE IS NEGLIGIBLE at both levels: -33 dB re in-band, and
+  the strongest out-of-band lines are 1001-1004 Hz, i.e. band-edge skirt, not
+  harmonic distortion.  The plant was behaving essentially linearly at -18 and
+  -12 dB.  Whatever happened at 0 dB happened abruptly.
+
+STREAM DATA IS LOST ON ALL KILLED RUNS.  pkill -9 gives the netCDF writer no
+chance to flush the chunk index.  run48's stream is 86 MB on disk with 83.6 MB
+unaccounted for, time_data reports zero allocated chunks at the HDF5 layer,
+and the 144-byte chunks are scattered between B-tree nodes so nothing can be
+reconstructed by content (0 candidate chunks out of 599,220 alignments).  Same
+for runs 44 and 46.  KURTOSIS THEREFORE COULD NOT BE ANSWERED -- and kurtosis
+is the right early-warning signal for escape, since a softening oscillator
+approaching its cliff produces heavy tails that a CPSD averages away.  Future
+runs: stop cleanly (GUI stop or SIGTERM) if the stream is wanted.
+
+FILES: profiles 32/33 (single-mode NL), 34/35 (all-modes), 36/37 (escapecal
++1e-3), 38/39 (escapecal, gap rank).  Runsheets 42_43 (superseded), 44_45
+(superseded), 46_47.  Saves kept: run42/44/46/48 system IDs, lvl48_m18_spec,
+lvl48_m12_spec.  Streams from 44/46/48 are unreadable.
+
+THE OPEN DECISION, for next session:
+  (a) rebuild at MARGIN ~25.  Margin ~4.2 at 0 dB, effect ~2.8x the noise
+      floor.  A fifth attempt.
+  (b) sdynpy_frame6x12_system_shifted.npz -- two fixed FRF states, hardware
+      type 6, switch armed by RATTLESNAKE_FRF_SWITCH_FILE and fired by
+      touching RATTLESNAKE_FRF_SWITCH_TRIGGER.  d_shape 0.5537 median, 79x
+      the noise floor, 100% of lines over the gate, no escape mechanism at
+      all.  Gives up amplitude-dependence for a step.
+  (c) run the nonlinear article at FIXED 0 dB with no level change.  The
+      escape risk is concentrated in the transitions, and this still tests
+      the refresh against a genuinely distorting article.

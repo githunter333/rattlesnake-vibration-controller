@@ -53,7 +53,24 @@ class SDynPyNonlinearSystemAcquisition(SDynPySystemAcquisition):
         super().__init__(system_file, queue)
         d = self.sdynpy_system_data
 
-        if 'nl_target_mode_shapes' in d and 'nl_k3s' in d and 'nl_c2s' in d:
+        # BOUNDED SOFTENING (2026-09-24) takes precedence when present.  See
+        # examples/sixdrive12resp/code/bounded_softening.py.  The restoring
+        # force saturates onto a residual linear stiffness alpha*wn^2 instead
+        # of reversing sign, so there is no finite potential well and the
+        # plant CANNOT escape at any amplitude or any strength -- which is the
+        # failure that ended runs 42/44/46/48 on the cubic files.
+        self._nl_soft = False
+        if 'nl_target_mode_shapes' in d and 'nl_soft_qts' in d:
+            self._has_nonlinearity = True
+            self._nl_soft = True
+            self.nl_phis = np.atleast_2d(d['nl_target_mode_shapes'])        # (ndof, n_modes)
+            self.nl_soft_qt_base = np.atleast_1d(d['nl_soft_qts']).astype(float)
+            self.nl_soft_wn2 = np.atleast_1d(d['nl_soft_wn2s']).astype(float)
+            self.nl_soft_alpha = float(d['nl_soft_alpha'])
+            self.nl_c2_base = (np.atleast_1d(d['nl_c2s']).astype(float)
+                               if 'nl_c2s' in d else np.zeros_like(self.nl_soft_qt_base))
+            self.nl_k3_base = None
+        elif 'nl_target_mode_shapes' in d and 'nl_k3s' in d and 'nl_c2s' in d:
             self._has_nonlinearity = True
             self.nl_phis = np.atleast_2d(d['nl_target_mode_shapes'])       # (ndof, n_modes)
             self.nl_k3_base = np.atleast_1d(d['nl_k3s']).astype(float)     # (n_modes,)
@@ -84,13 +101,28 @@ class SDynPyNonlinearSystemAcquisition(SDynPySystemAcquisition):
         self._nl_accel_mask = None       # (n_response_channels,) bool, True where channel_type is acceleration
 
         n_modes = self.nl_phis.shape[1] if self._has_nonlinearity else 0
-        print(f"[SDynPyNonlinearSystemAcquisition] nonlinearity_strength={self.nl_strength:g} "
-              f"n_modes={n_modes} "
-              f"(k3 range=[{self.nl_k3_base.min():.3g},{self.nl_k3_base.max():.3g}], "
-              f"c2 range=[{self.nl_c2_base.min():.3g},{self.nl_c2_base.max():.3g}])"
-              if self._has_nonlinearity else
-              f"[SDynPyNonlinearSystemAcquisition] nonlinearity_strength={self.nl_strength:g} n_modes=0",
-              flush=True)
+        tag = f"[SDynPyNonlinearSystemAcquisition] nonlinearity_strength={self.nl_strength:g} n_modes={n_modes}"
+        if not self._has_nonlinearity:
+            print(tag, flush=True)
+        elif self._nl_soft:
+            if self.nl_strength < 0.0:
+                raise ValueError(
+                    "RATTLESNAKE_NONLINEARITY_STRENGTH must be >= 0 for a bounded-softening "
+                    f"system file (got {self.nl_strength:g}); strength scales qt by "
+                    "1/sqrt(strength) and a negative value has no meaning.")
+            n_soft = int(np.sum(np.isfinite(self.nl_soft_qt_base)))
+            qf = self.nl_soft_qt_base[np.isfinite(self.nl_soft_qt_base)]
+            print(f"{tag} BOUNDED SOFTENING alpha={self.nl_soft_alpha:.3f} "
+                  f"({n_soft}/{n_modes} modes softened, qt range=["
+                  f"{qf.min():.3g},{qf.max():.3g}], "
+                  f"c2 range=[{self.nl_c2_base.min():.3g},{self.nl_c2_base.max():.3g}]) "
+                  f"-- restoring force is bounded below by alpha*wn^2*q, escape is impossible",
+                  flush=True)
+        else:
+            print(f"{tag} CUBIC "
+                  f"(k3 range=[{self.nl_k3_base.min():.3g},{self.nl_k3_base.max():.3g}], "
+                  f"c2 range=[{self.nl_c2_base.min():.3g},{self.nl_c2_base.max():.3g}])",
+                  flush=True)
 
     def create_response_channels(self, channel_data: List[Channel]):
         super().create_response_channels(channel_data)
@@ -131,9 +163,20 @@ class SDynPyNonlinearSystemAcquisition(SDynPySystemAcquisition):
         self.force_buffer = self.force_buffer[self.times.size:]
 
         active = self._has_nonlinearity and self.nl_strength != 0.0
+        soft = active and self._nl_soft
+        k3s = qts = soft_wn2 = soft_a = None
         if active:
-            k3s = self.nl_k3_base * self.nl_strength    # (n_modes,)
             c2s = self.nl_c2_base * self.nl_strength    # (n_modes,)
+            if soft:
+                # strength scales qt as qt/sqrt(strength), which reproduces
+                # k3_eff = strength*k3 in the small-amplitude limit while
+                # leaving alpha -- and therefore boundedness -- untouched.
+                # There is no upper limit on strength for this kernel.
+                qts = self.nl_soft_qt_base / np.sqrt(self.nl_strength)
+                soft_wn2 = self.nl_soft_wn2
+                soft_a = self.nl_soft_alpha
+            else:
+                k3s = self.nl_k3_base * self.nl_strength    # (n_modes,)
 
         A, B, C_out, D_out = self.system.A, self.system.B, self.system.C, self.system.D
         ndof = A.shape[0] // 2
@@ -148,6 +191,13 @@ class SDynPyNonlinearSystemAcquisition(SDynPySystemAcquisition):
             x_vel = x_state[ndof:]
             q = w_modal @ x_disp     # (n_modes,)
             qd = w_modal @ x_vel     # (n_modes,)
+            if soft:
+                # departure from linear: wn^2 q (1-alpha) (exp(-(q/qt)^2) - 1)
+                # expm1 is exact as q->0 and saturates at -1, so this cannot
+                # overflow at any amplitude.  Unsoftened modes carry qt=inf,
+                # giving expm1(0)=0 exactly -- they stay bit-identically linear.
+                return (soft_wn2 * q * (1.0 - soft_a) * np.expm1(-(q / qts) ** 2)
+                        + c2s * qd * np.abs(qd))          # (n_modes,)
             return k3s * q ** 3 + c2s * qd * np.abs(qd)   # (n_modes,)
 
         def deriv(x_state, u):
