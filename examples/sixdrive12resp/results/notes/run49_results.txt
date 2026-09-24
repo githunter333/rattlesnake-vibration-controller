@@ -1,0 +1,169 @@
+RUN 49 RESULTS -- match_trace on the bounded-softening plant, refresh OFF
+================================================================================
+2026-09-24.  Profile 40, strength 1, system ID at 0.794 V rms (-2.0 dB).
+498 control cycles, eight spectra saved, 213 MB stream, ZERO overflow.
+
+This is the first nonlinear run of the article that completed.  Runs 42, 44, 46
+and 48 all ended in escape or lack of effect.  It went to +8 dB -- a 30.6 V rms
+drive, 2.3x anything this rig had previously run -- without incident, because
+the bounded kernel has no escape state to reach.
+
+--------------------------------------------------------------------------------
+THE LEVEL CURVE
+--------------------------------------------------------------------------------
+"implied shift" is the self-consistent modal frequency shift computed from the
+MEASURED drive CPSD projected through the known mode shapes.  That route needs
+no response-channel mapping and no peak picking; it reproduces the builder's own
+nl_q0_refs from run 40's drive to 0.31%, so it is the trustworthy estimator here.
+
+"shape" is the per-line normalised FRF change against the -18 dB state, split
+into the LINEAR CONTROL GROUP (100-300 Hz, 6 modes, exactly linear by
+construction) and the SOFTENED band (300-1000 Hz, 27 modes).
+
+ level  drive V   shift med/max    gain   shape: linear/softened  ratio   rms dB  %out  level dB
+  -18     1.56   0.012%/ 0.016%   0.002     0.0000 / 0.0000         -      7.89  26.3   +0.29
+  -12     2.96   0.046%/ 0.057%   0.006     0.0284 / 0.0376       1.32     7.93  26.3   +0.07
+   -6     5.80   0.174%/ 0.227%   0.025     0.0358 / 0.0640       1.79     7.95  26.2   +0.06
+    0    12.17   0.745%/ 1.164%   0.165     0.0398 / 0.2600       6.53     7.72  26.1   +0.18
+   +2    15.47   1.109%/ 1.875%   0.203     0.0418 / 0.4682      11.19     7.21  25.6   +0.31
+   +4    19.86   1.640%/ 2.561%   0.219     0.0422 / 0.6979      16.53     6.63  24.3   +0.51
+   +8    30.62   3.484%/ 6.768%   0.707     0.1248 / 1.1135       8.92     4.96  19.6   +2.31
+ +4dn    20.19   1.379%/ 2.485%   0.113     0.0524 / 0.8209      15.66     6.63  26.0   -0.80
+
+Machine-readable copy in run49_level_curve.json.
+
+--------------------------------------------------------------------------------
+RESULT 1 -- THE PLANT MOVED, AND ONLY WHERE IT WAS BUILT TO
+--------------------------------------------------------------------------------
+Across a 12.7x span of drive voltage (-18 to +4 dB) the LINEAR CONTROL GROUP
+went 0.0284 -> 0.0422.  That is flat; it is estimator noise.  Over the same span
+the SOFTENED band went 0.0376 -> 0.6979, an 18x rise, and the ratio between them
+climbed monotonically 1.32 -> 16.53.
+
+No confound produces that pattern.  A drifting estimator, a level-loop artifact
+or a distortion effect would move both bands; only a plant that softens above
+300 Hz and nowhere else separates them monotonically with level.
+
+The six linear modes were the best decision of the build.  They cost nothing --
+they are the modes that were already there -- and they converted "the FRF
+changed" into "the FRF changed in exactly the 27 modes we made nonlinear and in
+none of the 6 we did not", inside a single run, with no second experiment.
+
+--------------------------------------------------------------------------------
+RESULT 2 -- CONTROL QUALITY IMPROVES WITH LEVEL.  UNEXPLAINED.
+--------------------------------------------------------------------------------
+    -18 dB   rms 7.89 dB   26.3% outside +/-6 dB
+     +4 dB   rms 6.63 dB   24.3%
+     +8 dB   rms 4.96 dB   19.6%
+
+Monotonic across a 20x drive range, while the plant moves 3.5% in frequency AWAY
+from the FRF the drive matrix was solved on, with refresh OFF so that FRF is
+never updated.  The naive expectation is the opposite.
+
+This is NOT understood and should not be written up as a result until it is.
+Candidate explanations, none tested:
+  (a) match_trace matches the TRACE, not the channels.  Softening redistributes
+      response between channels; if that redistribution happens to flatten the
+      per-channel spread, rms falls without the law doing anything smarter.
+  (b) The 8x6 plant is rank 5.  Softening moves the modes and may improve the
+      conditioning of the 6-drive solve at the lines that dominate the error.
+  (c) An artifact of scoring a moving plant against a fixed specification.
+Run 50 (refresh ON) is the natural first test: if the effect survives an FRF
+that tracks the plant, (a) or (b); if it vanishes, look harder at (c).
+
+--------------------------------------------------------------------------------
+RESULT 3 -- THE LEVEL LOOP BREAKS, AS PRE-REGISTERED
+--------------------------------------------------------------------------------
+    -6 dB  +0.06     0 dB  +0.18     +2 dB  +0.31
+    +4 dB  +0.51     +8 dB  +2.31    +4 down  -0.80
+
+Monotonic, not random, and it leaves the +/-0.5 dB band between +4 and +8.  This
+is pre-registered item 4: a level-only loop chasing a softening plant is the
+textbook failure mode, and it failed in the textbook way.  A finding about the
+law, not a setup fault.
+
+--------------------------------------------------------------------------------
+THE JUMP THAT DID NOT HAPPEN, AND WHY I KEPT PREDICTING IT
+--------------------------------------------------------------------------------
+Predicted first jump, revised four times as better drive data arrived:
+    from the -6 dB drive   +4.5 dB
+    from the  0 dB drive   +5.0 dB
+    from the +2 dB drive   +6.0 dB
+    from the +4 dB drive   +8.0 dB, 4 of 27 modes past the fold
+MEASURED at +8 dB: loop gain 0.707, ZERO modes past the fold.
+
+The mechanism I kept missing: match_trace re-solves the DRIVE every cycle
+against the trace of the measured response.  Turning refresh off freezes the
+FRF, not the drive.  As the plant softens and the response grows, the law backs
+the drive off where it grew -- worth roughly 2 dB of effective level at +8 --
+and that pushback suppresses the bifurcation.  Scaling a measured drive forward
+in level assumes a drive that does not adapt, and this one does.
+
+So the open caveat from the build ("the closed loop could move the gain either
+way and I cannot predict which") is resolved, in the helpful direction: THE
+CONTROLLER SUPPRESSES THE JUMP.  That is a genuinely useful thing to know about
+this law on a softening plant, and it was only learnable by running it.
+
+Prediction record on this article is now 5 wrong, 1 right.  The one that held
+was 0 dB shift predicted from the -6 dB drive (0.699%/0.986%, gain 0.176 against
+measured 0.745%/1.164%, gain 0.165 -- 7% on the median).  It held because it was
+a one-step extrapolation from measured data; every failure was a multi-step
+extrapolation through a mechanism that was not in the model.
+
+--------------------------------------------------------------------------------
+THE DOWN-SWEEP -- NOT A HYSTERESIS RESULT.  DO NOT CITE IT AS ONE.
+--------------------------------------------------------------------------------
++4 dB on the way down differs from +4 dB on the way up: FRF shape difference
+0.6827 in the softened band against 0.0450 in the linear band, a factor of 15.
+It settled (c1_med flat at 0.62 over the last 8 cycles, against 0.52 on the way
+up), so it is not simply mid-transient.
+
+BUT the level loop landed at -0.80 dB coming down against +0.51 dB going up.
+The two points are 1.31 dB apart in drive, so they are not the same operating
+condition and the comparison is confounded.  Level difference alone predicts the
+implied shift should fall 1.640% -> about 1.21%; measured 1.379%, i.e. about 14%
+MORE softened than the level accounts for.  That is the direction hysteresis
+would push, but 14% is inside the uncertainty of this estimate.
+
+With loop gain 0.707 at +8 and no mode past the fold, there is no bistability in
+the model, so there is no fold for a hysteresis loop to form around.  The honest
+statement is: the two +4 dB points differ, most of the difference is the level
+loop, and nothing here establishes path dependence.  It needs a repeat with the
+level settled at both points before it means anything.
+
+--------------------------------------------------------------------------------
+PRE-REGISTERED SCORECARD
+--------------------------------------------------------------------------------
+1. NO OVERFLOW                              HELD.  Zero, to 30.6 V rms.
+2. SIX MODES BELOW 300 Hz MUST NOT MOVE     HELD.  0.0284 -> 0.0422 to +4 dB.
+3. STEP AT EVERY LEVEL CHANGE               HELD, growing with level as designed.
+4. LEVEL LOOP WITHIN +/-0.5 dB              FAILED above +4 dB, as anticipated.
+5. REFRESH COUNT (run 50 only)              not applicable, refresh off.
+6. NO ACCURACY PREDICTION                   correct not to have made one.
+
+--------------------------------------------------------------------------------
+FILES
+--------------------------------------------------------------------------------
+    run49_matchtrace_bsoft_norefresh_sysid.nc4
+    run49_matchtrace_bsoft_norefresh_spec_m18 / _m12 / _m06 .nc4
+    run49_matchtrace_bsoft_norefresh_spec.nc4            (0 dB)
+    run49_matchtrace_bsoft_norefresh_spec_p02 / _p04 / _p08 / _p04_down .nc4
+    run49_matchtrace_bsoft_norefresh_stream.nc4          (213 MB)
+    run49_console.log,  run49_level_curve.json
+
+Several saves arrived with leading spaces and one with a doubled .nc4 extension,
+from pasting into the save dialog; all renamed to the canonical form.
+
+--------------------------------------------------------------------------------
+NEXT
+--------------------------------------------------------------------------------
+1. RUN 50, profile 41, refresh ON at 0.05.  Same level schedule.  The pointed
+   question is whether the gate keeps firing as the plant moves -- run 40 on the
+   linear plant decayed 901 -> 6-18 refreshed lines -- and whether Result 2
+   survives an FRF that tracks.
+2. Result 2 needs an explanation before it goes in a report.
+3. A +4 dB repeat with the level settled, if the down-sweep is worth resolving.
+4. The jump is reachable by raising STRENGTH rather than level, which multiplies
+   the softening without giving the drive-adaptation more room to push back.
+   The plant is bounded at any strength, so this is safe -- but re-run the
+   builder at that strength first to re-check the loop gain.
