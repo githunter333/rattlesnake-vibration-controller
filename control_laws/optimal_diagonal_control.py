@@ -189,7 +189,55 @@ _DEADLOCK_ESCAPE_CALLS = 10
 # across a level change: a frame that spans the ramp is normalized by the
 # wrong number.  Rattlesnake calls set_test_level_db on every change, so the
 # trim sits out this many control cycles afterwards.
-_TRIM_FREEZE_CALLS = 3
+#
+# RAISED FROM 3 TO 25, 2026-09-25, after run 52.  Three was sized for a single
+# level change.  A level RAMP is many changes -- run 52 logged 17 of them
+# getting from 0 dB to -18 dB -- and the freeze expires between steps, so the
+# trim spent the whole ramp acting on transient error.  25 matches the ~25
+# control-cycle time constant of the CPSD exponential average (coefficient
+# 0.04), which is how long a measured frame takes to stop carrying the old
+# level.  Each change re-arms the counter, so a ramp is ONE long freeze and
+# the trim resumes only once the level has actually been still that long.
+_TRIM_FREEZE_CALLS = 25
+
+# RESPONSE-ERROR TRIM LEAK.  Per cycle, in-band bins that do NOT act -- gated
+# out by the solver-agreement test, or inside the deadband -- decay toward
+# zero by this much instead of holding.
+#
+# WHY, and this is the defect run 52 exposed.  The gate is evaluated BEFORE
+# the error term, and gated bins previously got step_db = 0, i.e. they kept
+# whatever correction they already carried, permanently.  That blocks harmful
+# accumulation and corrective UNWINDING equally: a bin that picks up a
+# spurious trim while the loop is still converging, and whose solver residual
+# then exceeds the gate, is frozen at that value for the rest of the run.
+# Run 52 ended with the trim spread across the full +/-3 dB clamp, median
+# -1.51 dB, after 261 updates, on a plant whose true model gap at that level
+# is 0.012 dB -- and it cost 30% more drive (11.47 V rms vs 8.84 V) to
+# deliver the same response as trim-off.  Integrator windup behind a
+# conditional gate.
+#
+# A REAL model error re-drives itself every cycle at up to
+# response_trim_step_db, so a leak an order of magnitude smaller is invisible
+# to it in steady state.  A spurious one bleeds off in ~limit/leak cycles
+# (3.0/0.05 = 60).  This makes the trim self-healing rather than dependent on
+# never having made a mistake.
+_TRIM_LEAK_DB = 0.05
+
+# ...but ONLY after this many CONSECUTIVE gate failures on the same bin.
+#
+# Second correction, same session.  Leaking on a single gate failure was also
+# wrong: max_bins_per_update is 20 against 901 in-band bins, so after the trim
+# moves a target it takes ~45 cycles before that bin is re-solved, and until
+# then its cached prediction is stale and the gate fails for a reason that has
+# nothing to do with reachability.  Leaking immediately therefore bled away
+# corrections that were merely WAITING THEIR TURN -- verify_response_trim.py
+# TEST 2 settled at -1.05 dB against a real -2.00 dB bias.
+#
+# 50 cycles is comfortably longer than one full 901/20 = 45-cycle refinement
+# sweep, so a bin that has failed the gate this many times in a row has had at
+# least one chance to be re-solved and still cannot reach its target.  That is
+# the population that wound up in run 52.
+_TRIM_LEAK_AFTER = 50
 
 # Rattlesnake loads a control-law file with importlib.spec_from_file_location,
 # i.e. as a standalone module with NO package context, so a relative import
@@ -351,6 +399,7 @@ class optimal_diagonal_control:
         self._p_commanded = None      # (F, M) predicted diagonal of the command actually issued
         self._target_commanded = None # (F, M) target that command was solved against
         self._trim_frozen_calls = 0
+        self._trim_gate_fail = None   # (F, M) consecutive gate failures per bin
         self._test_level_db = None
         self._H_last_used = None
         self.n_trim_updates = 0
@@ -944,7 +993,8 @@ class optimal_diagonal_control:
             print(f"[optimal_diagonal_control] test level {prev:g} -> "
                   f"{test_level_db:g} dB; response-error trim frozen for "
                   f"{_TRIM_FREEZE_CALLS} cycles (level-ramp frames are not "
-                  f"comparable). Accumulated trim is kept.", flush=True)
+                  f"comparable). Accumulated trim is kept, and leaks toward 0 "
+                  f"once the trim resumes.", flush=True)
 
     def _cache_commanded_prediction(self, output, transfer_function):
         """Record what THIS command is predicted to produce, so the next
@@ -1073,26 +1123,63 @@ class optimal_diagonal_control:
         shortfall_db[ok] = 10*np.log10(p[ok]/tc[ok])
         ok &= np.abs(shortfall_db) <= self.response_trim_gate_db
         n_gated = int(ok.sum())
+        gate_ok = ok.copy()      # passed the solver-agreement gate; see the leak below
 
         # The error the test is judged on.
         err_db = np.zeros_like(z)
         err_db[ok] = 10*np.log10(z[ok]/spec[ok])
         ok &= np.abs(err_db) > self.response_trim_deadband_db
         n_moving = int(ok.sum())
-        if n_moving == 0:
-            self._p_commanded = None
-            self._target_commanded = None
-            return
 
         if self.y_trim is None:
             self.y_trim = np.ones_like(spec)
         trim_db = 10*np.log10(np.maximum(self.y_trim, 1e-30))
+
+        # Nothing to act on AND nothing accumulated to bleed off: return
+        # exactly as the pre-leak code did.
+        if n_moving == 0 and not np.any(np.abs(trim_db) > 0.0):
+            self._p_commanded = None
+            self._target_commanded = None
+            return
+
         step_db = np.clip(-self.response_trim_gain*err_db,
                           -self.response_trim_step_db, self.response_trim_step_db)
         step_db[~ok] = 0.0
+
+        # LEAK (see _TRIM_LEAK_DB).  ONLY bins that failed the SOLVER-AGREEMENT
+        # GATE decay toward zero.  NOT bins that passed the gate and merely sat
+        # inside the deadband.
+        #
+        # That distinction is the whole fix, and the first version of it was
+        # wrong: leaking deadband bins too made the steady state sit at the
+        # deadband EDGE rather than at zero, because the trim unwound until the
+        # error grew back past 0.5 dB and then re-corrected -- a limit cycle.
+        # verify_response_trim.py TEST 2 caught it: a real -2.00 dB bias
+        # settled at -0.83 dB with 0.83 dB of residual error.
+        #
+        # The justification is simply what each mask means.  A bin inside the
+        # deadband has a TRUSTWORTHY measurement saying the correction is
+        # right, so it holds.  A bin that failed the gate has NO trustworthy
+        # measurement at all -- the solver did not reach its own target, so the
+        # residual cannot be attributed to the model -- and a correction held
+        # there is unjustified by construction.  Those are the bins that wound
+        # up in run 52, and those are the ones that bleed off.
+        in_band_full = np.broadcast_to(in_band[:, None], spec.shape)
+        if self._trim_gate_fail is None or self._trim_gate_fail.shape != spec.shape:
+            self._trim_gate_fail = np.zeros(spec.shape, dtype=np.int32)
+        self._trim_gate_fail[gate_ok] = 0
+        self._trim_gate_fail[(~gate_ok) & in_band_full] += 1
+        idle = ((self._trim_gate_fail >= _TRIM_LEAK_AFTER)
+                & in_band_full & (np.abs(trim_db) > 0.0))
+        n_leaked = int(idle.sum())
+        if n_leaked:
+            step_db[idle] = -(np.sign(trim_db[idle])
+                              * np.minimum(np.abs(trim_db[idle]), _TRIM_LEAK_DB))
+
         new_trim_db = np.clip(trim_db + step_db,
                               -self.response_trim_limit_db, self.response_trim_limit_db)
         applied_db = new_trim_db - trim_db
+        moved_mask = applied_db != 0.0
         self.y_trim = 10.0**(new_trim_db/10.0)
         self.n_trim_updates += 1
 
@@ -1100,7 +1187,9 @@ class optimal_diagonal_control:
         # SPEED above).  Mean over the channels that actually moved.
         n_bins_scaled = 0
         if self.output_cpsd is not None and self.output_cpsd.shape[0] == spec.shape[0]:
-            cnt = ok.sum(axis=1)
+            # Follow moved_mask, not ok -- leaked bins changed too, and the
+            # in-place rescale must stay consistent with the new target.
+            cnt = moved_mask.sum(axis=1)
             rows = np.where(cnt > 0)[0]
             if rows.size:
                 g_db = applied_db[rows].sum(axis=1)/cnt[rows]
@@ -1109,7 +1198,7 @@ class optimal_diagonal_control:
                 n_bins_scaled = int(rows.size)
 
         if self.n_trim_updates <= 5 or self.n_trim_updates % 20 == 0:
-            moved = applied_db[ok]
+            moved = applied_db[moved_mask]
             at_clamp = int(np.sum(np.abs(new_trim_db[in_band]) >=
                                   self.response_trim_limit_db - 1e-9))
             print(f"[optimal_diagonal_control] response-error trim #{self.n_trim_updates}: "
@@ -1117,8 +1206,10 @@ class optimal_diagonal_control:
                   f"{self.response_trim_gate_db:g} dB solver-agreement gate, "
                   f"{n_moving} outside the "
                   f"{self.response_trim_deadband_db:g} dB deadband; "
-                  f"applied median {np.median(moved):+.3f} dB "
-                  f"(max |{np.abs(moved).max():.3f}|), {n_bins_scaled} bins rescaled "
+                  f"{n_leaked} leaking back toward 0; "
+                  f"applied median {(np.median(moved) if moved.size else 0.0):+.3f} dB "
+                  f"(max |{(np.abs(moved).max() if moved.size else 0.0):.3f}|), "
+                  f"{n_bins_scaled} bins rescaled "
                   f"in place, {at_clamp} channel-bins at the "
                   f"+/-{self.response_trim_limit_db:g} dB clamp.", flush=True)
 

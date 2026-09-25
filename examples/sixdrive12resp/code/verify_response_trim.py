@@ -62,6 +62,10 @@ def load(path, name):
 
 live = load(os.path.join(ROOT, 'control_laws', 'optimal_diagonal_control_fast.py'), 'odcf_live')
 base = load(os.path.join(HEAD, 'optimal_diagonal_control_fast.py'), 'odcf_head')
+# The trim constants live in the BASE module; the _fast variant imports it by
+# explicit path (no package context), so read them from there rather than
+# hard-coding literals that then rot when the constants are retuned.
+odc = load(os.path.join(ROOT, 'control_laws', 'optimal_diagonal_control.py'), 'odc_live')
 
 def build(mod, params, sp=spec, hh=H, ch=coh, s_r=sr, n_r=nr):
     w = np.zeros(sp.shape[:2]); a = np.zeros(sp.shape[:2])
@@ -219,9 +223,9 @@ run_loop(law_l, Htrue, 8)
 n_before = law_l.n_trim_updates
 law_l.set_test_level_db(-12.0); law_l.set_test_level_db(0.0)
 print(f'  frozen calls armed                {law_l._trim_frozen_calls}')
-assert law_l._trim_frozen_calls == 3
+assert law_l._trim_frozen_calls == odc._TRIM_FREEZE_CALLS
 Y = np.einsum('fmn,fnk,flk->fml', Htrue, law_l.output_cpsd, Htrue.conj())
-for k in range(3):
+for k in range(odc._TRIM_FREEZE_CALLS):
     law_l.control(HS, CS, 101, 101, Y, law_l.output_cpsd)
 print(f'  trim updates during the freeze    {law_l.n_trim_updates - n_before}')
 assert law_l.n_trim_updates == n_before, 'trim updated on a level-ramp frame'
@@ -232,5 +236,57 @@ print('  PASS -- ramp frames are not fed to the integrator')
 
 print()
 print('=' * 74)
-print('ALL FOUR PASS')
+print('TEST 5 -- a SUSTAINED-gate-failure accumulation leaks away')
+print('=' * 74)
+# THE RUN 52 DEFECT.  Before the leak, step_db[~ok] = 0 meant a gated bin kept
+# whatever trim it carried, permanently -- the gate blocked harmful
+# accumulation and corrective UNWINDING equally.  Run 52 ended with the trim
+# spread across the full +/-3 dB clamp, median -1.51 dB, after 261 updates, on
+# a plant whose true model gap at that level was 0.012 dB, costing 30% more
+# drive for the same response as trim-off.
+#
+# Reuse TEST 3's provably unreachable construction -- two response channels
+# sharing a row of H with targets 10 dB apart -- but PRELOAD those bins with a
+# trim they should never have had.  The gate will reject them for ever, so
+# nothing but the leak can remove it.
+law_k = build_s(live, PT, S2, hm=H2)
+run_loop(law_k, H2true, 4, sp=S2, hm=H2)
+if law_k.y_trim is None:
+    law_k.y_trim = np.ones_like(law_k.y_diag_target)
+law_k.y_trim[np.ix_(hot_bins, [CH_A, CH_B])] = 10.0**(2.5/10.0)
+start_db = 10*np.log10(law_k.y_trim[np.ix_(hot_bins, [CH_A, CH_B])].max())
+print(f'  preloaded on unreachable bins     {start_db:+.3f} dB')
+N = odc._TRIM_LEAK_AFTER + 120
+run_loop(law_k, H2true, N, sp=S2, hm=H2)
+end_db = 10*np.log10(np.maximum(law_k.y_trim[np.ix_(hot_bins, [CH_A, CH_B])], 1e-30))
+print(f'  after {N} cycles                  max |trim| {np.abs(end_db).max():.4f} dB')
+print(f'  leak {odc._TRIM_LEAK_DB:g} dB/cycle after {odc._TRIM_LEAK_AFTER} consecutive gate failures')
+assert np.abs(end_db).max() < 0.5*start_db, (
+    'SPURIOUS TRIM DID NOT LEAK AWAY -- this is the run 52 windup defect')
+print('  PASS -- the accumulator is self-healing')
+
+print('TEST 6 -- a REAL model error still converges despite the leak')
+print('=' * 74)
+# The leak must be invisible to an error that re-drives itself.  Plant delivers
+# 3 dB more than the model says, every cycle; the trim must still pull the
+# response onto specification and hold there.
+BIAS3 = 3.0
+law_r = build_s(live, PT, S)
+H3true = HS*np.sqrt(10.0**(BIAS3/10.0))
+run_loop(law_r, H3true, 160)
+inb = law_r.y_diag_target.max(axis=1) > 0
+z = np.real(np.einsum('fmm->fm', np.einsum(
+    'fmn,fnk,flk->fml', H3true, law_r.output_cpsd, H3true.conj())))
+err = 10*np.log10(np.maximum(z[inb], 1e-30)/np.maximum(law_r.y_diag_target[inb], 1e-30))
+t_db = 10*np.log10(np.maximum(law_r.y_trim[inb], 1e-30))
+print(f'  plant runs hot by                 +{BIAS3:.3f} dB')
+print(f'  trim settled at                   median {np.median(t_db):+.3f} dB')
+print(f'  residual response error           median {np.median(err):+.3f} dB')
+assert np.median(t_db) < -1.0, 'the leak swamped a real model error'
+assert abs(np.median(err)) < 1.5, 'the trim failed to correct a real error'
+print('  PASS -- the leak does not swamp a persistent error')
+
+print()
+print('=' * 74)
+print('ALL SIX PASS')
 print('=' * 74)
