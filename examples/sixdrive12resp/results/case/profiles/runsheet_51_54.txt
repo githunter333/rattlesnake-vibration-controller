@@ -135,7 +135,49 @@ If it says CUBIC the profile is pointing at the wrong npz -- check Hardware B2.
 DO NOT pkill -9 a run whose stream you want.  Run 48's 83.6 MB was unrecoverable
 because the chunk index never flushed; runs 49 and 50 were shut down cleanly and
 both streams read fine.
+Run 51 — profile_42_optdiag_bsoft_trimoff.xlsx (baseline)
 
+run51_optdiag_bsoft_trimoff_sysid.nc4
+run51_optdiag_bsoft_trimoff_spec_m18.nc4
+run51_optdiag_bsoft_trimoff_spec.nc4
+run51_optdiag_bsoft_trimoff_spec_p04.nc4
+run51_optdiag_bsoft_trimoff_stream.nc4
+
+Run 52 — profile_43_optdiag_bsoft_trimon.xlsx (the test)
+
+run52_optdiag_bsoft_trimon_sysid.nc4
+run52_optdiag_bsoft_trimon_spec_m18.nc4
+run52_optdiag_bsoft_trimon_spec.nc4
+run52_optdiag_bsoft_trimon_spec_p04.nc4
+run52_optdiag_bsoft_trimon_stream.nc4
+
+Run 53 — profile_44_optdiagfast_bsoft_trimoff.xlsx (baseline)
+
+run53_optdiagfast_bsoft_trimoff_sysid.nc4
+run53_optdiagfast_bsoft_trimoff_spec_m18.nc4
+run53_optdiagfast_bsoft_trimoff_spec.nc4
+run53_optdiagfast_bsoft_trimoff_spec_p04.nc4
+run53_optdiagfast_bsoft_trimoff_stream.nc4
+
+Run 54 — profile_45_optdiagfast_bsoft_trimon.xlsx (the test)
+
+run54_optdiagfast_bsoft_trimon_sysid.nc4
+run54_optdiagfast_bsoft_trimon_spec_m18.nc4
+run54_optdiagfast_bsoft_trimon_spec.nc4
+run54_optdiagfast_bsoft_trimon_spec_p04.nc4
+run54_optdiagfast_bsoft_trimon_stream.nc4
+
+run55_optdiag_bsoft_trimon_fixed_sysid.nc4
+run55_optdiag_bsoft_trimon_fixed_spec_m18.nc4
+run55_optdiag_bsoft_trimon_fixed_spec.nc4
+run55_optdiag_bsoft_trimon_fixed_spec_p04.nc4
+run55_optdiag_bsoft_trimon_fixed_stream.nc4
+
+The 0 dB save is bare _spec.nc4 with no level suffix — that's the convention check_run.py and the scoring scripts expect.
+
+All into examples/sixdrive12resp/results/runs/, consoles to results/notes/run5N_console.log.
+
+Levels are −18, 0, +4. Skip −12 and −6; the coherence table says they carry no information for the trim question.
 --------------------------------------------------------------------------------
 PROFILE PROVENANCE
 --------------------------------------------------------------------------------
