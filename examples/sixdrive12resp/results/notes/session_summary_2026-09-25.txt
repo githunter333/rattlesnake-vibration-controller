@@ -1,0 +1,197 @@
+================================================================================
+SESSION SUMMARY -- 2026-09-25
+FIVE LIVE RUNS ON THE BOUNDED-SOFTENING PLANT
+================================================================================
+Runs 49, 50, 51, 52, 55.  Seven commits, af8c57fc through d90c3067.
+Detail lives in run49_results.txt, run50_results.txt and
+runs_51_52_55_results.txt; this is the overview and the cross-cutting findings.
+
+STARTING POSITION.  The bounded-softening plant was built the previous session
+after four nonlinear runs (42, 44, 46, 48) all died by ESCAPE on a softening
+cubic.  Nothing had yet been run on it.  By the end of today it has carried five
+runs, three control-law configurations and a drive to 30.6 V rms without a
+single overflow.
+
+--------------------------------------------------------------------------------
+WHAT WAS RUN
+--------------------------------------------------------------------------------
+  49  match_trace, refresh OFF     -18 -> +8 dB, 8 spectra, 213 MB stream
+  50  match_trace, refresh ON      -18 ->  0 dB, 4 spectra, 217 MB stream
+  51  optimal_diagonal, trim OFF   -18, 0, +4 dB,          221 MB stream
+  52  optimal_diagonal, trim ON    -18 dB only -- stopped, exposed the windup
+  55  optimal_diagonal, trim ON    -18 -> 0 dB, 5 spectra, leak fix applied
+
+--------------------------------------------------------------------------------
+THE FIVE RESULTS THAT MATTER
+--------------------------------------------------------------------------------
+1. THE PLANT MOVED, AND ONLY WHERE IT WAS BUILT TO.  Across a 12.7x span of
+   drive the six modes below 300 Hz went 0.0284 -> 0.0422 in per-line FRF shape
+   -- estimator noise -- while the 27 softened modes went 0.0376 -> 0.6979, and
+   the ratio climbed monotonically 1.32 -> 16.53.  Nothing but a plant softening
+   above 300 Hz and nowhere else separates them like that.
+
+   The decision to leave six modes linear was the best one in the build.  It
+   cost nothing -- they were already there -- and it replaced a second
+   experiment.  It paid again in run 50, where it separated the refresh gate's
+   two jobs (see 3).
+
+2. NO ESCAPE, AT ANY POINT.  Zero overflow across five runs, 30.6 V rms, +8 dB.
+   The four preceding runs all died below the level run 49 sailed through.  The
+   bounded kernel removed the failure mode rather than mitigating it.
+
+3. THE FRF REFRESH TRACKS THE PLANT AND NEVER CONVERGES.  Run 50 beat run 49 on
+   the coherent column at every level (0.51 / 0.54 / 0.61 / 0.63 dB), reaching
+   7.47 dB at 0 dB -- better than run 49's near-linear -18 dB reference of 7.91.
+   The linear control group splits the gate's two functions cleanly: below
+   300 Hz, where nothing moves, refresh buys 0.62 dB (estimate refinement);
+   above 300 Hz it buys 1.5-2.6 dB (plant tracking).
+
+   But the loop does not settle.  211 cycles at prev_med 0.020-0.031 against run
+   49's 0.007, c1_med RISING +0.060 per 100 cycles, refreshed lines parked at a
+   median of 300.  Three coupled time constants with nothing damping between
+   them.
+
+   And the gate responds to RATE, not amount: a level change ramped over 2 s and
+   smoothed by 0.04 averaging arrives as ~25 increments fifty times under the
+   0.05 threshold, so -18 -> -12 and -12 -> -6 produced no refresh spike at all
+   where 321 and 447 lines had been predicted.  A slowly drifting real structure
+   would slip under this gate no matter how far it eventually drifted.  Worth an
+   accumulated-change criterion before this sees hardware.
+
+4. OPTIMAL DIAGONAL BEATS MATCH_TRACE, AND LOSES LEVEL CONTROL.  At 0 dB,
+   coherent: 5.58 dB rms and 15.2% out on 9.33 V, against match_trace-with-
+   refresh at 7.47 / 20.3 on 14.93 V.  1.89 dB better on 38% less drive, holding
+   coherence 0.953 where match_trace falls to 0.697.  Less drive, less
+   distortion, cleaner FRF, better control -- the whole chain follows from
+   asking less of the plant.
+
+   Its level error runs +0.31 / +1.98 / +8.00 dB at -18 / 0 / +4.  At +4 the
+   response is EIGHT dB over specification and the law is blind to it.  That
+   point is a level runaway, not a control point.
+
+5. THE THIRD HARMONIC IS THE NONLINEARITY INDICATOR ON THIS RIG.  1250-1450 Hz
+   is 3x the most-softened mode cluster (412.7-478.7 Hz).  Run 55 measured
+   -53.47 / -51.88 / -42.88 / -36.36 / -29.46 dB at -18 / -12 / -6 / -3 / 0 dB
+   -- 24 dB of range, ~2.2 dB per dB, the cubic scaling of an odd nonlinearity.
+   Over the same sweep the in-band error in that SAME mode cluster sat flat at
+   4.88-4.90 dB.
+
+   The nonlinearity appears out of band long before it appears in band.  The
+   in-band error is set by the rank-5 geometry of an 8-channel 6-drive problem,
+   not by the plant moving.  The harmonic needs no reference run and is free to
+   measure from any saved spectrum.
+
+--------------------------------------------------------------------------------
+THE RESPONSE-ERROR TRIM: FIRST LIVE TEST, AND A NEGATIVE RESULT
+--------------------------------------------------------------------------------
+The trim was built in a previous session and had never run live; runs 36-38 were
+allocated and never taken.  Today it ran twice.
+
+RUN 52 FAILED THE PRE-REGISTERED NULL CHECK.  At -18 dB, true model gap 0.012 dB
+against a 0.5 dB deadband, it ended pinned across the +/-3 dB clamp, median
+-1.51 dB, after 261 updates -- costing 30% more drive (11.47 V vs 8.84) for the
+same response.  Integrator windup behind a conditional gate: the solver-agreement
+gate is evaluated before the error term, and gated bins kept their correction
+permanently, so the gate blocked harmful accumulation and corrective unwinding
+equally.
+
+FOUR FIXES, THREE WRONG, ALL CAUGHT BY TESTS RATHER THAN BY REASONING:
+  1. leak every idle bin        -> steady state sat at the deadband EDGE
+  2. leak on any gate failure   -> bled away corrections merely waiting to be
+                                   re-solved (20 bins/cycle against 901)
+  3. leak after 50 CONSECUTIVE  -> COMMITTED (d068c0ce); partial cure
+  4. pay down instead of reset  -> swamped a real error; REVERTED
+
+The premise of all four was that gate-failure FREQUENCY identifies spurious
+corrections.  It cannot: a bin waiting its turn fails ~98% of the time and a bin
+the solver genuinely cannot reach also fails ~98%.  The discriminator is whether
+a bin passes the gate ON THE CYCLES IT IS RE-SOLVED, which needs _refine_batch
+to tell _update_response_trim which bins it touched.
+
+RUN 55 SHOWED THE FIX IS PARTIAL AND THE TRIM IS THE WRONG TOOL ANYWAY.
+Partial: clamped bins 1700 -> ~980, median -1.51 -> +0.00, 28% of the excess
+drive recovered, and the residual is level-INDEPENDENT (10.72 / 10.76 / 10.90 /
+11.24 V at -18 / -12 / -6 / -3) so it is leftover convergence artifact.
+
+Wrong tool: at 0 dB, the one level where the trim has real work, it is WORSE ON
+EVERY MEASURE -- 0.10 dB worse coherent, 1.7 points more lines out, 0.73 dB
+further off level, 25% more drive, coherence 0.953 -> 0.896.  Per channel it
+improved the two CONCEDED channels and degraded the six good ones.  It pulls
+drive toward channels the SDP deliberately gave up on, because it reads a
+RANK-DEFICIENCY TRADE-OFF as MODEL ERROR.
+
+That is a design mismatch, not a tuning problem.  The re-solve-keyed counter is
+now LOW priority: a perfect trim would still buy back conceded channels.
+
+--------------------------------------------------------------------------------
+METHOD NOTES THAT EARNED THEIR KEEP
+--------------------------------------------------------------------------------
+SCORE ON THE COHERENT COLUMN.  Run 49's apparent control improvement with level
+(rms 7.89 -> 4.96) was an ARTIFACT: weight the response auto-spectra by
+coherence and it is flat to slightly worse, 7.9 -> 8.3.  The extra "signal" was
+distortion, which the scoring metric cannot distinguish from driven response --
+and neither can the law.  Every claim in today's write-ups is made on the
+coherent column.  Raw rms flattered run 50 by 1.55 dB and run 55 by 0.31 dB.
+
+RMS ALONE CANNOT SEE A LEVEL RUNAWAY.  Run 51 at +4 dB scored 5.53 dB coherent
+-- better than its own 0 dB point -- while sitting 8 dB over specification,
+because rms-about-zero partly cancels on a uniformly hot response.  Read
+level_err alongside rms, always.
+
+COHERENCE IS THE HEALTH INDICATOR.  0.996 below -6 dB (indistinguishable from
+the linear plant), 0.938 at 0, 0.684 at +4, 0.200 at +8.  It is what decided to
+stop run 50 at 0 dB and it sized the trim's expected work before run 51 ran.
+
+SELF_PREDICTED IS NOT COMPARABLE ACROSS TRIM ON/OFF.  It measures the solver's
+distance from ITS OWN target, and the trim moves that target.  I twice read a
+gap in it as a real difference and was twice wrong -- run 52 showed a 1.26 dB
+gap and the saved spectra were identical.  Only the saved spectrum settles a
+trim comparison.
+
+--------------------------------------------------------------------------------
+PREDICTION RECORD
+--------------------------------------------------------------------------------
+HELD: 0 dB shift from the -6 dB drive (0.699%/0.986% predicted, 0.745%/1.164%
+measured); third harmonic at 0 dB (-29.9 predicted, -29.46 measured); drive at
+0 dB on run 55 (~11.5 predicted, 11.69 measured); the no-escape property at
+every level and strength.
+
+FAILED: the jump, predicted four times at +4.5, +5.0, +6.0 and +8.0 dB and never
+observed -- the mechanism missed was that refresh-off freezes the FRF, not the
+drive, and match_trace's per-cycle re-solve backs the drive off where the
+response grew, suppressing the bifurcation.  The refresh spike at low level
+changes (321 and 447 lines predicted, 24 observed) -- the gate sees rate, not
+amount.  Run 55's coherence and level at 0 dB.  The hypothesis that the trim
+would hold %out near 10% where run 51 degraded.
+
+The pattern is consistent: single-step extrapolations from measured data held;
+multi-step extrapolations through a mechanism absent from the model did not.
+
+--------------------------------------------------------------------------------
+CODE CHANGED TODAY
+--------------------------------------------------------------------------------
+control_laws/optimal_diagonal_control.py
+    _TRIM_FREEZE_CALLS 3 -> 25 (a ramp is many level changes, not one)
+    _TRIM_LEAK_DB = 0.05, _TRIM_LEAK_AFTER = 50, gated bins now decay
+examples/sixdrive12resp/code/verify_response_trim.py
+    tests 5 and 6 added -- a preloaded correction on unreachable bins must leak
+    to zero; a persistent 3 dB error must still converge despite the leak.
+    Test 5 fails on the pre-fix code, which is the point.  ALL SIX PASS.
+examples/sixdrive12resp/results/case/profiles/
+    profiles 40-45, runsheets 49_50 and 51_54
+
+WARNING FOR NEXT SESSION: _TRIM_LEAK_AFTER = 50 is tuned against the SLOW law's
+20-bins-per-cycle refinement rate (901/20 = 45 cycles for a full sweep).
+optimal_diagonal_control_fast solves at a different rate and the constant is
+probably wrong for it.  Check before trusting a trim-on run on profile 45.
+
+--------------------------------------------------------------------------------
+NEXT
+--------------------------------------------------------------------------------
+1. optimal_diagonal_control_fast, profiles 44/45, subject to the warning above.
+2. The level runaway is the real defect in the optimal laws and the trim is not
+   the fix.  A level-only outer loop reading total power would be.
+3. An accumulated-change criterion for the refresh gate (finding 3).
+4. Long-standing: octave_band_switching_control has never been run; run 49's
+   +4 dB down-sweep is unresolved as a hysteresis question; both the match_trace
+   and the optimal_diagonal pairs are one run each and unrepeated.
