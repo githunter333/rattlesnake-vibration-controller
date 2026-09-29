@@ -1,0 +1,86 @@
+{
+ "level_db": 0.0,
+ "modes": [
+  {
+   "mode_hz": 300.86032422397363,
+   "sigma_q_sim": 5.334861963137105e-07,
+   "shift_pred_at_meas_sigma": 2.43122692886214,
+   "shift_meas": 1.8103992429839622,
+   "zeta_true_over_zeta0": 1.317537977309697,
+   "zeta_apparent_over_zeta0": 2.106438190474615,
+   "apparent_over_true": 1.5987684808720177
+  },
+  {
+   "mode_hz": 412.6597720701147,
+   "sigma_q_sim": 2.6265567838450774e-07,
+   "shift_pred_at_meas_sigma": 1.536798087773139,
+   "shift_meas": 1.421593294751966,
+   "zeta_true_over_zeta0": 1.2461154704226274,
+   "zeta_apparent_over_zeta0": 1.662699138201942,
+   "apparent_over_true": 1.3343058309339726
+  },
+  {
+   "mode_hz": 450.99714281898747,
+   "sigma_q_sim": 3.5777514380368564e-07,
+   "shift_pred_at_meas_sigma": 1.297604832005106,
+   "shift_meas": 1.2362803070145367,
+   "zeta_true_over_zeta0": 1.2232056028358553,
+   "zeta_apparent_over_zeta0": 1.440455640831593,
+   "apparent_over_true": 1.177607131206781
+  },
+  {
+   "mode_hz": 478.65518691774264,
+   "sigma_q_sim": 8.266091023668711e-07,
+   "shift_pred_at_meas_sigma": 2.8263910693178684,
+   "shift_meas": 2.346861102164599,
+   "zeta_true_over_zeta0": 1.3448327466801373,
+   "zeta_apparent_over_zeta0": 2.2560990347680847,
+   "apparent_over_true": 1.6776056653420324
+  },
+  {
+   "mode_hz": 620.2928958459632,
+   "sigma_q_sim": 5.303807500138924e-07,
+   "shift_pred_at_meas_sigma": 0.8712829911856068,
+   "shift_meas": 0.8378997802170995,
+   "zeta_true_over_zeta0": 1.180628348260551,
+   "zeta_apparent_over_zeta0": 1.2728805122047238,
+   "apparent_over_true": 1.0781381914809094
+  },
+  {
+   "mode_hz": 718.2527415071395,
+   "sigma_q_sim": 1.6740769478712044e-07,
+   "shift_pred_at_meas_sigma": 0.4158123161854932,
+   "shift_meas": 0.3090834609462356,
+   "zeta_true_over_zeta0": 1.1226757943453238,
+   "zeta_apparent_over_zeta0": 1.1359102683079052,
+   "apparent_over_true": 1.011788331082972
+  },
+  {
+   "mode_hz": 778.8212895120752,
+   "sigma_q_sim": 6.661141594088425e-08,
+   "shift_pred_at_meas_sigma": 0.6442795355271924,
+   "shift_meas": 0.5106554812218889,
+   "zeta_true_over_zeta0": 1.154240247007249,
+   "zeta_apparent_over_zeta0": 1.1888598711943397,
+   "apparent_over_true": 1.0299934301172164
+  },
+  {
+   "mode_hz": 821.751113614772,
+   "sigma_q_sim": 1.7061035415265617e-07,
+   "shift_pred_at_meas_sigma": 1.9629704193685704,
+   "shift_meas": 1.327108958859402,
+   "zeta_true_over_zeta0": 1.2800351211298826,
+   "zeta_apparent_over_zeta0": 1.5615441042872364,
+   "apparent_over_true": 1.2199228587641149
+  },
+  {
+   "mode_hz": 899.4741775859967,
+   "sigma_q_sim": 6.922512599883462e-08,
+   "shift_pred_at_meas_sigma": 0.2954422413118829,
+   "shift_meas": 0.2641966077664093,
+   "zeta_true_over_zeta0": 1.1028508588895614,
+   "zeta_apparent_over_zeta0": 1.1075846142394132,
+   "apparent_over_true": 1.0042922896706252
+  }
+ ]
+}
