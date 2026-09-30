@@ -23,7 +23,8 @@ TWO THINGS TO KNOW WHEN READING THESE.
    softening -- the whole frequency shift and damping rise -- counts as
    coherent.  Only the residual appears in the gap.  The saved estimate also
    carries a positive bias of about (p/n_d)(1-gamma^2) with p = 6 drives and
-   n_d = 20 frames per CPSD, so the coherent trace is an UPPER bound; the
+   an effective n_d of 19.31 (20 frames, 50% overlap, measured by
+   verify_coherence_bias.py), so the coherent trace is an UPPER bound; the
    bias-corrected 0 dB curve is drawn dashed.
 
 Outputs PNG at 300 dpi for documents and PDF for vector use.
@@ -43,6 +44,10 @@ os.makedirs(OUT, exist_ok=True)
 CH = 0
 GROUP = 'Frame 6x12 Random'
 N_DRIVE, N_AVG = 6, 20
+# frames_in_cpsd is 20 but the frames overlap 50% with a Hann window, so
+# they are not 20 independent observations.  verify_coherence_bias.py
+# measures the effective count through the real Welch chain: 19.31.
+N_AVG_EFF = 19.31
 BAND = (100.0, 1000.0)
 HARM = (1250.0, 1450.0)
 FMAX = 1600.0
@@ -96,7 +101,7 @@ def style(ax):
 data = [read(fn) + (lab,) for fn, lab in CASES]
 f, inb = data[0][0], data[0][3]
 m = f <= FMAX
-adj = N_AVG / (N_AVG - N_DRIVE)
+adj = N_AVG_EFF / (N_AVG_EFF - N_DRIVE)
 YLIM = (1e-9, 3e-1)
 
 fig, (a1, a2) = plt.subplots(2, 1, figsize=(7.2, 6.6), sharex=True, sharey=True,
