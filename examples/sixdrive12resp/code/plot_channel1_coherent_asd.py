@@ -163,3 +163,123 @@ for fk, Syy, coh, ib, lab in data:
     print('  %-22s 3f band: ASD sum %.3e, median g^2 %.4f'
           % (lab, np.sum(Syy[h]), np.median(coh[h])))
 print('wrote fig10_ch1_asd_and_coherent.png / .pdf')
+
+
+# =========================================================================
+# ZOOM: 200-400 Hz, the boundary between the linear and softened modes
+# =========================================================================
+# Four modes in this window are exactly linear (214.37, 246.94, 249.18,
+# 286.25 Hz) and three are softened (300.86, 306.47, 335.24 Hz).  At 0 dB the
+# softened three come down 0.97-0.99% while the linear four do not move at
+# all, so the gap between the top linear mode and the first softened mode
+# closes from 14.61 to 11.70 Hz, a 20% narrowing.  The control failure sits in
+# that gap rather than on either peak, and it is only half coherent.
+ZOOM = (200.0, 400.0)
+ZYLIM = (5e-4, 3.5e-1)
+LIN_MODES = np.array([214.37, 246.94, 249.18, 286.25])
+SOFT_MODES = np.array([300.86, 306.47, 335.24])
+SOFT_AT_0 = np.array([297.95, 303.47, 331.91])
+
+
+def style_zoom(ax):
+    ax.set_yscale('log')
+    ax.yaxis.set_major_locator(LogLocator(base=10.0))
+    ax.yaxis.set_minor_locator(LogLocator(base=10.0, subs=np.arange(2, 10) * 0.1,
+                                          numticks=100))
+    ax.yaxis.set_minor_formatter(NullFormatter())
+    ax.xaxis.set_major_locator(MultipleLocator(25))
+    ax.xaxis.set_minor_locator(MultipleLocator(5))
+    ax.grid(True, which='major', color=GRID_MAJ, lw=0.6, ls='-')
+    ax.grid(True, which='minor', color=GRID_MIN, lw=0.45, ls='-')
+    ax.tick_params(which='minor', length=2.2, color='#b9b8b4')
+    ax.tick_params(which='major', length=4.0, color='#9a9994')
+    for x in LIN_MODES:
+        ax.axvline(x, color='#a3a29d', lw=1.0, zorder=2)
+    for x in SOFT_MODES:
+        ax.axvline(x, color=RAMP[0], lw=1.1, ls=(0, (5, 3)), zorder=2)
+    for x in SOFT_AT_0:
+        ax.axvline(x, color=RAMP[1], lw=1.1, ls=(0, (5, 3)), zorder=2)
+
+
+ds = netCDF4.Dataset(os.path.join(RUNS, CASES[0][0]))
+SPEC = np.array(ds[GROUP]['specification_cpsd_matrix_real'][:])[:, CH, CH]
+ds.close()
+zm = (f >= ZOOM[0]) & (f <= ZOOM[1])
+
+figz, (z1, z2) = plt.subplots(2, 1, figsize=(7.2, 7.0), sharex=True, sharey=True,
+                              gridspec_kw={'hspace': 0.17})
+for ax in (z1, z2):
+    style_zoom(ax)
+z1.set_ylim(*ZYLIM)
+z2.set_xlim(*ZOOM)
+
+z1.plot(f[zm], SPEC[zm], lw=1.5, color='#7a7975', ls=(0, (1, 2)),
+        label='specification', zorder=3)
+for (fk, Syy, coh, _, lab), c in zip(data, RAMP):
+    z1.plot(fk[zm], Syy[zm], lw=1.5, color=c, label=lab, zorder=4)
+    z2.plot(fk[zm], (coh * Syy)[zm], lw=1.5, color=c, label=lab, zorder=4)
+g2az = 1.0 - (1.0 - data[-1][2]) * adj
+g2az = np.where(g2az > 0.0, g2az, np.nan)
+z2.plot(f[zm], (g2az * data[-1][1])[zm], lw=0.9, color='#d98a63', ls=(0, (3, 2)),
+        alpha=0.85, label='0 dB, bias-corrected', zorder=3)
+
+z1.annotate('', xy=(SOFT_AT_0[0], 1.7e-1), xytext=(SOFT_MODES[0], 1.7e-1),
+            arrowprops=dict(arrowstyle='-|>', color=RAMP[1], lw=1.4,
+                            shrinkA=0, shrinkB=0))
+z1.text(299.4, 2.6e-1, '300.86 \u2192 297.95 Hz  (\u22120.97%)', fontsize=8,
+        color=RAMP[1], ha='center', va='center',
+        bbox=dict(boxstyle='round,pad=0.22', fc='white', ec='none'))
+z1.text(286.25 - 2.5, 1.7e-1, 'fixed', fontsize=8, color='#6e6d69',
+        ha='right', va='center',
+        bbox=dict(boxstyle='round,pad=0.18', fc='white', ec='none'))
+z1.annotate('+15.0 dB over spec at 294 Hz \u2014\nthe miss is in the GAP between the\n'
+            'fixed mode at 286.2 Hz and the\nsoftened one, not on either peak',
+            xy=(292, 3.6e-2), xytext=(202, 1.5e-1), fontsize=8.5, color=INK2,
+            va='top',
+            arrowprops=dict(arrowstyle='->', color=INK2, lw=1.0,
+                            connectionstyle='arc3,rad=0.18'))
+z1.set_ylabel('response ASD\n(G$^2$/Hz, re full level)')
+z1.set_title('(a)  Measured response, 200\u2013400 Hz \u2014 control channel 1, run 51, '
+             'optimal_diagonal', loc='left', pad=7, color=INK)
+z1.legend(loc='center right', ncol=1, bbox_to_anchor=(1.0, 0.72))
+
+z2.annotate('288\u2013300 Hz at 0 dB: +14.07 dB over spec,\n'
+            'of which +9.84 dB coherent, or +4.86 dB\n'
+            'after the bias correction.  Median $\\gamma^2$ is\n'
+            '0.40 here, against 0.997 at \u221218 dB.',
+            xy=(293, 1.5e-2), xytext=(202, 2.9e-1), fontsize=8.5, color=INK2,
+            va='top',
+            arrowprops=dict(arrowstyle='->', color=INK2, lw=1.0,
+                            connectionstyle='arc3,rad=0.18'))
+z2.set_ylabel('$\\gamma^2 \\times$ response ASD\n(G$^2$/Hz, re full level)')
+z2.set_xlabel('frequency (Hz)')
+z2.set_title('(b)  Coherent part \u2014 the excursion is part control miss and '
+             'part distortion', loc='left', pad=7, color=INK)
+z2.legend(loc='center right', ncol=1, bbox_to_anchor=(1.0, 0.80))
+
+figz.text(0.012, 0.012,
+          'Vertical rules: solid grey, the four modes that stay linear.  '
+          'Dashed, the three softened modes — light at −18 dB, dark at their '
+          '0 dB positions.',
+          fontsize=8, color=INK2, ha='left')
+figz.align_ylabels([z1, z2])
+for ext in ('png', 'pdf'):
+    figz.savefig(os.path.join(OUT, f'fig11_ch1_zoom_200_400.{ext}'), dpi=300,
+                 bbox_inches='tight')
+plt.close(figz)
+
+print()
+print('200-400 Hz window, channel 1')
+for lo, hi, lab in ((288.0, 300.0, '288-300 Hz (the gap)'), ZOOM + ('200-400 Hz',)):
+    w = (f >= lo) & (f <= hi)
+    for (fk, Syy, coh, _, L), tag in zip(data, ('-18 dB', '  0 dB')):
+        ca = np.clip(1.0 - (1.0 - coh) * adj, 0.0, 1.0)
+        print('  %-22s %s: total %+6.2f dB, coherent %+6.2f dB '
+              '(corrected %+6.2f), median gamma^2 %.4f'
+              % (lab, tag, 10 * np.log10(Syy[w].sum() / SPEC[w].sum()),
+                 10 * np.log10((coh * Syy)[w].sum() / SPEC[w].sum()),
+                 10 * np.log10((ca * Syy)[w].sum() / SPEC[w].sum()),
+                 np.median(coh[w])))
+print('  gap top-linear to first-softened: %.2f Hz at -18 dB, %.2f Hz at 0 dB'
+      % (SOFT_MODES[0] - LIN_MODES[-1], SOFT_AT_0[0] - LIN_MODES[-1]))
+print('wrote fig11_ch1_zoom_200_400.png / .pdf')
