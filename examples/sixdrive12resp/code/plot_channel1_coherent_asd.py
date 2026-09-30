@@ -49,7 +49,9 @@ FMAX = 1600.0
 CASES = [('run51_optdiag_bsoft_trimoff_spec_m18.nc4', '−18 dB  — near linear'),
          ('run51_optdiag_bsoft_trimoff_spec.nc4',      '0 dB  — full level')]
 
-RAMP = ['#8cbbe8', '#10365c']            # ordered variable -> one hue, light to dark
+RAMP = ['#5aa5e4', '#1a5fa0']            # ordered variable -> one hue, light to dark
+ORANGE = '#cc5a28'                       # the bias-corrected trace
+# validated: node dataviz/scripts/validate_palette.js '#5aa5e4,#1a5fa0,#cc5a28'
 INK, INK2, INK3 = '#0b0b0b', '#52514e', '#8a8984'
 GRID_MAJ, GRID_MIN = '#cfcecа'.replace('а', 'a'), '#e8e7e3'
 plt.rcParams.update({
@@ -105,11 +107,11 @@ a1.set_ylim(*YLIM)
 a2.set_xlim(0, FMAX)
 
 for (fk, Syy, coh, _, lab), c in zip(data, RAMP):
-    a1.plot(fk[m], Syy[m], lw=1.0, color=c, label=lab, zorder=4)
-    a2.plot(fk[m], (coh * Syy)[m], lw=1.0, color=c, label=lab, zorder=4)
+    a1.plot(fk[m], Syy[m], lw=1.1, color=c, label=lab, zorder=4)
+    a2.plot(fk[m], (coh * Syy)[m], lw=1.1, color=c, label=lab, zorder=4)
 g2a = 1.0 - (1.0 - data[-1][2]) * adj
 g2a = np.where(g2a > 0.0, g2a, np.nan)
-a2.plot(f[m], (g2a * data[-1][1])[m], lw=0.7, color='#d98a63', ls=(0, (3, 2)),
+a2.plot(f[m], (g2a * data[-1][1])[m], lw=0.7, color=ORANGE, ls=(0, (3, 2)),
         label='0 dB, bias-corrected', zorder=3)
 
 for ax, band_y in ((a1, 1.1e-1), (a2, 1.1e-1)):
@@ -220,8 +222,8 @@ for (fk, Syy, coh, _, lab), c in zip(data, RAMP):
     z2.plot(fk[zm], (coh * Syy)[zm], lw=1.5, color=c, label=lab, zorder=4)
 g2az = 1.0 - (1.0 - data[-1][2]) * adj
 g2az = np.where(g2az > 0.0, g2az, np.nan)
-z2.plot(f[zm], (g2az * data[-1][1])[zm], lw=0.9, color='#d98a63', ls=(0, (3, 2)),
-        alpha=0.85, label='0 dB, bias-corrected', zorder=3)
+z2.plot(f[zm], (g2az * data[-1][1])[zm], lw=0.9, color=ORANGE, ls=(0, (3, 2)),
+        alpha=0.95, label='0 dB, bias-corrected', zorder=3)
 
 z1.annotate('', xy=(SOFT_AT_0[0], 1.7e-1), xytext=(SOFT_MODES[0], 1.7e-1),
             arrowprops=dict(arrowstyle='-|>', color=RAMP[1], lw=1.4,
