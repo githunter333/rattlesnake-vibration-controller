@@ -285,3 +285,75 @@ for lo, hi, lab in ((288.0, 300.0, '288-300 Hz (the gap)'), ZOOM + ('200-400 Hz'
 print('  gap top-linear to first-softened: %.2f Hz at -18 dB, %.2f Hz at 0 dB'
       % (SOFT_MODES[0] - LIN_MODES[-1], SOFT_AT_0[0] - LIN_MODES[-1]))
 print('wrote fig11_ch1_zoom_200_400.png / .pdf')
+
+
+# =========================================================================
+# OVERLAY at 0 dB: total, coherent, and bias-corrected coherent
+# =========================================================================
+# The three are nested: total >= coherent >= bias-corrected.  The first gap is
+# the response the six drives do not explain linearly; the second is the part
+# of the "coherent" power that is really six complex coefficients fitted from
+# twenty averages, which a response unrelated to the drives would also show.
+f0, S0, c0, ib0, lab0 = data[-1]
+c0a_plot = 1.0 - (1.0 - c0) * adj
+c0a_plot = np.where(c0a_plot > 0.0, c0a_plot, np.nan)
+c0a_int = np.clip(1.0 - (1.0 - c0) * adj, 0.0, 1.0)
+
+rms_spec = np.sqrt(SPEC[ib0].sum())
+rms_tot = np.sqrt(S0[ib0].sum())
+rms_coh = np.sqrt((c0 * S0)[ib0].sum())
+rms_cor = np.sqrt((c0a_int * S0)[ib0].sum())
+
+figo, ax = plt.subplots(figsize=(7.2, 4.8))
+style(ax)
+ax.set_ylim(1e-9, 3e-1)
+ax.set_xlim(0, FMAX)
+
+ax.plot(f0[m], SPEC[m], lw=1.1, color='#7a7975', ls=(0, (1, 2)),
+        label='specification', zorder=3)
+ax.plot(f0[m], S0[m], lw=1.3, color=RAMP[1], label='total response', zorder=6)
+ax.plot(f0[m], (c0 * S0)[m], lw=1.3, color=RAMP[0],
+        label='coherent  ($\\gamma^2 \\times$ total)', zorder=5)
+ax.plot(f0[m], (c0a_plot * S0)[m], lw=1.1, color=ORANGE, ls=(0, (3, 2)),
+        label='coherent, bias-corrected', zorder=4)
+
+ax.text(BAND[0] + 18, 1.1e-1, 'control band  100\u20131000 Hz',
+        fontsize=8, color=INK2, ha='left', va='center')
+ax.text(np.mean(HARM), 1.1e-1, '3f', fontsize=8, color=INK2,
+        ha='center', va='center')
+ax.text(1035, 6.0e-5,
+        'out of band the coherent part is\ntwo decades below the total \u2014\n'
+        'none of it comes from the drives',
+        fontsize=8, color=INK2, ha='left', va='top')
+
+stats = ('in-band rms, 100\u20131000 Hz\n'
+         'specification    %.4f G\n'
+         'total            %.4f G   %+5.2f dB\n'
+         'coherent         %.4f G   %+5.2f dB\n'
+         'bias-corrected   %.4f G   %+5.2f dB'
+         % (rms_spec, rms_tot, 20*np.log10(rms_tot/rms_spec),
+            rms_coh, 20*np.log10(rms_coh/rms_spec),
+            rms_cor, 20*np.log10(rms_cor/rms_spec)))
+ax.text(150, 2.6e-6, stats, fontsize=8, color=INK, ha='left', va='top',
+        family='DejaVu Sans Mono',
+        bbox=dict(boxstyle='round,pad=0.5', fc='white', ec='#cfcecа'.replace('а', 'a'),
+                  lw=0.8))
+
+ax.set_ylabel('ASD  (G$^2$/Hz, referenced to full level)')
+ax.set_xlabel('frequency (Hz)')
+ax.set_title('Control channel 1 at 0 dB \u2014 how much of the response the six '
+             'drives explain linearly\nrun 51, optimal_diagonal, trim off',
+             loc='left', pad=8, color=INK)
+ax.legend(loc='lower left', ncol=1, bbox_to_anchor=(0.005, 0.015))
+
+for ext in ('png', 'pdf'):
+    figo.savefig(os.path.join(OUT, f'fig12_ch1_0dB_overlay.{ext}'), dpi=300,
+                 bbox_inches='tight')
+plt.close(figo)
+
+print()
+print('channel 1 at 0 dB, in-band 100-1000 Hz   (specification %.4f G)' % rms_spec)
+for nm, v in (('total', rms_tot), ('coherent', rms_coh),
+              ('coherent, bias-corrected', rms_cor)):
+    print('  %-26s %.4f G   %+6.2f dB re spec' % (nm, v, 20 * np.log10(v / rms_spec)))
+print('wrote fig12_ch1_0dB_overlay.png / .pdf')
