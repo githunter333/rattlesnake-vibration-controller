@@ -26,6 +26,13 @@ dist/**
 **/*.mat
 **/*.npz
 **/*.nc4
+
+# ...but the identified plant models are the article under test and are
+# small enough to version.  Negations work here because only file
+# patterns are excluded above, not the directories themselves.
+!examples/sixdrive12resp/results/case/sdynpy_frame6x12_system.npz
+!examples/sixdrive12resp/results/case/sdynpy_frame6x12_system_nonlinear_allmodes.npz
+!examples/sixdrive12resp/results/case/sdynpy_frame6x12_system_nonlinear_boundedsoften.npz
 **/.DS_Store
 temp/**
 exlanatoins/**
