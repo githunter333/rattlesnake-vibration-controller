@@ -1,0 +1,262 @@
+==================================================================================================
+CONTROL LAW MODIFICATIONS AND THEIR FINAL STATE
+Rattlesnake sixdrive12resp branch control-law-development-2026-09, as of 2026-10-01
+==================================================================================================
+Every "final state" below was read from the source on the date above, not from the write-ups.
+Where a modification is opt-in, the DEFAULT is the state a profile gets if it does not name the
+field, and the defaults were deliberately chosen to reproduce the twelve-run reference set
+exactly.  One modification is on by default; everything else must be asked for.
+
+KEY
+  ON      enabled by default
+  OPT-IN  implemented and tested, default off, a profile field turns it on
+  N/A     the law has no such mechanism
+
+==================================================================================================
+A.  CHANGES THAT TOUCHED EVERY LAW WITH THE MECHANISM
+==================================================================================================
+
+A1. STARTUP LEVEL CAP -- two separate bugs, both fixed
+    What was wrong   The clamp on the first control command compared tr(specification), a
+                     response quantity, against tr(output), a drive CPSD in V^2.  The ratio is
+                     dimensionless in V^2/(response/volt)^2, so its value tracked plant gain
+                     rather than the overshoot it was meant to bound.  On run 01 the raw solve
+                     sat 2.04 dB over specification; the clamp took it to a median 18.88 dB
+                     under, where the documented intent was 9.00 dB under.  Roughly 10 dB too
+                     aggressive, and unit-dependent.
+                     Separately, the drive-coherence cap ran AFTER the clamp and lifted the
+                     level straight back through the ceiling, because that cap shrinks
+                     off-diagonal drive terms while preserving the diagonal.
+    What it does now  Clamps on the predicted response, tr(H X H^H).  The coherence cap runs
+                     before the clamp, not after.
+    Final state      ON, at -9.0 dB, on every law that has a startup clamp.  This is the only
+                     behaviour change left enabled by default, because it is wanted.
+    Laws affected    match_trace_pseudoinverse, optimal_diagonal, optimal_diagonal_fast,
+                     diagonal_congruence, buzz.  pseudoinverse_control had no clamp at all and
+                     one was added.
+
+A2. DRIVE-COHERENCE CAP -- not modified, but its cost was measured per law
+    What it is       A 0.95 ceiling on the coherence between commanded drives, so the solution
+                     does not ask for near-identical drives that no shaker set can realise.
+    Measured cost    optimal_diagonal   +0.02 dB   in-solve, an SDP constraint
+                     diagonal_congruence -0.08 dB  post-process, law re-converges around it
+                     match_trace        -1.01 dB   post-process, one scalar per line left
+                     buzz               -1.99 dB   post-process, no correction mechanism
+                     pseudoinverse      -3.47 dB   post-process, no correction mechanism
+    Final state      Unchanged.  Default 1.0, i.e. OFF, in every law.  Profiles ask for 0.95.
+    Note             The spread is set by WHERE the cap is applied and how much correction
+                     authority the law has afterwards.  An earlier explanation by loop family
+                     was withdrawn; it did not fit the measurements.
+
+A3. "UPDATE TRANSFER FUNCTION DURING CONTROL" MADE REAL
+    What was wrong   Rattlesnake passes a transfer_function to control() every cycle whether
+                     the setting is on or off.  The setting only chooses which array is passed,
+                     live or frozen, and system_id_update() is never called during control.  A
+                     law that reacted to a new FRF only inside system_id_update was therefore a
+                     silent no-op under the setting.
+    Final state      Each law now reads the live FRF in control().  See B1 and C1 for what each
+                     law does with it.
+
+A4. EVERY BEHAVIOUR CHANGE DEFAULTED BACK OFF
+    Why              Several of these changes silently altered the laws that produced the
+                     twelve-run reference set.  Without this discipline every improvement would
+                     have quietly invalidated the baseline it was measured against.
+    Final state      Every item below except A1 is opt-in.  A profile naming no new fields
+                     reproduces the reference runs byte for byte.
+
+==================================================================================================
+B.  match_trace_pseudoinverse                                    (control_laws.py)
+==================================================================================================
+
+B1. GATED DRIVE-SHAPE REFRESH
+    What was wrong   The law's steady state is a per-line real scalar applied to the previous
+                     command, so the FRF entered once at startup and never again.  It tracked
+                     level against a re-estimated plant while holding a drive SHAPE synthesised
+                     from the plant as it looked before the test started.
+    What it does now  Re-synthesises the shape from the current FRF and carries the level
+                     forward explicitly.  Refresh is gated per line on that line's change since
+                     its own last solve, not since the previous cycle, because a per-cycle gate
+                     can never see slow monotonic drift.
+    Measured         Best linear-plant result improved 8.17 -> 7.37 dB rms at a gate of 0.05.
+                     On the moving plant it is better at every level, by 0.52 to 0.63 dB.
+                     Known limit: the gate responds to the RATE of change, not the amount.  Two
+                     of four level changes in run 50 produced no refresh at all where 321 and
+                     447 lines had been predicted.  A slowly drifting structure would slip
+                     under it.  An accumulated-change criterion is the outstanding fix.
+    Final state      OPT-IN.  refresh_shape defaults to False (field 5).  Reference runs
+                     reproduce.
+
+B2. GAP-BASED RANK SELECTION
+    What was wrong   An absolute rcond has to be placed inside a gap whose position moves with
+                     the plant and with estimate quality.
+    What it does now  Cuts at the largest gap in the singular-value spectrum, with two guards
+                     found by measurement: a protected fraction at the top so a dominant
+                     resonance cannot force a cut there, and a minimum gap ratio _MT_GAP_MIN =
+                     3.0 below which no gap is believed.
+    Measured         The structural gap is 8.9x between sigma_5 and sigma_6 against 2.1-3.8x
+                     elsewhere.  Cross-estimate rank agreement rose from 24.5% to 88.7%.
+    Final state      OPT-IN, selected by passing a NEGATIVE rcond.  Positive rcond keeps the
+                     absolute behaviour.  Default is the absolute form.
+
+==================================================================================================
+C.  optimal_diagonal_control  and  optimal_diagonal_control_fast
+==================================================================================================
+
+C1. drive_rcond EXPRESSED AS A MULTIPLE OF THE PLANT'S OWN SPREAD
+    What was wrong   An absolute ratio had to be re-tuned per article.  Two further errors were
+                     found and fixed while building it: the spread was being measured over all
+                     2049 bins rather than in band only, and it was scaled off sigma_min rather
+                     than sigma_1.
+    Measured         The law derived 0.0302 and 0.0303 unaided on two runs and matched the
+                     hand-tuned sweep optimum of 3e-2 on accuracy.
+    Final state      ON as the DEFAULT FORM.  self.drive_rcond = 2.0, meaning two times the
+                     plant's own measured spread.  The reference value for this article is
+                     sigma_5/sigma_1 = 0.0152, at the spectral gap.
+
+C2. dB-DOMAIN ERROR OBJECTIVE
+    What it does     Replaces the linear-units squared-error objective with a dB one, so the
+                     solver stops buying easy channels with hard ones.
+    Measured         Better pooled rms, but it spreads error across every channel instead of
+                     sacrificing the two the plant cannot reach -- which is not what this rig
+                     wants, since those two cannot be served at any price.
+    Final state      OPT-IN.  self.error_domain = 'linear' by default; field 8 set to 1 selects
+                     'db'.  Defaulted back off on 2026-09-18.
+
+C3. RESPONSE-ERROR TRIM                                          -- A NEGATIVE RESULT
+    What it does     Folds a fraction of the measured response error back into the solver's
+                     target each cycle, to close the loop the law otherwise leaves open.
+    What happened    Ran live twice.  At -18 dB, where the true model gap is 0.012 dB, it
+                     failed its own null check: corrections ended pinned across the +/-3 dB
+                     clamp at a median -1.51 dB after 261 updates and cost 30% more drive for
+                     the same response.  Cause: integrator windup behind a conditional gate
+                     evaluated before the error term, so gated bins kept their correction
+                     permanently and the gate blocked harmful accumulation and corrective
+                     unwinding equally.
+    The fix          Leak after a run of consecutive gate failures.  Four attempts; three were
+                     caught by the regression suite rather than by reasoning.
+                       1  leak every idle bin                 limit cycle at the deadband edge
+                       2  leak on any single gate failure     bled away corrections merely
+                                                              waiting to be re-solved
+                       3  leak after 50 consecutive failures  COMMITTED.  Partial cure
+                       4  pay down the counter, not reset     swamped a real 3 dB error.
+                                                              Reverted
+    Partial cure     Clamped bins fell from about 1700 to 980, trim median -1.51 -> +0.00 dB,
+                     28% of the excess drive recovered.
+    Why it is still wrong  At 0 dB it remains worse than trim-off on every measure: 0.10 dB
+                     worse on the coherent column, 1.7 points more lines out of band, 0.73 dB
+                     further off level, 25% more drive, coherence 0.953 -> 0.896.  It improved
+                     the two channels the solver had conceded and degraded five of the six it
+                     was serving, because it reads a rank-deficiency trade-off as model error.
+                     That is a design mismatch, not a tuning problem: a perfect trim would
+                     still buy back conceded channels.  Level control on this family needs an
+                     outer loop on TOTAL POWER, not a per-channel correction.
+    Final state      OPT-IN and NOT RECOMMENDED.  response_trim_gain = 0.0 by default
+                     (field 11).  Constants as committed: _TRIM_FREEZE_CALLS = 25,
+                     _TRIM_LEAK_DB = 0.05, _TRIM_LEAK_AFTER = 50.  The leak constant is tuned
+                     to the slow law's 20-bins-per-cycle refinement rate and is probably wrong
+                     for the fast variant, which has never run with the trim on.
+
+C4. FAST-PATH DEMOTION GATE                                      (fast variant only)
+    What was wrong   The gate demoted a bin to the base solver on ANY change in the FRF, tested
+                     for bit equality, and measured that change over all 2049 bins -- 1148 of
+                     them out of band and pure noise.  99% of 549 calls demoted, so the fast
+                     law was byte-for-byte the base class whenever the FRF update was on, and
+                     runs 05, 06 and the reference-set entries under its name are the base law.
+    What it does now  Relative Frobenius change, measured in band only, against a threshold.
+    Final state      ON.  frf_update_threshold is a profile field; setting it to 0 restores the
+                     old any-change behaviour.  bm_rank defaults to 4.
+    Caveat           The threshold now in use, 0.5, was set against the repaired metric.  The
+                     earlier 0.05 was set against the broken one and is not comparable.
+
+C5. TWO LIVE-FRF GUARDS
+    Why              Run 30 diverged with the FRF update on: drift median 39834, 1.8e5 V
+                     commanded, 176 solver failures, then an absorbing dead state.  The trigger
+                     is still unexplained; the system identification was checked and was normal.
+    What they do     A per-bin divergence guard that rejects an FRF bin that has moved
+                     implausibly far, and an escape from the dead state.
+    Measured         Run 31 clean, run 32 clean with the guard firing 3 times in 281 calls, all
+                     in the startup transient, and 0 solver failures.  On optimal_diagonal
+                     (run 34) it fired once on call 7 then stayed silent for 354 calls.
+    Final state      ON.  An out-of-band bug in the guard itself was found and fixed by masking
+                     it to in-band bins.
+
+==================================================================================================
+D.  diagonal_congruence
+==================================================================================================
+
+D1. ANTI-WINDUP CEILING JUDGED FROM MEASURED RESPONSE
+    What was wrong   The ceiling judged level from the response predicted through H.  That is
+                     only as trustworthy as the model, which is exactly what cannot be relied
+                     on when the FRF is being re-estimated live -- the regime the other laws
+                     failed in.
+    What it does now  Judges from the measured response, extrapolated over one bounded step.
+    Final state      ON.  ceiling_db defaults to 12.0; the ceiling only ever reduces level.
+
+D2. PROJECTED TARGET READ LAZILY
+    What was wrong   The projected target was read in __init__, which runs before system
+                     identification.  That demanded a file derived from an FRF that does not
+                     yet exist, so the operator could only ever supply a stale projection.
+    What it does now  Read on the first control() call.
+    Final state      ON.
+
+D3. STARTUP CLAMP REORDERED
+    What was wrong   The clamp was already in the response domain, correctly, but ran before
+                     the floor-and-silence and drive-coherence steps, both of which lift level
+                     back through the ceiling.
+    What it does now  Runs after them.
+    Final state      ON.
+
+==================================================================================================
+E.  LAWS WITH NO MODIFICATIONS
+==================================================================================================
+  buzz_control            Startup clamp fixed (A1) and a fourth parameter added so the clamp can
+                          be given a running ceiling.  No other change.
+  pseudoinverse_control   A startup clamp added where there was none (A1).  No other change.
+  octave_band_switching_control
+                          NEVER RUN, and cannot be without a fix.  Its parameter positions
+                          collide with the base class: it reads fields 5-9 as its own where the
+                          base now reads drive_rcond and the startup cap.  A five-line fix is
+                          needed before it will work at all.  This is the intended vehicle for
+                          wider-bandwidth control, keeping fine acquisition and aggregating only
+                          the control decisions into bands.
+
+==================================================================================================
+F.  SUMMARY OF FINAL STATE
+==================================================================================================
+  modification                                   law(s)                          default
+  ----------------------------------------------------------------------------------------------
+  A1  startup level cap, response domain, fixed   all with a clamp               ON, -9.0 dB
+      order
+  A2  drive-coherence cap                         all                            OFF (1.0)
+  A3  live FRF read in control()                  match_trace, both optdiag      ON
+  B1  gated drive-shape refresh                   match_trace                    OPT-IN (False)
+  B2  gap-based rank selection                    match_trace                    OPT-IN (neg rcond)
+  C1  drive_rcond as a multiple of the spread     both optimal_diagonal          ON (2.0)
+  C2  dB-domain error objective                   both optimal_diagonal          OPT-IN (linear)
+  C3  response-error trim                         both optimal_diagonal          OPT-IN (0.0),
+                                                                                 NOT RECOMMENDED
+  C4  fast-path demotion gate, in-band relative   optimal_diagonal_fast          ON
+  C5  live-FRF divergence guard and escape        both optimal_diagonal          ON
+  D1  ceiling from measured response              diagonal_congruence            ON (12.0 dB)
+  D2  projected target read lazily                diagonal_congruence            ON
+  D3  startup clamp reordered                     diagonal_congruence            ON
+
+  Of the thirteen, five are on by default.  Four of those five are repairs to things that were
+  simply wrong -- a clamp in the wrong units and the wrong order, a gate that never let the fast
+  path run, a ceiling that trusted a model it should not have, a file read before it could exist.
+  The fifth, C1, is a reformulation that removes a hand-tuned constant.  Every change that alters
+  what a law DOES rather than fixing what it got wrong is opt-in, which is why the twelve-run
+  reference set still reproduces.
+
+==================================================================================================
+G.  PORTABILITY TO STOCK RATTLESNAKE
+==================================================================================================
+The three laws carried forward will run on unmodified Rattlesnake.  The control-law interface is
+byte-identical to upstream, and everything the laws consume -- the live control FRF, the last
+response and drive CPSDs, the update-during-control switch, and test-level normalisation -- is
+upstream-native.  They import only numpy.
+
+Three things do not travel: the nonlinear virtual hardware is a local component and the profiles
+select it by a hardware index upstream does not define; the exponential control-phase averaging
+is a local profile field; and the level-change hook that the trim and the octave law use is never
+called upstream.  Portable as code, not as results.
