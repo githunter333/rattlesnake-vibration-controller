@@ -136,11 +136,11 @@ for key, col, ls, mk, lab in SERIES:
     x, y = get(key, 'coh')
     a3.plot(x, y, ls=ls, marker=mk, color=col, lw=1.6, ms=5.5, zorder=4)
 
-grid(a1, 1.0, 0.25); a1.set_ylim(4.8, 9.0)
+grid(a1, 0.5, 0.25); a1.set_ylim(5.2, 8.7)
 a1.set_ylabel('coherent-column rms error\n(dB, lower is better)')
 a1.set_title('(a)  Accuracy — optimal_diagonal is 1.9 dB better and stays there '
              'as the plant moves', loc='left', pad=7, color=INK)
-a1.legend(loc='center left', ncol=1, bbox_to_anchor=(0.015, 0.55))
+# legend is placed at figure level below panel (c) -- see fig.legend() later
 
 grid(a2, 2.0, 0.5); a2.set_ylim(-1.2, 9.0)
 a2.axhspan(-0.5, 0.5, color='#eef3f8', lw=0, zorder=0)
@@ -168,6 +168,9 @@ a3.annotate('refresh ON feeds control-time estimates\ncarrying distortion back i
 
 fig.suptitle('Both laws on the moving plant — bounded-softening article, runs 49, 50, 51, 55',
              fontsize=10, color=INK, x=0.012, ha='left', y=0.995)
+h, lb = a1.get_legend_handles_labels()
+fig.legend(h, lb, loc='lower center', bbox_to_anchor=(0.54, -0.035),
+           ncol=2, columnspacing=2.6, handlelength=2.6)
 fig.align_ylabels([a1, a2, a3])
 for ext in ('png', 'pdf'):
     fig.savefig(os.path.join(OUT, f'fig13_moving_plant_both_laws.{ext}'), dpi=300,
