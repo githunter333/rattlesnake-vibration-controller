@@ -40,6 +40,25 @@ sdynpy_frame6x12_system_nonlinear_boundedsoften.npz
     stable and no run is invalidated; the constant simply does not mean what
     its name says.
 
+../sdynpy_frame6x12_system_higherz.npz     (one directory up, not in case/)
+    The same article with four times the damping.  Mass and stiffness are
+    byte-for-byte the nominal ones -- mode frequencies match to 0.000e+00
+    relative -- and every modal damping ratio is scaled by exactly 4.000:
+    median zeta 0.00834 -> 0.03336, range 0.0070-0.0119 -> 0.0280-0.0475.
+
+    It is a control, not a second article.  Because the geometry is identical,
+    anything that changes between it and the nominal plant is attributable to
+    damping alone.  Earlier analysis put its achievable floor at 4.05 dB
+    against the nominal 4.09, so damping does not move what is reachable, but
+    it halves the conditioning over the real directions (68 to 33).  That
+    makes it the vehicle for separating identification quality from control
+    law behaviour.
+
+    NEVER RUN.  No run in this branch used it.  It is published because it is
+    the obvious next plant, not because anything here rests on it.  It lives
+    in examples/sixdrive12resp/ rather than results/case/ and is left there so
+    the paths quoted in the older session notes stay correct.
+
 NOT INCLUDED.  build_nonlinear_frf_system_boundedsoften.py also reads
 run40_matchtrace_refresh005_spec.nc4 for the shaped control drive used in the
 self-consistent calibration.  That file is ~11 MB and stays out of the repo,

@@ -33,6 +33,7 @@ dist/**
 !examples/sixdrive12resp/results/case/sdynpy_frame6x12_system.npz
 !examples/sixdrive12resp/results/case/sdynpy_frame6x12_system_nonlinear_allmodes.npz
 !examples/sixdrive12resp/results/case/sdynpy_frame6x12_system_nonlinear_boundedsoften.npz
+!examples/sixdrive12resp/sdynpy_frame6x12_system_higherz.npz
 **/.DS_Store
 temp/**
 exlanatoins/**
