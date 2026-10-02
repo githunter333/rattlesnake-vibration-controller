@@ -43,7 +43,14 @@ A2. DRIVE-COHERENCE CAP -- not modified, but its cost was measured per law
                      match_trace        -1.01 dB   post-process, one scalar per line left
                      buzz               -1.99 dB   post-process, no correction mechanism
                      pseudoinverse      -3.47 dB   post-process, no correction mechanism
-    Final state      Unchanged.  Default 1.0, i.e. OFF, in every law.  Profiles ask for 0.95.
+    Final state      Unchanged, but THE DEFAULT IS NOT THE SAME IN EVERY LAW.
+                       match_trace_pseudoinverse, buzz, pseudoinverse   default 1.0, OFF
+                       optimal_diagonal, optimal_diagonal_fast,
+                       diagonal_congruence                             default 0.95, ON
+                     An earlier version of this register said the default was 1.0 everywhere.
+                     That was wrong for three of the six laws.  On those three, omitting the
+                     field leaves the cap ON; "cap off" has to be asked for explicitly, which
+                     is what profile_04_optdiag_capoff does.
     Note             The spread is set by WHERE the cap is applied and how much correction
                      authority the law has afterwards.  An earlier explanation by loop family
                      was withdrawn; it did not fit the measurements.
@@ -180,6 +187,13 @@ C5. TWO LIVE-FRF GUARDS
     Final state      ON.  An out-of-band bug in the guard itself was found and fixed by masking
                      it to in-band bins.
 
+
+A FIELD-BY-FIELD REFERENCE for the optimal_diagonal extra_parameters string --
+all fifteen fields, which class uses each one, and the three traps in it -- is in
+optimal_diagonal_parameters.txt in this directory.  Read it before editing a profile:
+field 6 is a hole in the base class, field 10 is inert there, and field 10 changed
+meaning in a way that silently reinterprets six committed profiles.
+
 ==================================================================================================
 D.  diagonal_congruence
 ==================================================================================================
@@ -227,7 +241,8 @@ F.  SUMMARY OF FINAL STATE
   ----------------------------------------------------------------------------------------------
   A1  startup level cap, response domain, fixed   all with a clamp               ON, -9.0 dB
       order
-  A2  drive-coherence cap                         all                            OFF (1.0)
+  A2  drive-coherence cap                         match_trace, buzz, pseudoinv   OFF (1.0)
+                                                  optdiag, fast, congruence      ON  (0.95)
   A3  live FRF read in control()                  match_trace, both optdiag      ON
   B1  gated drive-shape refresh                   match_trace                    OPT-IN (False)
   B2  gap-based rank selection                    match_trace                    OPT-IN (neg rcond)

@@ -1,0 +1,177 @@
+================================================================================
+optimal_diagonal_control AND optimal_diagonal_control_fast
+THE extra_parameters STRING, FIELD BY FIELD
+Read from the source 2026-10-02.  control_laws/optimal_diagonal_control.py
+lines 304-391; the fast variant adds one line at optimal_diagonal_control_fast
+.py:164.
+================================================================================
+The string is a comma-separated POSITIONAL list.  There are no names, and you
+can only truncate it from the right: to set field 10 you must supply fields 1-9,
+even if you only want their defaults.  A string that fails to parse at all is
+discarded silently and every default stands.
+
+  #   parsed as   name                       class default   who uses it
+  ----------------------------------------------------------------------------
+   1  parts[0]    reg                        1e-6            both
+   2  parts[1]    frf_update_threshold       0.5             both, SEE NOTE 4
+   3  parts[2]    max_bins_per_update        20              both
+   4  parts[3]    error_threshold_db         1.0             both
+   5  parts[4]    max_drive_coherence        0.95            both, SEE NOTE 1
+   6  parts[5]    bm_rank                    4               FAST ONLY, NOTE 2
+   7  parts[6]    startup_test_level_cap_db  -9.0            both
+   8  parts[7]    error_domain  0=linear     linear          both
+                                1=db
+   9  parts[8]    n_irls_passes              2               both
+  10  parts[9]    drive_rcond                2.0             FAST ONLY, NOTE 3
+  11  parts[10]   response_trim_gain         0.0  (OFF)      both
+  12  parts[11]   response_trim_limit_db     3.0             both
+  13  parts[12]   response_trim_step_db      0.5             both
+  14  parts[13]   response_trim_deadband_db  0.5             both
+  15  parts[14]   response_trim_gate_db      0.5             both
+
+================================================================================
+NOTE 1 -- THE DRIVE-COHERENCE CAP DEFAULTS TO 0.95 HERE, NOT TO 1.0
+================================================================================
+This is the opposite of what the shared base in control_laws.py does.  Those
+laws -- match_trace_pseudoinverse, buzz, pseudoinverse -- default
+max_drive_coherence to 1.0, which is uncapped.  optimal_diagonal,
+optimal_diagonal_fast and diagonal_congruence all default it to 0.95, which is
+CAPPED.
+
+So "cap off" on this law is not the absence of a field.  Omitting field 5 leaves
+the cap ON at 0.95.  You have to pass 1.0 explicitly, which is what
+profile_04_optdiag_capoff does.
+
+The cap costs this law essentially nothing -- +0.02 dB measured, because it
+enters the SDP as a constraint rather than being applied to a finished solve --
+so the default is the right one.  But it is a different default from the other
+family and it is easy to read the register's "default OFF" line and assume it
+covers every law.  (The 10-01 modification register said exactly that and was
+wrong; it has been corrected.)
+
+================================================================================
+NOTE 2 -- FIELD 6 IS A HOLE IN THE BASE CLASS
+================================================================================
+bm_rank is the Burer-Monteiro factorisation rank and only the fast variant has a
+factored path.  The base class's parser steps over index 5 entirely:
+
+    if len(parts) >= 5: self.max_drive_coherence = float(parts[4])
+    # parts[5] is bm_rank, read by optimal_diagonal_control_fast
+    if len(parts) >= 7: self.startup_test_level_cap_db = float(parts[6])
+
+One parameter string is meant to serve both classes, so a BASE-law profile still
+has to put a placeholder in field 6 to reach field 7 and beyond.  Every
+committed base-law profile puts "6" there, where it does nothing at all.
+Writing a 6-field string for the base law and a 6-field string for the fast law
+produces two different laws from what looks like the same configuration.
+
+================================================================================
+NOTE 3 -- drive_rcond CHANGED MEANING, AND SIX COMMITTED PROFILES PREDATE IT
+================================================================================
+This is the one that will bite.
+
+drive_rcond restricts the drive to a subspace of the plant's singular-value
+spectrum.  It is read by the FAST variant only -- the base class parses field 10
+and never uses it, so on optimal_diagonal it is inert whatever you put there.
+
+THE SIGN IS NOW A MODE SWITCH:
+
+    drive_rcond > 0    a MULTIPLE of this plant's smallest STRUCTURAL
+                       singular-value ratio
+    drive_rcond < 0    an ABSOLUTE ratio, |value|
+
+The default is 2.0.  On this frame the smallest structural direction sits at
+sigma_5/sigma_1 = 0.0152 -- found by the largest gap in the spectrum, 8.9x
+between sigma_5 and sigma_6 against 2.1-3.8x elsewhere, because sigma_6 is
+identification noise and not a direction the plant has.  So 2.0 means
+2.0 x 0.0152 = 0.0304, which is the 3e-2 the rig sweep (runs 22-25) found as a
+genuine minimum.  Expressed as a multiple it tracks a differently conditioned
+article without re-tuning; that was the point of the change.
+
+THE TRAP.  Profiles written before the change hold drive_rcond as a POSITIVE
+absolute ratio.  Under today's code those same numbers are read as multiples:
+
+    profile                      field 10   meant (absolute)   now reads as
+    ----------------------------------------------------------------------
+    profile_15_optdiagfast_db      1e-2       1.0e-2            1.5e-4
+    profile_16_optdiag_db          1e-2       1.0e-2            inert, base law
+    profile_17_optdiagfast_db      3e-3       3.0e-3            4.6e-5
+    profile_18_optdiagfast_db      1e-2       1.0e-2            1.5e-4
+    profile_24_optdiagfast_rcond   3e-2       3.0e-2            4.6e-4
+    profile_25_optdiagfast_rcond   5e-2       5.0e-2            7.6e-4
+    _superseded_profile_17         1e-3       1.0e-3            1.5e-5
+
+Every one of those is now so small that the restriction effectively does not
+apply.  That is run 22's configuration, the deliberate failure case: 9.91 dB
+rms, 52.9% of lines out, +14.29 dB level, 859 V^2, because the unconstrained
+solution is unrealisable rather than wrong.
+
+TO REPRODUCE THOSE RUNS, NEGATE THE VALUE.  profile_24 needs -3e-2, profile_25
+needs -5e-2, and so on.  The profiles have deliberately NOT been edited, because
+editing them would make the archive disagree with the runs it produced; this
+note is the record instead.
+
+Profiles 27, 28 and 42-46 were written after the change and use 2.0 correctly.
+Profiles 13, 14 and 26 are six fields long and never reach field 10.
+
+================================================================================
+NOTE 4 -- FIELD 2 DOES TWO JOBS IN THE FAST LAW, AND ITS SCALE CHANGED
+================================================================================
+In BOTH classes, frf_update_threshold is the refinement scheduler's drift
+threshold: a bin whose H has moved by more than this since its own last solve
+goes back in the queue to be re-solved.
+
+In the FAST class it ALSO gates demotion: a bin whose H has moved by more than
+this is handed to the base solver instead of the factored one.  One number makes
+two decisions, and they do not obviously want the same value.
+
+Worse, the number is not comparable across the gate repair.  The original metric
+measured the FRF change over all 2049 bins, 1148 of them out of band and pure
+noise; 99% of calls demoted and the fast law was byte-for-byte the base class
+whenever the FRF update was on.  The threshold then in use was 0.05.  The
+repaired metric is a relative Frobenius change measured IN BAND ONLY, and the
+threshold in use with it is 0.5.  Those two numbers describe different
+quantities.
+
+In the committed profiles:
+    base law   (42, 43, 46, 16, 28)   field 2 = 0.05
+    fast law   (26, 27, 44, 45)       field 2 = 0.5
+For the base law 0.05 is only the scheduler threshold, so it is not wrong -- but
+do not read 0.05 and 0.5 as a tuning decision.  They straddle a metric change.
+
+================================================================================
+WORKED EXAMPLE -- profile_42_optdiag_bsoft_trimoff, the run 51 configuration
+================================================================================
+    1e-6, 0.05, 20, 1.0, 0.95, 6, -9.0, 0, 2, 2.0, 0, 3.0, 0.5, 0.5, 0.5
+
+     1  reg                        1e-6    solver regularisation
+     2  frf_update_threshold       0.05    scheduler only (base law)
+     3  max_bins_per_update        20      bins re-solved per cycle, out of 901
+     4  error_threshold_db         1.0     scheduler's "worth refining" bar
+     5  max_drive_coherence        0.95    cap ON (the default anyway)
+     6  bm_rank                    6       PLACEHOLDER -- base law ignores it
+     7  startup_test_level_cap_db  -9.0    first command clamped 9 dB under
+     8  error_domain               0       linear, not dB
+     9  n_irls_passes              2       unused when error_domain is linear
+    10  drive_rcond                2.0     INERT -- base law parses, never uses
+    11  response_trim_gain         0       TRIM OFF
+    12  response_trim_limit_db     3.0     } trim shape, inert while gain is 0
+    13  response_trim_step_db      0.5     }
+    14  response_trim_deadband_db  0.5     }
+    15  response_trim_gate_db      0.5     }
+
+Of the fifteen numbers, four are inert in this configuration (6, 9, 10, and
+12-15 while the trim is off) and two more only matter to the scheduler.  The
+string is long because one format serves two classes and five optional
+behaviours, not because the law needs fifteen knobs.
+
+================================================================================
+IF YOU CHANGE ONE THING
+================================================================================
+  turn the trim ON             field 11 from 0 to 0.5.  Not recommended --
+                               see the modification register, section C3.
+  turn the cap OFF             field 5 from 0.95 to 1.0.  Omitting it does NOT
+                               turn it off.
+  use the dB objective         field 8 from 0 to 1.  Field 9 then matters.
+  pin drive_rcond by hand      field 10 NEGATIVE, and only on the fast law.
+  reproduce a pre-09-18 run    negate field 10 if it is a small positive number.
