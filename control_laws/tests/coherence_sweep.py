@@ -146,6 +146,7 @@ def load_laws():
         'cong_broyden': ('cls', br.match_diagonal_congruence_broyden, ''),
         'cong_b g=0': ('cls', br.match_diagonal_congruence_broyden, ',,,,,,,,0'),
         'cong_b p=0': ('cls', br.match_diagonal_congruence_broyden, ',,,,,,,,,0'),
+        'cong_b measX': ('cls', br.match_diagonal_congruence_broyden, ',,,,,,,,,,,,,,0'),
         'optdiag rc=0': ('cls', od.optimal_diagonal_control_fast, OD_FULL),
         # hybrid: first command from the model-based optimal diagonal solve,
         # then diagonal-congruence feedback from that shape

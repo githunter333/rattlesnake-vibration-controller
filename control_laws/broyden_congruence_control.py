@@ -73,6 +73,36 @@ sensitivity, so a learned S that collapses toward zero on a line (response
 dominated by noise -- nothing the drive does moves it) yields a small step,
 not a huge one.  This is the anti-windup for noise-floor lines.
 
+WHAT THE COHERENCE SWEEP SHOWED (tests/coherence_sweep.py, 2026-10-22)
+-------------------------------------------------------------------
+Synthetic 8x6 plant, 40 cycles, 30-frame CPSD estimates; final rms dB error
+of the true response against spec.  Defaults unless noted.
+
+  case            parent  this law  hybrid*  optdiag rc=0 (model only)
+  clean            2.75     2.67     0.54      0.12
+  noise  g2=0.5    2.29     2.18     1.00      1.08
+  noise  g2=0.3    2.31     2.30     1.28      1.41
+  softened 5%      2.92     2.82     2.44      4.62
+  FRF wrong x1     4.53     4.14     3.66      2.66
+
+  * hybrid = first command from optimal_diagonal_control_fast (drive_rcond 0),
+    then this law with max_drive_coherence 1.0.
+
+  - Learning S is worth 0.1-0.5 dB over the parent, most where the FRF is
+    wrong.  Modest.  Coherence weighting moved results by <= 0.1 dB.
+  - Building on the COMMANDED drive (base_on_command) is worth more: 0.3-0.6
+    dB here, and it stops match_trace_pseudoinverse's 1.7 -> 4.4 dB drift.
+  - A diagonal congruence only rescales the drives, N knobs per line.  It
+    corrects level and per-drive balance from measurement, but it cannot
+    create drive SHAPE (inter-drive coherence and phase); that still comes
+    from the model.  Hence the hybrid, and why it is the best or close to it
+    whenever the plant or the noise differs from the model, while a model-only
+    solve stays best when the model is good.
+  - max_drive_coherence 0.95 destroys an optimal shape that needs
+    near-coherent drives; the hybrid numbers need it lifted, at ~9 dB more
+    drive relying on inter-drive cancellation.  The simulator realises the
+    drive exactly, so it flatters that choice.  Not validated on hardware.
+
 extra_parameters: the nine match_diagonal_congruence fields, then
     broyden_gain        0.3   g above; 0 freezes S at the model seed
     coherence_power     1.0   p above; 0 disables coherence weighting
@@ -87,6 +117,13 @@ extra_parameters: the nine match_diagonal_congruence fields, then
     split_level         1     1 = take the uniform (level) part of the step
                               unregularised and ridge only the shape part;
                               0 = the parent's single ridged solve
+    base_on_command     1     1 = apply the congruence to the drive this law
+                              COMMANDED last cycle; 0 = to the measured drive
+                              CPSD, as the parent does (see _drive_base)
+    realize_tol_db      3.0   if the measured drive's in-band trace differs
+                              from the commanded one by more than this (median
+                              dB), the hardware is not realising the command
+                              and the measured drive is used that cycle
 """
 
 import importlib.util as _ilu
@@ -125,7 +162,7 @@ def _parse_broyden_fields(extra_parameters):
     def _get(i, default):
         return nums[i] if len(nums) > i and nums[i] is not None else default
     return (_get(8, 0.3), _get(9, 1.0), _get(10, 0.05), _get(11, 0.05), _get(12, 0.0),
-            _get(13, 1.0))
+            _get(13, 1.0), _get(14, 1.0), _get(15, 3.0))
 
 
 def _model_sensitivity(H, X):
@@ -145,19 +182,25 @@ class match_diagonal_congruence_broyden(match_diagonal_congruence):
         super().__init__(specification, warning_levels, abort_levels, extra_parameters,
                          *args, **kwargs)
         (self.broyden_gain, self.coherence_power, self.model_anchor,
-         self.min_du_db, self.dither_db, split) = _parse_broyden_fields(extra_parameters)
+         self.min_du_db, self.dither_db, split, base_cmd,
+         self.realize_tol_db) = _parse_broyden_fields(extra_parameters)
         self.split_level = split != 0
+        self.base_on_command = base_cmd != 0
         self._reset_learning()
         self._rng = np.random.default_rng(12345)
         print(f'[match_diagonal_congruence_broyden] broyden_gain={self.broyden_gain:g} '
               f'coherence_power={self.coherence_power:g} model_anchor={self.model_anchor:g} '
               f'min_du_db={self.min_du_db:g} dither_db={self.dither_db:g} '
-              f'split_level={int(self.split_level)}', flush=True)
+              f'split_level={int(self.split_level)} '
+              f'base_on_command={int(self.base_on_command)} '
+              f'realize_tol_db={self.realize_tol_db:g}', flush=True)
 
     def _reset_learning(self):
         self.S_hat = None
         self._cmd_last = None         # diag of the drive returned last call
         self._cmd_prev = None         # ... and the call before
+        self._cmd_full = None         # full drive CPSD returned last call
+        self.n_measured_fallbacks = 0
         self._y_prev = None
         self._good_prev = None
         self.n_broyden_updates = 0
@@ -179,7 +222,7 @@ class match_diagonal_congruence_broyden(match_diagonal_congruence):
             return out
 
         self.n_cycles += 1
-        X = last_output_cpsd
+        X = self._drive_base(last_output_cpsd)
         F, N, _ = X.shape
 
         # --- measured error, exactly as the parent ---
@@ -268,7 +311,40 @@ class match_diagonal_congruence_broyden(match_diagonal_congruence):
         return output
 
     # ------------------------------------------------------------------
+    def _drive_base(self, measured):
+        """The drive CPSD the next congruence is applied to.
+
+        The parent scales the MEASURED drive CPSD.  That estimate carries
+        ~1/sqrt(frames) noise, and multiplying it in every cycle turns the
+        noise into a random walk with no restoring force: in the coherence
+        sweep match_trace_pseudoinverse drifted from 1.7 to 4.4 dB over 40
+        cycles that way, and holds at 1.6 dB when given its own command.  So
+        build on the drive this law COMMANDED, which is known exactly --
+        unless the measurement says the hardware is not realising it (median
+        in-band trace mismatch above realize_tol_db), in which case the
+        measured drive is the truth and is used instead."""
+        cmd = self._cmd_full
+        if (not self.base_on_command or cmd is None or measured is None
+                or cmd.shape != measured.shape):
+            return measured
+        band = ~np.all(self.unspecified, axis=1)
+        tm = np.real(np.einsum('fii->f', measured))[band]
+        tc = np.real(np.einsum('fii->f', cmd))[band]
+        ok = (tm > 0) & (tc > 0)
+        if not np.any(ok):
+            return measured
+        mismatch_db = np.median(np.abs(10*np.log10(tm[ok]/tc[ok])))
+        if mismatch_db > self.realize_tol_db:
+            self.n_measured_fallbacks += 1
+            if self.n_measured_fallbacks <= 3 or self.n_measured_fallbacks % 25 == 0:
+                print(f'[match_diagonal_congruence_broyden] measured drive differs from the '
+                      f'commanded drive by {mismatch_db:.1f} dB (median, in band) -- '
+                      f'building on the MEASURED drive this cycle', flush=True)
+            return measured
+        return cmd
+
     def _remember_command(self, output):
+        self._cmd_full = output.copy()
         self._cmd_prev = self._cmd_last
         self._cmd_last = np.real(np.einsum('fii->fi', output)).copy()
 
