@@ -35,6 +35,7 @@ RV_SCRIPTS = [
     "optimal_diagonal_control_fast.py",
     "octave_band_switching_control.py",
     "diagonal_congruence_control.py",
+    "broyden_congruence_control.py",
 ]
 N_CYCLES = 4
 
