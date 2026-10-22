@@ -57,6 +57,7 @@ class RandomVibrationDataAnalysisCommands(Enum):
     RUN_CONTROL = 3
     STOP_CONTROL = 4
     SAVE_CONTROL_DATA = 5
+    SET_TEST_LEVEL_DB = 6
 
 
 class RandomVibrationDataAnalysisUICommands(Enum):
@@ -119,6 +120,10 @@ class RandomVibrationDataAnalysisProcess(SysIDAnalysisProcess):
             self.save_spectral_data,
         )
         self.map_command(
+            RandomVibrationDataAnalysisCommands.SET_TEST_LEVEL_DB,
+            self.set_test_level_db,
+        )
+        self.map_command(
             ControlLawCommands.UPDATE_INTERACTIVE_CONTROL_PARAMETERS,
             self.update_interactive_control_parameters,
         )
@@ -137,6 +142,7 @@ class RandomVibrationDataAnalysisProcess(SysIDAnalysisProcess):
         self.startup = True
         self.has_sent_interactive_control_transfer_function_results = False
         self.last_interactive_parameters = None
+        self.current_test_level_db = None
 
     # region StateSync
     def initialize_sysid_parameters(self, data: SysIdMetadata):
@@ -233,6 +239,24 @@ class RandomVibrationDataAnalysisProcess(SysIDAnalysisProcess):
             self.control_function = getattr(
                 module, self.environment_metadata.control_python_function
             )
+        # If a test level arrived before the control law was built, hand it
+        # over now.  No-op unless the law defines set_test_level_db.
+        self._forward_test_level_db()
+
+    def _forward_test_level_db(self):
+        """Pass the current test level (dB) to a class-style control law that
+        defines set_test_level_db.  Laws that don't care never see it."""
+        if (
+            self.current_test_level_db is not None
+            and self.control_function is not None
+            and hasattr(self.control_function, "set_test_level_db")
+        ):
+            self.control_function.set_test_level_db(self.current_test_level_db)
+
+    def set_test_level_db(self, data):
+        """Receives the current test level in dB and forwards it to the control law"""
+        self.current_test_level_db = data
+        self._forward_test_level_db()
 
     # endregion
 

@@ -1378,6 +1378,11 @@ class RandomVibrationEnvironment(SysIdEnvironment):
                 (self.environment_metadata.skip_frames, db2scale(data)),
             ),
         )
+        # Let the control law know the new test level (dB), if it cares.
+        self.queue_container.data_analysis_command_queue.put(
+            self.environment_name,
+            (RandomVibrationDataAnalysisCommands.SET_TEST_LEVEL_DB, data),
+        )
         self.gui_update_queue.put(
             (
                 self.environment_name,
@@ -1488,6 +1493,13 @@ class RandomVibrationEnvironment(SysIdEnvironment):
         #     self.environment_name,
         #     (RandomVibrationDataAnalysisCommands.INITIALIZE_PARAMETERS,
         #      self.environment_metadata))
+
+        # Let the control law know the test level (dB), if it cares.  No-op
+        # for control laws that don't define set_test_level_db.
+        self.queue_container.data_analysis_command_queue.put(
+            self.environment_name,
+            (RandomVibrationDataAnalysisCommands.SET_TEST_LEVEL_DB, data.control_test_level),
+        )
 
         # Start the data analysis running
         self.queue_container.data_analysis_command_queue.put(
