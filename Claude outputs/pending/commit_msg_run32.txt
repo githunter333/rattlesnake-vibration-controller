@@ -1,0 +1,31 @@
+run 32 confirms the drive result a third time; guard masked to in-band bins
+
+  run                        rms   >3dB    level   maxV   driveV2  easy6
+  19 SDP base    upd ON     5.68  19.1%   +0.17    4.40     67.42   2.50
+  27 fast auto   upd OFF    6.27  22.8%   +0.55    9.83    245.38   3.18
+  29 fast auto   upd ON     6.06  22.5%   -0.10    2.06     17.03   2.90
+  31 fast auto   upd ON     6.04  23.0%   -0.07    2.15     18.44   2.87
+  32 fast auto   upd ON     6.08  23.0%   +0.01    2.01     16.22   3.00
+  offline prediction        5.96    --    -0.74    2.07     16.20    --
+
+Three update-ON runs: 17.03 / 18.44 / 16.22 V^2, +/-7% around 17.2, against
+153 -> 485 -> 245 with the update off.  Run 32 lands on the offline
+prediction exactly.
+
+FIXES THE DIVERGENCE GUARD, which shipped with the out-of-band bug.  Run 31
+fired it on 986-1161 bins of 2049 on nearly every call while controlling
+perfectly: 1148 of those bins are out of band, no drive energy, live
+estimate is noise, relative change unbounded.  It was reporting noise.
+
+Third occurrence of this exact mistake in this file and its subclass --
+_effective_drive_rcond (spread over all lines), _h_moved (movement over the
+whole array), and now _reject_diverged_frf -- each written after diagnosing
+the previous one.  The rule is now stated in the code beside the mask.
+
+Masked, run 32 fired the guard 3 times in 281 calls: calls 7, 8 and 9,
+covering 4, 20 and 3 in-band bins, worst 45.4 / 67.0 / 26.7, during the
+startup transient, then silent.  cum_solver_failures 0, no deadlock escapes,
+gate settled at median 0.1838 / 90th 0.2763 / demoted 6% / 78% fast.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HnCQ3isTbjNsTuKh3Lgy2c

@@ -1,0 +1,33 @@
+optimal_diagonal_control_fast: measure FRF movement in-band only
+
+_h_moved compared the live FRF against the cached one over the whole
+2049-bin array. 1148 of those bins are out of band: the control drive
+puts no energy there, the live H1 estimate is noise, and its relative
+change per cycle is enormous. The gate was therefore responding to
+out-of-band noise and never to the plant.
+
+Run 28 (FRF update on, threshold 0.05) measured the consequence over
+549 calls: median 4.3736 -- a 437% change every cycle -- 90th 6.2169,
+max 179.6692, demoted on 99% of calls. The base class's own drift
+metric, which looks only at refined (in-band) bins, read median 0.1705
+on the same data. A factor of 25 between two measurements of the same
+quantity. With the gate tripping on essentially every call, the fast
+law was byte-for-byte the base class whenever the FRF update was on --
+the same failure the relative-change threshold was introduced to fix,
+reintroduced through the measurement rather than the comparison.
+
+This restricts both arrays to the in-band bins (y_diag_target > 0)
+before taking the norms, and logs the running distribution -- median,
+90th, max, demotion rate -- on every trip and every 25th call, because
+only the FINAL FRF is saved to the run file and the per-cycle movement
+the gate actually tests cannot be recovered afterwards.
+
+Same mistake as measuring the singular-value spread over all lines
+in _effective_drive_rcond, fixed the same way.
+
+The demotion threshold itself is NOT set here. 0.05 remains the
+default; it is certainly too low now that the metric is in-band, but
+the corrected distribution has not been measured on the rig yet.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HnCQ3isTbjNsTuKh3Lgy2c

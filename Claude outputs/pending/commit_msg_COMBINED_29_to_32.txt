@@ -1,0 +1,88 @@
+optimal_diagonal_control_fast works with the FRF update on: runs 29, 31, 32
+
+Bundles three logical changes that could not be committed as they were made
+-- the mount denies unlink, so git leaves .git/*.lock after every operation
+and each commit had to wait on the user clearing it by hand.
+
+THE RESULT.  The fast law now runs its own algorithm with "Update Transfer
+Function During Control" enabled, and its drive lands on prediction:
+
+  run                        rms   >3dB    level   maxV   driveV2  easy6
+  19 SDP base    upd ON     5.68  19.1%   +0.17    4.40     67.42   2.50
+  27 fast auto   upd OFF    6.27  22.8%   +0.55    9.83    245.38   3.18
+  29 fast auto   upd ON     6.06  22.5%   -0.10    2.06     17.03   2.90
+  31 fast auto   upd ON     6.04  23.0%   -0.07    2.15     18.44   2.87
+  32 fast auto   upd ON     6.08  23.0%   +0.01    2.01     16.22   3.00
+  offline prediction        5.96    --    -0.74    2.07     16.20    --
+
+17.03 / 18.44 / 16.22 V^2 -- +/-7% around 17.2, against 153 -> 485 -> 245
+with the update off, where the same commanded solution was unreproducible.
+Solving against a plant model that tracks the plant AS DRIVEN removes the
+inter-drive cancellation the rig cannot reproduce -- the failure mode behind
+run 22's +14.29 dB at 17.8 V.  runsheet_30.txt registered the acceptance
+bands before run 31 was taken.
+
+The SDP remains more accurate (5.68 vs 6.06 rms, 2.50 vs 2.90 easy six).
+The fast law's case is drive and speed: a quarter of the voltage-squared and
+roughly 18x faster per bin.
+
+1. PER-BIN SOLVE COUNTERS in the gate log (n_fast_solves / n_safe_solves).
+   They existed all along but were never printed, which is why confirming
+   run 29 took three indirect arguments -- metadata, the per-call demotion
+   rate, and a drive-coherence signature above the SDP's 0.95 cap (6.6% of
+   in-band pairs, against 0.0% for both genuine SDP runs).
+
+2. TWO LIVE-FRF GUARDS in the base class, after run 30 diverged: the live
+   H1 estimate reached since_initial median 39834, max 500217, the law
+   solved against it and commanded 1.8e5 V, and the end state was absorbing
+   -- near-zero drive, so no excitation, so no FRF movement, so nothing
+   scheduled, so the same dead solution for 70+ calls.
+
+     _reject_diverged_frf          per-bin revert to the system-ID FRF
+                                   above 10x, in-band bins only
+     _escape_deadlock_if_starved   re-solve from the system ID after 10
+                                   calls 20 dB under spec with nothing
+                                   scheduled
+
+   The demotion gate worked throughout run 30 (69% demoted) and did not
+   help: falling back to the safe solver cannot rescue a solve when the
+   plant MODEL is wrong.  Both solvers get the same bad H.
+
+   verify_frf_guards.py, three tests.  The third matters most: on ordinary
+   3% averaging jitter neither guard fires and output_cpsd is bit-identical
+   to the pre-guard code (0.000e+00), so runs 19-29 stand.
+
+3. frf_update_threshold default 0.05 -> 0.5, now that the corrected in-band
+   distribution is measured (median 0.196, 90th 0.232, thin tail to 3.5;
+   0.5 gives 5-8% demotion).  Verified cell by cell that every profile_01..26
+   sets field 2 explicitly, so no archived run configuration changes.
+
+THE GUARD SHIPPED WITH THE OUT-OF-BAND BUG and this commit fixes it.  Run 31
+fired it on 986-1161 bins of 2049 on nearly every call while controlling
+perfectly: 1148 of those bins are out of band, no drive energy, live estimate
+is noise, relative change unbounded.  It was reporting noise.
+
+That is the THIRD occurrence of this exact mistake in this file and its
+subclass -- _effective_drive_rcond (spread over all lines), _h_moved
+(movement over the whole array), and now _reject_diverged_frf -- each one
+written after diagnosing the previous.  The rule is now stated in the code
+beside the mask, not only in a commit message.
+
+Masked, run 32 fired the guard 3 times in 281 calls: calls 7, 8 and 9,
+covering 4, 20 and 3 in-band bins, worst 45.4 / 67.0 / 26.7, during the
+startup transient, then silent.  cum_solver_failures 0, no deadlock escapes.
+
+RETRACTS two claims made while diagnosing run 30:
+ - "the 66 V first command is anomalous".  It is the normal startup
+   transient; run 31 opens at 69.2 V and decays monotonically to 2.13.
+ - "run 29 must have ended at full level, since it scores -0.10 dB".
+   Invalid -- saved response AND drive are test-level normalised; run 31 was
+   saved at -12 dB and scores -0.07 dB with 18.44 V^2.
+
+RUN 30'S TRIGGER IS STILL UNEXPLAINED.  Same profile, same level, comparable
+system ID, and runs 31 and 32 were clean.  One instance.  The guards bound
+the damage; they do not explain it, and they have never fired in the field
+on the condition they were built for.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HnCQ3isTbjNsTuKh3Lgy2c

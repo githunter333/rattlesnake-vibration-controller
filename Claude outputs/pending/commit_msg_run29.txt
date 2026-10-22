@@ -1,0 +1,40 @@
+run 29: the fast law runs with the FRF update on, and the drive matches prediction
+
+First run in which optimal_diagonal_control_fast actually executed its own
+algorithm with "Update Transfer Function During Control" enabled. The gate
+demoted on 5% of calls against 99% in run 28.
+
+Scored against the comparison set (rms / % outside 3 dB / level / max V /
+drive V^2 / easy six):
+
+  19 SDP base    upd ON   5.68  19.1%  +0.17   4.40    67.4  2.50
+  27 fast auto   upd OFF  6.27  22.8%  +0.55   9.83   245.4  3.18
+  28 SDP-in-name upd ON   5.64  19.6%  +0.21   4.39    66.7  2.53
+  29 fast auto   upd ON   6.06  22.5%  -0.10   2.06    17.0  2.90
+  offline prediction      5.96    --   -0.74   2.07    16.2   --
+
+Run 29's drive lands on the offline prediction to 5% where runs 26 and 27
+were 10-30x it. Solving against an FRF that tracks the plant as driven
+removes the inter-drive cancellation the rig cannot reproduce -- the failure
+mode behind run 22's +14.29 dB at 17.8 V.
+
+NOT CONFIRMED: drive is the one measure runs 24/26/27 showed does not repeat
+(153 -> 485 -> 245 V^2 for the same commanded solution). runsheet_30.txt sets
+up an identical repeat. frf_update_threshold stays 0.05 in code until it
+lands; profile_26 carries the 0.5 override.
+
+Also confirms run 28 was byte-for-byte the base class: it scores within
+0.04 dB rms and 1% of drive of run 19, a different law, and puts 0.0% of
+in-band drive pairs above the SDP's 0.95 coherence cap where run 29 puts
+6.6%.
+
+The gate log now prints the per-bin n_fast_solves / n_safe_solves counters.
+They existed all along but were never printed, which is why confirming run 29
+took three indirect arguments instead of reading one field.
+
+Retracts yesterday's reading of newly_refined=0 as scheduler starvation:
+2049 - 1148 out-of-band = 901 = n_refined_total, so that is complete in-band
+coverage, in run 28 as well.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HnCQ3isTbjNsTuKh3Lgy2c
