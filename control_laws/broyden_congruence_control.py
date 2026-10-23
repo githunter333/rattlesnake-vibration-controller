@@ -104,7 +104,10 @@ of the true response against spec.  Defaults unless noted.
     drive exactly, so it flatters that choice.  Not validated on hardware.
 
 extra_parameters: the nine match_diagonal_congruence fields, then
-    broyden_gain        0.3   g above; 0 freezes S at the model seed
+    broyden_gain        0.6   g above; 0 freezes S at the model seed
+                              (0.3 until 2026-10-23; the phase columns need
+                              faster learning, and 0.6 is no worse for the
+                              magnitude columns)
     coherence_power     1.0   p above; 0 disables coherence weighting
     model_anchor        0.05  fraction of S pulled back to the current model
                               each cycle (keeps S from drifting on lines the
@@ -124,6 +127,68 @@ extra_parameters: the nine match_diagonal_congruence fields, then
                               from the commanded one by more than this (median
                               dB), the hardware is not realising the command
                               and the measured drive is used that cycle
+    phase_steering      1     1 = also steer each drive's PHASE (see below);
+                              0 = magnitudes only, as before 2026-10-23
+    max_phase_step_deg  15    most any drive's phase may move in one cycle
+
+PHASE STEERING (added 2026-10-23)
+---------------------------------
+With a real diagonal D, X <- D X D scales each cross term X_ij by d_i d_j > 0:
+drive magnitudes change, but the relative PHASE between drives (and their
+coherence) stays whatever the startup solve chose.  Yet each response
+autospectrum depends on those phases, through interference:
+y_m = sum_ij H_mi X_ij conj(H_mj).  With magnitudes only there are N real
+knobs per line against M autospectrum targets (6 vs 8 on the frame the sweep
+models), which is most of the 2-3 dB floor this family showed.
+
+So D is made complex, d_i = exp(u_i + j theta_i), applied as X <- D X D^H.
+That is still a congruence -- the drive stays a valid CPSD for ANY u, theta --
+and it multiplies X_ij by d_i conj(d_j): magnitudes scale as before, the
+relative phase of drives i and j rotates by theta_i - theta_j, and the
+coherence between drives is unchanged.  2N-1 knobs per line (a common phase
+does nothing).
+
+The phase sensitivity is the imaginary-part twin of the magnitude one:
+
+    d log y_m / d theta_i = -2 Im( H_mi (X H^H)_im ) / y_m
+
+Each row of it sums to zero (a common phase rotation leaves every y_m alone);
+that is enforced on the learned matrix.  The Broyden update learns the phase
+columns exactly like the magnitude columns: the commanded phase change is
+known (the ceiling, floor and coherence cap are real scalings and never move
+a phase), and the response change is measured.
+
+WHAT THE SWEEP SHOWED FOR PHASE (2026-10-23, broyden_gain 0.6, mean of
+cycles 20-40, rms dB, 20-380 Hz):
+
+                      30-frame CPSDs                 exact CPSDs, 100 cycles
+  start / case      no phase   phase                 no phase   phase
+  pinv  clean         2.58     2.56                    2.13*    1.84*
+  pinv  noise 0.5     2.13     1.98
+  pinv  soft 5%       2.63     2.79                    2.39*    2.21*
+  pinv  FRF err 1     3.64     4.10
+  hybrid clean        0.39     0.47                    1.00*    0.66*
+  hybrid noise 0.5    0.80     0.92
+  hybrid soft 5%      2.37     2.49
+  hybrid FRF err 1    3.01     3.60
+  (* broyden_gain 0.3, final value)
+
+  - Structurally phase helps: with exact measurements it lowers the floor
+    every time, still falling at 100 cycles.
+  - With 30-frame estimates it helps only response-noise cases from a pinv
+    start (~0.15 dB) and HURTS from the hybrid start and wherever the FRF is
+    wrong (0.1-0.6 dB).  The phase columns are information-hungry: their
+    true values change fast as the drive phases move, the model anchor pulls
+    them toward the model's phase, which is exactly what is wrong when the
+    FRF is, and each noisy secant spreads over 2N columns instead of N.
+  - With model_anchor 0 the learned S drifts and the law fails (4-6 dB), so
+    the anchor is load-bearing.
+
+Risk: phase steering works through interference between coherent drives, so
+it relies on the hardware reproducing relative drive phase.  Milder than
+lifting the coherence cap -- inter-drive coherence is untouched -- but the
+same kind of exposure.  max_phase_step_deg, the response step limit and the
+measured-anchored ceiling bound it.
 """
 
 import importlib.util as _ilu
@@ -161,16 +226,26 @@ def _parse_broyden_fields(extra_parameters):
             pass     # the projected-target path; the parent reads it
     def _get(i, default):
         return nums[i] if len(nums) > i and nums[i] is not None else default
-    return (_get(8, 0.3), _get(9, 1.0), _get(10, 0.05), _get(11, 0.05), _get(12, 0.0),
-            _get(13, 1.0), _get(14, 1.0), _get(15, 3.0))
+    return (_get(8, 0.6), _get(9, 1.0), _get(10, 0.05), _get(11, 0.05), _get(12, 0.0),
+            _get(13, 1.0), _get(14, 1.0), _get(15, 3.0), _get(16, 1.0), _get(17, 15.0))
 
 
-def _model_sensitivity(H, X):
-    """S_mi = 2 Re(H_mi (X H^H)_im) / y_m and the model y_m."""
+def _model_sensitivity(H, X, with_phase=False):
+    """Model sensitivity of log y_m to the drive log-gains u_i and, with
+    with_phase, to the drive phases theta_i, plus the model y_m.
+
+        a_mi = H_mi (X H^H)_im           (sum_i a_mi = y_m)
+        d log y_m / d u_i     =  2 Re(a_mi) / y_m
+        d log y_m / d theta_i = -2 Im(a_mi) / y_m
+
+    Returns S of shape (F, M, N), or (F, M, 2N) = [magnitude | phase]."""
     C = X @ H.conjugate().transpose(0, 2, 1)
     y = np.real(np.einsum('fmn,fnm->fm', H, C))
     y_safe = np.where(y > 0, y, 1.0)
-    S = 2.0*np.real(np.einsum('fmi,fim->fmi', H, C))/y_safe[:, :, None]
+    a = np.einsum('fmi,fim->fmi', H, C)/y_safe[:, :, None]
+    S = 2.0*np.real(a)
+    if with_phase:
+        S = np.concatenate([S, -2.0*np.imag(a)], axis=2)
     return np.where((y > 0)[:, :, None], S, 0.0), y
 
 
@@ -183,9 +258,11 @@ class match_diagonal_congruence_broyden(match_diagonal_congruence):
                          *args, **kwargs)
         (self.broyden_gain, self.coherence_power, self.model_anchor,
          self.min_du_db, self.dither_db, split, base_cmd,
-         self.realize_tol_db) = _parse_broyden_fields(extra_parameters)
+         self.realize_tol_db, phase, self.max_phase_step_deg) = \
+            _parse_broyden_fields(extra_parameters)
         self.split_level = split != 0
         self.base_on_command = base_cmd != 0
+        self.phase_steering = phase != 0
         self._reset_learning()
         self._rng = np.random.default_rng(12345)
         print(f'[match_diagonal_congruence_broyden] broyden_gain={self.broyden_gain:g} '
@@ -193,13 +270,16 @@ class match_diagonal_congruence_broyden(match_diagonal_congruence):
               f'min_du_db={self.min_du_db:g} dither_db={self.dither_db:g} '
               f'split_level={int(self.split_level)} '
               f'base_on_command={int(self.base_on_command)} '
-              f'realize_tol_db={self.realize_tol_db:g}', flush=True)
+              f'realize_tol_db={self.realize_tol_db:g} '
+              f'phase_steering={int(self.phase_steering)} '
+              f'max_phase_step_deg={self.max_phase_step_deg:g}', flush=True)
 
     def _reset_learning(self):
         self.S_hat = None
         self._cmd_last = None         # diag of the drive returned last call
         self._cmd_prev = None         # ... and the call before
         self._cmd_full = None         # full drive CPSD returned last call
+        self._theta_last = None       # drive phases applied in the last call
         self.n_measured_fallbacks = 0
         self._y_prev = None
         self._good_prev = None
@@ -232,19 +312,20 @@ class match_diagonal_congruence_broyden(match_diagonal_congruence):
         good = np.isfinite(ratio) & (ratio > 0) & ~self.unspecified
         eps = np.where(good, np.log(np.where(good, ratio, 1.0)), 0.0)
 
-        S_model, y_model = _model_sensitivity(H, X)
+        S_model, y_model = _model_sensitivity(H, X, with_phase=self.phase_steering)
+        P = S_model.shape[2]                 # N, or 2N with phase steering
 
         # --- learn S from (commanded drive change, measured response change) ---
         if self.S_hat is None:
             self.S_hat = S_model.copy()
         else:
-            self._broyden_update(achieved, good, frames)
+            self._broyden_update(achieved, good, frames, S_model)
             if self.model_anchor > 0:
                 self.S_hat = (1.0 - self.model_anchor)*self.S_hat + self.model_anchor*S_model
         self._y_prev = achieved.copy()
         self._good_prev = good.copy()
         S = np.where(good[:, :, None], self.S_hat, 0.0)
-        self.last_row_sum = np.sum(self.S_hat, axis=2)
+        self.last_row_sum = np.sum(self.S_hat[:, :, :N], axis=2)
 
         # --- coherence-weighted, regularised Gauss-Newton step ---
         w = self._row_weights(multiple_coherence, good)
@@ -261,7 +342,7 @@ class match_diagonal_congruence_broyden(match_diagonal_congruence):
         # the residual through the ridge.
         c = np.zeros(F)
         if self.split_level:
-            r = np.sum(S, axis=2)                                    # (F,M)
+            r = np.sum(S[:, :, :N], axis=2)      # magnitude columns only (F,M)
             num = np.sum(w*r*eps, axis=1)
             den = np.sum(w*r*r, axis=1)
             c = np.where(den > 0, num/np.maximum(den, _TINY), 0.0)
@@ -272,38 +353,47 @@ class match_diagonal_congruence_broyden(match_diagonal_congruence):
         Sm = np.where(good[:, :, None], S_model, 0.0)
         StS_model = np.einsum('fmi,fmj->fij', Sm*w[:, :, None], Sm)
         scale = np.maximum(np.einsum('fii->f', StS), np.einsum('fii->f', StS_model))
-        lam = self.ridge*np.maximum(scale, _TINY)/N
-        A = StS + lam[:, None, None]*np.eye(N)[None]
+        lam = self.ridge*np.maximum(scale, _TINY)/P
+        A = StS + lam[:, None, None]*np.eye(P)[None]
         try:
-            u = np.linalg.solve(A, Ste[:, :, None])[:, :, 0]
+            z = np.linalg.solve(A, Ste[:, :, None])[:, :, 0]
         except np.linalg.LinAlgError:
-            u = np.einsum('fij,fj->fi', np.linalg.pinv(A), Ste)
-        u = np.where(np.isfinite(u), u, 0.0) + c[:, None]
-        u = u*self.Ki*_gain_schedule(H, self.resonance_sensitivity, F)[:, None]
+            z = np.einsum('fij,fj->fi', np.linalg.pinv(A), Ste)
+        z = np.where(np.isfinite(z), z, 0.0)
+        z[:, :N] += c[:, None]
+        if P > N:
+            # a common phase does nothing; keep the phases zero-mean so the
+            # step limits act on relative phase only
+            z[:, N:] -= np.mean(z[:, N:], axis=1, keepdims=True)
+        z = z*self.Ki*_gain_schedule(H, self.resonance_sensitivity, F)[:, None]
         if self.dither_db > 0:
-            u = u + self._rng.standard_normal(u.shape)*self.dither_db*_LN10_10/2.0
+            z[:, :N] += self._rng.standard_normal((F, N))*self.dither_db*_LN10_10/2.0
         lines_ok = ~np.all(self.unspecified, axis=1) & ~np.all(~good, axis=1)
-        u[~lines_ok] = 0.0
+        z[~lines_ok] = 0.0
 
         # --- step limit on BOTH predicted moves (learned and model) ---
         if self.max_step_db > 0:
             max_step = self.max_step_db*_LN10_10
+            max_ph = np.deg2rad(self.max_phase_step_deg)
             for _ in range(6):
-                move_l = np.einsum('fmi,fi->fm', self.S_hat, u)
-                move_m = self._predicted_move(H, X, u, y_model)
+                move_l = np.einsum('fmi,fi->fm', self.S_hat, z)
+                move_m = self._predicted_move_c(H, X, z, y_model, N)
                 worst = np.maximum(np.max(np.abs(move_l), axis=1),
                                    np.max(np.abs(move_m), axis=1))
                 # a drive gain may also never move more than max_step on its own
-                worst = np.maximum(worst, 2.0*np.max(np.abs(u), axis=1))
-                if np.all(worst <= max_step*(1.0 + 1e-9)):
+                worst = np.maximum(worst, 2.0*np.max(np.abs(z[:, :N]), axis=1))
+                ratio = worst/max_step
+                if P > N:
+                    ratio = np.maximum(ratio, np.max(np.abs(z[:, N:]), axis=1)/max_ph)
+                if np.all(ratio <= 1.0 + 1e-9):
                     break
-                s = np.where(worst > max_step, max_step/np.maximum(worst, _TINY), 1.0)
-                u = u*s[:, None]
+                z = z*np.where(ratio > 1.0, 1.0/np.maximum(ratio, _TINY), 1.0)[:, None]
 
-        D = np.exp(u)
-        output = X*D[:, :, None]*D[:, None, :]
+        D = self._gains(z, N)
+        output = X*D[:, :, None]*D.conjugate()[:, None, :]          # D X D^H
+        self._theta_applied = z[:, N:].copy() if P > N else None
         # measured-anchored ceiling extrapolates with the LEARNED sensitivity
-        move = np.einsum('fmi,fi->fm', self.S_hat, u)
+        move = np.einsum('fmi,fi->fm', self.S_hat, z)
         output = self._apply_ceiling(H, output, achieved, good, move)
         output = self._floor_and_silence(output)
         output = _cap_drive_coherence(output, self.max_drive_coherence)
@@ -343,7 +433,26 @@ class match_diagonal_congruence_broyden(match_diagonal_congruence):
             return measured
         return cmd
 
+    @staticmethod
+    def _gains(z, N):
+        """Complex diagonal gains exp(u + j theta) (real if no phase part)."""
+        if z.shape[1] > N:
+            return np.exp(z[:, :N] + 1j*z[:, N:])
+        return np.exp(z)
+
+    def _predicted_move_c(self, H, X, z, y_prev, N):
+        """Exact model change in log y_m for X -> D X D^H, D = gains(z)."""
+        D = self._gains(z, N)
+        Xn = X*D[:, :, None]*D.conjugate()[:, None, :]
+        yn = np.real(np.einsum('fmn,fnk,fmk->fm', H, Xn, H.conjugate()))
+        ok = (yn > 0) & (y_prev > 0)
+        out = np.zeros_like(yn)
+        out[ok] = np.log(yn[ok]/y_prev[ok])
+        return out
+
     def _remember_command(self, output):
+        self._theta_last = getattr(self, '_theta_applied', None)
+        self._theta_applied = None
         self._cmd_full = output.copy()
         self._cmd_prev = self._cmd_last
         self._cmd_last = np.real(np.einsum('fii->fi', output)).copy()
@@ -356,7 +465,7 @@ class match_diagonal_congruence_broyden(match_diagonal_congruence):
                 w = np.clip(np.nan_to_num(c, nan=0.0), 0.0, 1.0)**self.coherence_power
         return np.where(good, w, 0.0)
 
-    def _broyden_update(self, achieved, good, frames):
+    def _broyden_update(self, achieved, good, frames, S_model):
         """Secant update.  The response measured now (y_k) was produced by the
         drive returned LAST call (_cmd_last); the one before (y_{k-1}) by the
         drive returned the call before that (_cmd_prev)."""
@@ -367,6 +476,13 @@ class match_diagonal_congruence_broyden(match_diagonal_congruence):
             du = 0.5*np.log(self._cmd_last/self._cmd_prev)       # (F,N)
             dy = np.log(achieved/self._y_prev)                   # (F,M)
         du = np.where(np.isfinite(du), du, 0.0)
+        N = du.shape[1]
+        P = self.S_hat.shape[2]
+        if P > N:
+            # commanded phase change: exactly the phases applied last call (the
+            # ceiling, floor and coherence cap are real scalings)
+            dth = self._theta_last if self._theta_last is not None else np.zeros_like(du)
+            du = np.concatenate([du, dth], axis=1)                  # (F, 2N)
         rows_ok = good & self._good_prev & np.isfinite(dy)
         dy = np.where(rows_ok, dy, 0.0)
         du2 = np.sum(du**2, axis=1)                              # (F,)
@@ -386,12 +502,21 @@ class match_diagonal_congruence_broyden(match_diagonal_congruence):
                 /(du2 + delta)[:, None, None])
         step[~lines] = 0.0
         self.S_hat = self.S_hat + step
-        # physical bounds: a drive cannot change a response by more than all of
-        # it (|S| <= 2), and the uniform-scaling sensitivity (row sum) lies in
-        # [0, 2] -- 2 for a noise-free linear channel, less where part of the
-        # response does not come from the drives
-        self.S_hat = np.clip(self.S_hat, -2.0, 2.0)
-        rs = np.sum(self.S_hat, axis=2, keepdims=True)
-        fix = np.clip(rs, 0.0, 2.0) - rs
-        self.S_hat = self.S_hat + fix/self.S_hat.shape[2]
+        # Physical bounds.
+        #  * Entry size: individual sensitivities CAN exceed 2 when drives
+        #    interfere (a_mi can be larger than y_m), so the bound is relative
+        #    to the model's own entry, not a flat +-2 (the first version
+        #    clipped at +-2, which is wrong for coherent drives).
+        bound = np.maximum(2.0, 2.0*np.abs(S_model))
+        self.S_hat = np.clip(self.S_hat, -bound, bound)
+        #  * Magnitude row sum = sensitivity to a uniform gain: in [0, 2], 2 for
+        #    a noise-free linear channel, less where part of the response does
+        #    not come from the drives.
+        Sm = self.S_hat[:, :, :N]
+        rs = np.sum(Sm, axis=2, keepdims=True)
+        Sm += (np.clip(rs, 0.0, 2.0) - rs)/N
+        #  * Phase row sum = sensitivity to a common phase: exactly 0.
+        if P > N:
+            Sp = self.S_hat[:, :, N:]
+            Sp -= np.mean(Sp, axis=2, keepdims=True)
         self.n_broyden_updates += int(np.count_nonzero(lines))

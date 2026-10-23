@@ -52,6 +52,8 @@ N_FREQ, N_RESP, N_DRIVE = 401, 8, 6
 # every field up to the last one set must be given explicitly.  This is the
 # default string with drive_rcond = 0 and a budget that covers the band.
 OD_FULL = '1e-6,0.05,400,1.0,0.95,4,-9,0,2,0'
+# match_diagonal_congruence_broyden with phase steering off (field 16 = 0)
+NOPHASE = ',' * 16 + '0'
 NOISY_CHANNELS = [2, 5, 7]
 
 
@@ -147,12 +149,16 @@ def load_laws():
         'cong_b g=0': ('cls', br.match_diagonal_congruence_broyden, ',,,,,,,,0'),
         'cong_b p=0': ('cls', br.match_diagonal_congruence_broyden, ',,,,,,,,,0'),
         'cong_b measX': ('cls', br.match_diagonal_congruence_broyden, ',,,,,,,,,,,,,,0'),
+        # field 16 = phase_steering (default on since 2026-10-23)
+        'cong_b nophase': ('cls', br.match_diagonal_congruence_broyden, NOPHASE),
         'optdiag rc=0': ('cls', od.optimal_diagonal_control_fast, OD_FULL),
         # hybrid: first command from the model-based optimal diagonal solve,
         # then diagonal-congruence feedback from that shape
         'hyb congr': ('hyb', dc.match_diagonal_congruence, ''),
         'hyb broyden': ('hyb', br.match_diagonal_congruence_broyden, ''),
         'hyb broy cap1': ('hyb', br.match_diagonal_congruence_broyden, ',1.0'),
+        'hyb nophase cap1': ('hyb', br.match_diagonal_congruence_broyden,
+                             ',1.0' + NOPHASE[1:]),
         'optdiag_fast': ('cls', od.optimal_diagonal_control_fast, ''),
     }
 
