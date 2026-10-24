@@ -105,6 +105,46 @@ response_trim_gain and its three companions (fields 11-14) are inherited
 max_drive_coherence still applies to the SDP fallback path exactly as in
 the base class; it has no effect on the fast path (which is, by design,
 unconstrained).
+
+PER-LINE SINGULAR-VECTOR SELECTION (fields 16-18, added 2026-10-24)
+------------------------------------------------------------------
+The fast path keeps, at each line, the k strongest singular directions of
+that line's H and solves only in them.  Keeping the right singular vectors
+V_k for the drive keeps the response in the matching LEFT singular vectors
+U_k, because H V_k = U_k S_k -- one truncation selects both.  What differs
+between the modes is how the cut for each line is chosen:
+
+  svd_select = 0  (default, unchanged)  one threshold for the whole band:
+        drive_rcond > 0  ->  drive_rcond x the band's median structural
+                             spread (_effective_drive_rcond), then each line
+                             keeps sigma >= that x its own sigma_max
+        drive_rcond < 0  ->  an absolute ratio |drive_rcond|, e.g. -1e-3
+        drive_rcond = 0  ->  no restriction
+  svd_select = 1  each line chooses from ITS OWN spectrum: the deepest gap
+        of at least svd_gap_min between adjacent ratios sigma_k/sigma_1
+        (among ratios >= svd_floor) marks that line's structural floor -- the
+        deepest, not the largest, because near a resonance the largest gap is
+        sigma_1/sigma_2.  The line's reference is the smallest direction above
+        that gap, and the cut is
+        drive_rcond x that reference -- the same meaning drive_rcond has in
+        the band mode, now per line (1.0 keeps everything above the gap; the
+        rig's tuned 2.0 also drops the weakest structural direction when it
+        lies within 2x of the gap).  A line with no gap that large keeps all
+        directions above svd_floor.  drive_rcond < 0 or 0 behave exactly as
+        in the band mode.
+
+    svd_select    field 16, default 0
+    svd_gap_min   field 17, default 3.0   (ratio between adjacent sigmas)
+    svd_floor     field 18, default 1e-6  (sigma/sigma_1 below this is never
+                                           kept, and never counted as a gap)
+    svd_weak_max  field 19, default 0.05  (a gap counts as a structural floor
+                                           only if the direction below it has
+                                           sigma/sigma_1 at or under this)
+
+The base class drops EMPTY fields when it parses the string, so to reach
+field 16 every field before it must be written out.  A full default string
+with per-line selection on:
+    1e-6,0.5,20,1.0,0.95,4,-9,0,2,2.0,0,3,0.5,0.5,0.5,1,3,1e-6,0.05
 """
 
 import os
@@ -156,20 +196,37 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         # was latent, and would have fired the moment a law was constructed
         # with an FRF already available.
         self.bm_rank = 4
+        self.svd_select = 0
+        self.svd_gap_min = 3.0
+        self.svd_floor = 1e-6
+        self.svd_weak_max = 0.05
         extra_parameters = kwargs.get('extra_parameters', args[3] if len(args) > 3 else '')
         if extra_parameters:
             try:
                 parts = [p.strip() for p in str(extra_parameters).split(',') if p.strip() != '']
                 if len(parts) >= 6:
                     self.bm_rank = int(float(parts[5]))
+                if len(parts) >= 16:
+                    self.svd_select = int(float(parts[15]))
+                if len(parts) >= 17:
+                    self.svd_gap_min = max(1.0, float(parts[16]))
+                if len(parts) >= 18:
+                    self.svd_floor = abs(float(parts[17]))
+                if len(parts) >= 19:
+                    self.svd_weak_max = abs(float(parts[18]))
             except ValueError:
                 pass
+        # per-call record of how many directions each fast solve kept
+        self._k_counts = {}
 
         self.n_fast_solves = 0
         self.n_safe_solves = 0
         self._h_changed_this_call = False
 
-        print(f"[optimal_diagonal_control_fast] bm_rank={self.bm_rank}", flush=True)
+        print(f"[optimal_diagonal_control_fast] bm_rank={self.bm_rank} "
+              f"svd_select={self.svd_select} ({'per line' if self.svd_select == 1 else 'band'}) "
+              f"svd_gap_min={self.svd_gap_min:g} svd_floor={self.svd_floor:g} "
+              f"svd_weak_max={self.svd_weak_max:g}", flush=True)
 
         super().__init__(*args, **kwargs)
 
@@ -182,7 +239,13 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         # call, whether it's safe to use the fast unconstrained path.
         H_clean = np.nan_to_num(transfer_function, nan=0.0, posinf=0.0, neginf=0.0)
         self._h_changed_this_call = self._h_moved(H_clean)
+        self._k_counts = {}
         super()._refine_batch(transfer_function)
+        if self._k_counts and (self._n_calls <= 5 or self._n_calls % 25 == 0):
+            dist = ', '.join(f'k={k}: {n}' for k, n in sorted(self._k_counts.items()))
+            print(f"[optimal_diagonal_control_fast] directions kept per solved line "
+                  f"({'per-line gap' if self.svd_select == 1 else 'band threshold'}): {dist}",
+                  flush=True)
 
     def _h_moved(self, H_clean):
         """Has the FRF moved enough to make the unconstrained fast path
@@ -501,8 +564,9 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         # which only halves it.
         #
         # Set drive_rcond to 0 to disable and recover the run-22 behaviour.
-        rc = self._effective_drive_rcond(H)
-        if not (rc > 0):
+        per_line = self.svd_select == 1 and self.drive_rcond > 0
+        rc = None if per_line else self._effective_drive_rcond(H)
+        if not per_line and not (rc > 0):
             return None
         try:
             _, sv, Vh = np.linalg.svd(H, full_matrices=False)
@@ -510,12 +574,43 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
             return None
         if sv.size == 0 or not np.isfinite(sv[0]) or sv[0] <= 0:
             return None
-        k = int(np.sum(sv >= rc*sv[0]))
+        if per_line:
+            k = self._per_line_k(sv)
+        else:
+            k = int(np.sum(sv >= rc*sv[0]))
+        self._k_counts[k] = self._k_counts.get(k, 0) + 1
         if k < 1:
             k = 1
         if k >= H.shape[1]:
             return None          # nothing excluded, skip the change of basis
         return Vh[:k].conj().T
+
+    def _per_line_k(self, sv):
+        """Directions to keep at one line, chosen from that line's own
+        singular values (svd_select = 1).  See PER-LINE SINGULAR-VECTOR
+        SELECTION in the module docstring."""
+        ratios = sv/sv[0]
+        valid = ratios >= max(self.svd_floor, 0.0)
+        r = ratios[valid]
+        if r.size < 2:
+            return max(1, int(r.size))
+        gaps = r[:-1]/np.maximum(r[1:], 1e-300)
+        # The DEEPEST qualifying gap, not the largest.  Near a resonance one
+        # mode dominates and the largest gap is sigma_1/sigma_2 (20x or more),
+        # which would keep a single direction and abandon every other
+        # channel.  The structural floor is at the bottom of the spectrum.
+        # ...and only where the direction BELOW the gap is genuinely weak
+        # (sigma/sigma_1 <= svd_weak_max).  Without this, a line whose only
+        # qualifying gap is a resonance's sigma_1/sigma_2 still keeps one
+        # direction: on the sweep plant with svd_gap_min 6, 16-81 of 361
+        # lines did exactly that.
+        big = np.where((gaps >= self.svd_gap_min) & (r[1:] <= self.svd_weak_max))[0]
+        if big.size == 0:
+            return int(r.size)                  # no structural floor: keep all valid
+        i = int(big[-1])
+        ref = r[i]                              # smallest direction above the gap
+        thr = float(np.clip(self.drive_rcond*ref, 0.0, 0.5))
+        return max(1, int(np.sum(ratios >= thr)))
 
     def _solve_one_bin(self, H, y_target, X_warm=None):
         # X_warm is the base class's IRLS warm start; the factored solve here
