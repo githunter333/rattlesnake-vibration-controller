@@ -140,11 +140,27 @@ between the modes is how the cut for each line is chosen:
     svd_weak_max  field 19, default 0.05  (a gap counts as a structural floor
                                            only if the direction below it has
                                            sigma/sigma_1 at or under this)
+    svd_min_keep  field 20, default 0     FEWEST directions any line keeps, in
+                                          EITHER mode: 0 = auto, the band's
+                                          structural rank minus one (rank from
+                                          the median spectrum's largest gap; 5
+                                          on the 6-drive frame, so at least 4);
+                                          n >= 1 = that number; -1 = N - 1.
+                                          1 restores the pre-2026-10-24
+                                          behaviour exactly.
+
+    WHY THE FLOOR, and why it is ON by default unlike the other new fields:
+    every cut is relative to the line's own sigma_1, and next to a strong
+    resonance every other direction looks weak against it, so either mode
+    can keep one or two directions there and abandon the channels that mode
+    does not reach (the sweep plant: band mode and per-line mode both did).
+    The floor only RAISES k on such lines; on a line that already keeps at
+    least the floor nothing changes.
 
 The base class drops EMPTY fields when it parses the string, so to reach
 field 16 every field before it must be written out.  A full default string
 with per-line selection on:
-    1e-6,0.5,20,1.0,0.95,4,-9,0,2,2.0,0,3,0.5,0.5,0.5,1,3,1e-6,0.05
+    1e-6,0.5,20,1.0,0.95,4,-9,0,2,2.0,0,3,0.5,0.5,0.5,1,3,1e-6,0.05,0
 """
 
 import os
@@ -200,6 +216,7 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         self.svd_gap_min = 3.0
         self.svd_floor = 1e-6
         self.svd_weak_max = 0.05
+        self.svd_min_keep = 0          # 0 = auto (structural rank - 1)
         extra_parameters = kwargs.get('extra_parameters', args[3] if len(args) > 3 else '')
         if extra_parameters:
             try:
@@ -214,6 +231,8 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
                     self.svd_floor = abs(float(parts[17]))
                 if len(parts) >= 19:
                     self.svd_weak_max = abs(float(parts[18]))
+                if len(parts) >= 20:
+                    self.svd_min_keep = int(float(parts[19]))
             except ValueError:
                 pass
         # per-call record of how many directions each fast solve kept
@@ -226,7 +245,8 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         print(f"[optimal_diagonal_control_fast] bm_rank={self.bm_rank} "
               f"svd_select={self.svd_select} ({'per line' if self.svd_select == 1 else 'band'}) "
               f"svd_gap_min={self.svd_gap_min:g} svd_floor={self.svd_floor:g} "
-              f"svd_weak_max={self.svd_weak_max:g}", flush=True)
+              f"svd_weak_max={self.svd_weak_max:g} "
+              f"svd_min_keep={self.svd_min_keep if self.svd_min_keep != 0 else 'auto'}", flush=True)
 
         super().__init__(*args, **kwargs)
 
@@ -240,12 +260,14 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         H_clean = np.nan_to_num(transfer_function, nan=0.0, posinf=0.0, neginf=0.0)
         self._h_changed_this_call = self._h_moved(H_clean)
         self._k_counts = {}
+        self._n_raised = 0
         super()._refine_batch(transfer_function)
         if self._k_counts and (self._n_calls <= 5 or self._n_calls % 25 == 0):
             dist = ', '.join(f'k={k}: {n}' for k, n in sorted(self._k_counts.items()))
             print(f"[optimal_diagonal_control_fast] directions kept per solved line "
-                  f"({'per-line gap' if self.svd_select == 1 else 'band threshold'}): {dist}",
-                  flush=True)
+                  f"({'per-line gap' if self.svd_select == 1 else 'band threshold'}, "
+                  f"floor {self._min_keep(self.N or 0)}): {dist}; "
+                  f"{self._n_raised} line(s) raised to the floor", flush=True)
 
     def _h_moved(self, H_clean):
         """Has the FRF moved enough to make the unconstrained fast path
@@ -578,12 +600,70 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
             k = self._per_line_k(sv)
         else:
             k = int(np.sum(sv >= rc*sv[0]))
+        # FLOOR ON THE COUNT (2026-10-24).  Every cut is relative to the line's
+        # own sigma_1, and next to a strong resonance every other direction
+        # looks weak against it, so either selection mode can keep one or two
+        # directions there and abandon the channels the resonant mode does
+        # not reach.  Never keep fewer than _min_keep.
+        k_floor = min(self._min_keep(H.shape[1]), sv.size)
+        if k < k_floor:
+            k = k_floor
+            self._n_raised = getattr(self, '_n_raised', 0) + 1
         self._k_counts[k] = self._k_counts.get(k, 0) + 1
         if k < 1:
             k = 1
         if k >= H.shape[1]:
             return None          # nothing excluded, skip the change of basis
         return Vh[:k].conj().T
+
+    def _band_structural_rank(self):
+        """Directions above the largest gap in the band's MEDIAN in-band
+        singular-value ratios -- the plant's structural rank, measured the
+        same way _effective_drive_rcond finds its reference.  Full rank when
+        the median spectrum has no gap of at least svd_gap_min.  Cached per
+        FRF shape; None until the FRF is in hand."""
+        Hb = self.H_cache
+        if Hb is None:
+            return None
+        key = Hb.shape
+        if getattr(self, '_struct_rank_key', None) == key:
+            return self._struct_rank
+        if Hb.shape[0] == self.y_diag_target.shape[0]:
+            in_band = self.y_diag_target.max(axis=1) > 0
+            if in_band.any():
+                Hb = Hb[in_band]
+        try:
+            sv = np.linalg.svd(np.nan_to_num(Hb), compute_uv=False)
+        except np.linalg.LinAlgError:
+            return None
+        med = np.median(sv/np.maximum(sv[:, :1], 1e-300), axis=0)
+        med = med[np.isfinite(med) & (med > 0)]
+        n = int(med.size)
+        if n >= 2:
+            gaps = med[:-1]/np.maximum(med[1:], 1e-300)
+            i = int(np.argmax(gaps))
+            if gaps[i] >= self.svd_gap_min:
+                n = i + 1
+        self._struct_rank, self._struct_rank_key = n, key
+        print(f"[optimal_diagonal_control_fast] band structural rank {n} of "
+              f"{Hb.shape[2]} drives (median sigma ratios "
+              f"{np.array2string(med, precision=4)}); fewest directions kept "
+              f"per line = {self._min_keep(Hb.shape[2])}", flush=True)
+        return n
+
+    def _min_keep(self, N):
+        """Fewest singular directions any line may keep.
+           svd_min_keep >= 1 : that number
+           svd_min_keep == 0 : auto = band structural rank - 1 (at least 1)
+           svd_min_keep < 0  : N + svd_min_keep, e.g. -1 -> N - 1"""
+        if not N:
+            return 1
+        if self.svd_min_keep >= 1:
+            return int(min(self.svd_min_keep, N))
+        if self.svd_min_keep < 0:
+            return int(max(1, N + self.svd_min_keep))
+        r = self._band_structural_rank()
+        return int(max(1, (r if r is not None else N) - 1))
 
     def _per_line_k(self, sv):
         """Directions to keep at one line, chosen from that line's own
