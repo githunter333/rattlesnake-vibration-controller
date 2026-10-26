@@ -45,8 +45,9 @@ sys.path.insert(0, HERE)
 import coherence_sweep as cs                          # noqa: E402
 from rattlesnake.utilities import load_control_module  # noqa: E402
 
-# Full parameter string (the parser drops empty fields, so every field is
-# written out).  {bins}, {dom} and {rc} are filled per run.
+# Full parameter string, every field written out so the runs are explicit
+# (empty fields would also work since 2026-10-25).  {bins}, {dom} and {rc}
+# are filled per run.
 PARAMS = '1e-6,0.5,{bins},1.0,0.95,4,-9,{dom},2,{rc},0,3,0.5,0.5,0.5,0,3,1e-6,0.05,0'
 
 

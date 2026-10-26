@@ -132,9 +132,10 @@ max_solve_ms_per_update - field 21 (fields 16-20 are optimal_diagonal_control_fa
               half.  Only line solving counts; the per-call bookkeeping
               (error triage across the band, logging) is a fixed cost on
               top, reported in the log as "other".  Set max_bins_per_update high (e.g. 400) to let time
-              decide.  The parser drops EMPTY fields, so every field before
-              21 must be written out, e.g. with a 500 ms budget:
-              1e-6,0.5,400,1.0,0.95,4,-9,0,2,2.0,0,3,0.5,0.5,0.5,0,3,1e-6,0.05,0,500
+              decide.  Empty fields keep their position and mean "default"
+              (since 2026-10-25), so a 500 ms budget with 400 lines and every
+              other field at its default is
+              ,,400,,,,,,,,,,,,,,,,,,500
 A bare single value (no comma) is accepted too, read as `reg`.
 
 WHAT KIND OF LOOP THIS IS
@@ -397,25 +398,30 @@ class optimal_diagonal_control:
         self.response_trim_gate_db = 0.5
         if extra_parameters:
             try:
-                parts = [p.strip() for p in str(extra_parameters).split(',') if p.strip() != '']
-                if len(parts) >= 1: self.reg = float(parts[0])
-                if len(parts) >= 2: self.frf_update_threshold = float(parts[1])
-                if len(parts) >= 3: self.max_bins_per_update = int(float(parts[2]))
-                if len(parts) >= 4: self.error_threshold_db = float(parts[3])
-                if len(parts) >= 5: self.max_drive_coherence = float(parts[4])
+                # EMPTY FIELDS KEEP THEIR POSITION (2026-10-25): an empty field means
+                # "use the default".  The parser used to DROP empty fields, so
+                # ',,200' set reg = 200 instead of max_bins_per_update.  Strings
+                # with no empty fields parse exactly as before.
+                parts = [p.strip() for p in str(extra_parameters).split(',')]
+                has = lambda i: len(parts) > i and parts[i] != ''
+                if has(0): self.reg = float(parts[0])
+                if has(1): self.frf_update_threshold = float(parts[1])
+                if has(2): self.max_bins_per_update = int(float(parts[2]))
+                if has(3): self.error_threshold_db = float(parts[3])
+                if has(4): self.max_drive_coherence = float(parts[4])
                 # parts[5] is bm_rank, read by optimal_diagonal_control_fast
-                if len(parts) >= 7: self.startup_test_level_cap_db = float(parts[6])
-                if len(parts) >= 8: self.error_domain = (
+                if has(6): self.startup_test_level_cap_db = float(parts[6])
+                if has(7): self.error_domain = (
                     'linear' if float(parts[7]) == 0 else 'db')
-                if len(parts) >= 9: self.n_irls_passes = max(0, int(float(parts[8])))
-                if len(parts) >= 10: self.drive_rcond = float(parts[9])
-                if len(parts) >= 11: self.response_trim_gain = max(0.0, float(parts[10]))
-                if len(parts) >= 12: self.response_trim_limit_db = abs(float(parts[11]))
-                if len(parts) >= 13: self.response_trim_step_db = abs(float(parts[12]))
-                if len(parts) >= 14: self.response_trim_deadband_db = abs(float(parts[13]))
-                if len(parts) >= 15: self.response_trim_gate_db = abs(float(parts[14]))
+                if has(8): self.n_irls_passes = max(0, int(float(parts[8])))
+                if has(9): self.drive_rcond = float(parts[9])
+                if has(10): self.response_trim_gain = max(0.0, float(parts[10]))
+                if has(11): self.response_trim_limit_db = abs(float(parts[11]))
+                if has(12): self.response_trim_step_db = abs(float(parts[12]))
+                if has(13): self.response_trim_deadband_db = abs(float(parts[13]))
+                if has(14): self.response_trim_gate_db = abs(float(parts[14]))
                 # fields 16-20 belong to optimal_diagonal_control_fast
-                if len(parts) >= 21: self.max_solve_ms_per_update = max(0.0, float(parts[20]))
+                if has(20): self.max_solve_ms_per_update = max(0.0, float(parts[20]))
             except ValueError:
                 pass  # keep defaults if the string doesn't parse
 

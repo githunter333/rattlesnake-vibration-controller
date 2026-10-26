@@ -157,12 +157,22 @@ between the modes is how the cut for each line is chosen:
     The floor only RAISES k on such lines; on a line that already keeps at
     least the floor nothing changes.
 
-The base class drops EMPTY fields when it parses the string, so to reach
-field 16 every field before it must be written out.  A full default string
-with per-line selection on:
+Empty fields keep their position and mean "use the default" (since
+2026-10-25; before that the parser DROPPED them, so every earlier field had to
+be written out).  Per-line selection on, everything else default:
+    ,,,,,,,,,,,,,,,1
+A full default string with per-line selection on:
     1e-6,0.5,20,1.0,0.95,4,-9,0,2,2.0,0,3,0.5,0.5,0.5,1,3,1e-6,0.05,0
 Field 21, max_solve_ms_per_update, is the base class's per-call time budget
 (see optimal_diagonal_control); it caps the SDP fallback's calls too.
+
+FIELD 25 (added 2026-10-25)
+    gate_reference      field 25, default 1  what the fast/SDP movement gate
+                                             compares the FRF with: 1 = the
+                                             previous call's FRF (per-cycle
+                                             movement, what its threshold was
+                                             set from); 0 = each line's FRF at
+                                             its last solve (pre-2026-10-25)
 
 FIELDS 22-24 (added 2026-10-25)
     cap_baseline        field 22, default 0  1 = apply max_drive_coherence to
@@ -181,8 +191,9 @@ FIELDS 22-24 (added 2026-10-25)
                                              0 = always the buzz seed (pre-
                                              2026-10-25)
 Fields 23 and 24 default ON, so a string with 22 or fewer fields no longer
-reproduces a pre-2026-10-25 run exactly.  For that, write all 24 fields with
-23 and 24 set to 0 (the parser drops empty fields, so none can be skipped).
+reproduces a pre-2026-10-25 run exactly.  For that, append fields 23-25 as 0
+(empty fields in between are fine): e.g. ',,,,,,,,,,,,,,,,,,,,,,0,0,0' -- field
+25 is the movement-gate reference below.
 """
 
 import os
@@ -250,29 +261,38 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         self.cap_baseline = 0          # field 22
         self.db_coherence_guard = 1    # field 23
         self.warm_start = 1            # field 24
+        self.gate_reference = 1        # field 25: 1 = previous call's FRF, 0 = per-line
+        self._H_prev_call = None
         extra_parameters = kwargs.get('extra_parameters', args[3] if len(args) > 3 else '')
         if extra_parameters:
             try:
-                parts = [p.strip() for p in str(extra_parameters).split(',') if p.strip() != '']
-                if len(parts) >= 6:
+                # EMPTY FIELDS KEEP THEIR POSITION (2026-10-25): an empty field means
+                # "use the default".  The parser used to DROP empty fields, so
+                # ',,200' set reg = 200 instead of max_bins_per_update.  Strings
+                # with no empty fields parse exactly as before.
+                parts = [p.strip() for p in str(extra_parameters).split(',')]
+                has = lambda i: len(parts) > i and parts[i] != ''
+                if has(5):
                     self.bm_rank = int(float(parts[5]))
-                if len(parts) >= 16:
+                if has(15):
                     self.svd_select = int(float(parts[15]))
-                if len(parts) >= 17:
+                if has(16):
                     self.svd_gap_min = max(1.0, float(parts[16]))
-                if len(parts) >= 18:
+                if has(17):
                     self.svd_floor = abs(float(parts[17]))
-                if len(parts) >= 19:
+                if has(18):
                     self.svd_weak_max = abs(float(parts[18]))
-                if len(parts) >= 20:
+                if has(19):
                     self.svd_min_keep = int(float(parts[19]))
                 # field 21 (max_solve_ms_per_update) is the base class's
-                if len(parts) >= 22:
+                if has(21):
                     self.cap_baseline = int(float(parts[21]))
-                if len(parts) >= 23:
+                if has(22):
                     self.db_coherence_guard = int(float(parts[22]))
-                if len(parts) >= 24:
+                if has(23):
                     self.warm_start = int(float(parts[23]))
+                if has(24):
+                    self.gate_reference = int(float(parts[24]))
             except ValueError:
                 pass
         # per-call record of how many directions each fast solve kept
@@ -288,7 +308,9 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
               f"svd_weak_max={self.svd_weak_max:g} "
               f"svd_min_keep={self.svd_min_keep if self.svd_min_keep != 0 else 'auto'} "
               f"cap_baseline={self.cap_baseline} db_coherence_guard={self.db_coherence_guard} "
-              f"warm_start={self.warm_start}", flush=True)
+              f"warm_start={self.warm_start} "
+              f"gate_reference={'previous call' if self.gate_reference else 'per-line last solve'}",
+              flush=True)
 
         super().__init__(*args, **kwargs)
 
@@ -301,6 +323,7 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         # call, whether it's safe to use the fast unconstrained path.
         H_clean = np.nan_to_num(transfer_function, nan=0.0, posinf=0.0, neginf=0.0)
         self._h_changed_this_call = self._h_moved(H_clean)
+        self._H_prev_call = H_clean.copy()
         self._k_counts = {}
         self._n_raised = 0
         super()._refine_batch(transfer_function)
@@ -337,6 +360,19 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         """
         if self.H_cache is None:
             return True
+        # REFERENCE (fix, 2026-10-25; field 25).  The gate is meant to measure
+        # how much the FRF moved SINCE THE LAST CALL -- its threshold was set
+        # from "per-cycle movement" (median 0.196, 90th 0.232 on runs 29/31).
+        # But it compared against H_cache, which holds each line's FRF at that
+        # line's LAST SOLVE.  With 20 lines solved per call against ~900 in
+        # band, most of the band carries an FRF several calls old, so with the
+        # FRF update on the metric measured accumulated drift, not per-cycle
+        # movement, and once that passed the threshold every later call would
+        # have gone to the SDP.  Now: the previous call's FRF (falls back to
+        # H_cache on the first call).  gate_reference = 0 restores the old
+        # reference.  Both are logged.
+        H_ref = (self._H_prev_call if self.gate_reference and self._H_prev_call is not None
+                 and self._H_prev_call.shape == H_clean.shape else self.H_cache)
         # IN-BAND ONLY.  Measured over the whole array this metric is dominated
         # by the out-of-band bins, where there is no excitation, the live
         # estimate is noise, and the relative change per cycle is enormous.
@@ -347,19 +383,22 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         # demoted on 99% of cycles: the gate was responding to out-of-band
         # noise, never to the plant.  Same mistake as measuring the
         # singular-value spread over all lines -- see _effective_drive_rcond.
-        Hc, Hn = self.H_cache, H_clean
-        if (Hc.shape[0] == self.y_diag_target.shape[0]
-                and Hn.shape[0] == self.y_diag_target.shape[0]):
-            in_band = self.y_diag_target.max(axis=1) > 0
-            if in_band.any():
-                Hc, Hn = Hc[in_band], Hn[in_band]
-        baseline = np.linalg.norm(Hc.reshape(-1))
-        if not np.isfinite(baseline) or baseline <= 0:
+        def _rel(Href):
+            Hc, Hn = Href, H_clean
+            if (Hc.shape[0] == self.y_diag_target.shape[0]
+                    and Hn.shape[0] == self.y_diag_target.shape[0]):
+                in_band = self.y_diag_target.max(axis=1) > 0
+                if in_band.any():
+                    Hc, Hn = Hc[in_band], Hn[in_band]
+            baseline = np.linalg.norm(Hc.reshape(-1))
+            if not np.isfinite(baseline) or baseline <= 0:
+                return np.inf
+            delta = np.linalg.norm((Hn - Hc).reshape(-1))
+            return delta/baseline if np.isfinite(delta) else np.inf
+        rel = _rel(H_ref)
+        if not np.isfinite(rel):
             return True
-        delta = np.linalg.norm((Hn - Hc).reshape(-1))
-        if not np.isfinite(delta):
-            return True
-        rel = delta/baseline
+        rel_since_solve = rel if H_ref is self.H_cache else _rel(self.H_cache)
         moved = rel > self.frf_update_threshold
 
         # Record what the FRF actually does, whether or not it trips the gate.
@@ -374,7 +413,9 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         if moved or n <= 5 or n % 25 == 0:
             a = np.asarray(self._h_move_log)
             print(f"[optimal_diagonal_control_fast] FRF moved {rel:.4f} "
-                  f"(threshold {self.frf_update_threshold:g}, "
+                  f"since the {'previous call' if H_ref is not self.H_cache else 'per-line last solve'} "
+                  f"({rel_since_solve:.4f} since each line's last solve; "
+                  f"threshold {self.frf_update_threshold:g}, "
                   f"{'SDP' if moved else 'fast'} path) -- over {n} calls: "
                   f"median {np.median(a):.4f}, 90th {np.percentile(a, 90):.4f}, "
                   f"max {a.max():.4f}, demoted {100*np.mean(a > self.frf_update_threshold):.0f}%; "
