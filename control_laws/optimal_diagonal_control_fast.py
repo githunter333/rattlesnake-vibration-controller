@@ -161,6 +161,28 @@ The base class drops EMPTY fields when it parses the string, so to reach
 field 16 every field before it must be written out.  A full default string
 with per-line selection on:
     1e-6,0.5,20,1.0,0.95,4,-9,0,2,2.0,0,3,0.5,0.5,0.5,1,3,1e-6,0.05,0
+Field 21, max_solve_ms_per_update, is the base class's per-call time budget
+(see optimal_diagonal_control); it caps the SDP fallback's calls too.
+
+FIELDS 22-24 (added 2026-10-25)
+    cap_baseline        field 22, default 0  1 = apply max_drive_coherence to
+                                             the buzz baseline that unsolved
+                                             lines sit on (see _buzz_solve_all)
+    db_coherence_guard  field 23, default 1  with the dB objective (field 8 =
+                                             1), a fast solution that breaks
+                                             max_drive_coherence is re-solved
+                                             with the SDP for that line; 2 =
+                                             shrink its cross terms instead
+                                             (cheaper, less accurate); 0 = off
+                                             (pre-2026-10-25)
+    warm_start          field 24, default 1  start each fast solve from the
+                                             line's current drive when that
+                                             scores better than the buzz seed;
+                                             0 = always the buzz seed (pre-
+                                             2026-10-25)
+Fields 23 and 24 default ON, so a string with 22 or fewer fields no longer
+reproduces a pre-2026-10-25 run exactly.  For that, write all 24 fields with
+23 and 24 set to 0 (the parser drops empty fields, so none can be skipped).
 """
 
 import os
@@ -184,6 +206,14 @@ _spec = importlib.util.spec_from_file_location("optimal_diagonal_control_base", 
 _base_module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_base_module)
 optimal_diagonal_control = _base_module.optimal_diagonal_control
+# The drive-coherence cap used by the closed-form laws (shrink the offending
+# cross terms, re-project onto the PSD cone).  Loaded by path for the same
+# reason as the base class.
+_helpers_spec = importlib.util.spec_from_file_location(
+    "_rattlesnake_control_laws_helpers_fast", os.path.join(_this_dir, "control_laws.py"))
+_helpers = importlib.util.module_from_spec(_helpers_spec)
+_helpers_spec.loader.exec_module(_helpers)
+_cap_drive_coherence = _helpers._cap_drive_coherence
 
 
 # 10/ln(10), squared: converts a natural-log ratio to dB and back.
@@ -217,6 +247,9 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         self.svd_floor = 1e-6
         self.svd_weak_max = 0.05
         self.svd_min_keep = 0          # 0 = auto (structural rank - 1)
+        self.cap_baseline = 0          # field 22
+        self.db_coherence_guard = 1    # field 23
+        self.warm_start = 1            # field 24
         extra_parameters = kwargs.get('extra_parameters', args[3] if len(args) > 3 else '')
         if extra_parameters:
             try:
@@ -233,6 +266,13 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
                     self.svd_weak_max = abs(float(parts[18]))
                 if len(parts) >= 20:
                     self.svd_min_keep = int(float(parts[19]))
+                # field 21 (max_solve_ms_per_update) is the base class's
+                if len(parts) >= 22:
+                    self.cap_baseline = int(float(parts[21]))
+                if len(parts) >= 23:
+                    self.db_coherence_guard = int(float(parts[22]))
+                if len(parts) >= 24:
+                    self.warm_start = int(float(parts[23]))
             except ValueError:
                 pass
         # per-call record of how many directions each fast solve kept
@@ -246,7 +286,9 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
               f"svd_select={self.svd_select} ({'per line' if self.svd_select == 1 else 'band'}) "
               f"svd_gap_min={self.svd_gap_min:g} svd_floor={self.svd_floor:g} "
               f"svd_weak_max={self.svd_weak_max:g} "
-              f"svd_min_keep={self.svd_min_keep if self.svd_min_keep != 0 else 'auto'}", flush=True)
+              f"svd_min_keep={self.svd_min_keep if self.svd_min_keep != 0 else 'auto'} "
+              f"cap_baseline={self.cap_baseline} db_coherence_guard={self.db_coherence_guard} "
+              f"warm_start={self.warm_start}", flush=True)
 
         super().__init__(*args, **kwargs)
 
@@ -367,10 +409,13 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
     def _bm_obj_and_grad(self, v, H, y_target, N, r):
         """Objective and gradient for the factored solve.
 
-        error_domain 'db' (the default since 2026-09-17) minimizes
-            sum_m [10 log10(yhat_m / y_m)]^2
-        directly.  'linear' restores the original
+        error_domain 'linear' (the DEFAULT, set in the base class) minimizes
             sum_m (yhat_m - y_m)^2.
+        error_domain 'db' (opt in with field 8 = 1) minimizes
+            sum_m [10 log10(yhat_m / y_m)]^2
+        directly.  CORRECTED 2026-10-25: this docstring used to call 'db' the
+        default since 2026-09-17; the base class has always set 'linear' and
+        says so, and the code follows the base class.
 
         WHY THIS CHANGED.  The linear objective caps what abandoning a channel
         can cost at that channel's own target squared -- drive its response to
@@ -430,10 +475,37 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         w_top = np.clip(w[order], 0, None)
         return (V[:, order] * np.sqrt(w_top)[None, :]).astype(complex)
 
-    def _bm_solve(self, H, y_target):
+    def _warm_L(self, X, r):
+        """Rank-r factor of a drive CPSD (top-r eigenpairs), or None."""
+        if X is None or not np.all(np.isfinite(X)):
+            return None
+        Xh = (X + X.conj().T)/2
+        w, V = np.linalg.eigh(Xh)
+        if not np.any(w > 0):
+            return None
+        order = np.argsort(-w)[:r]
+        return (V[:, order]*np.sqrt(np.clip(w[order], 0, None))[None, :]).astype(complex)
+
+    def _bm_solve(self, H, y_target, X_warm=None):
         M, N = H.shape
         r = min(self.bm_rank, N)
         L0 = self._buzz_seeded_L(H, y_target, r)
+        # WARM START (fix 5, 2026-10-25; field 24, 0 = off).  Start from this
+        # line's CURRENT drive when that scores better than the buzz seed.
+        # Before this, every re-solve restarted from the buzz eigenvectors and
+        # threw away the line's existing solution, so a line re-solved because
+        # the FRF drifted a little was re-found from scratch: slower, and free
+        # to land in a different local minimum of the non-convex factored
+        # problem from one cycle to the next.  Taking the better of the two
+        # starts means a stale or poor current drive can never make it worse.
+        if self.warm_start and X_warm is not None:
+            Lw = self._warm_L(X_warm, r)
+            if Lw is not None and Lw.shape == L0.shape:
+                f_buzz, _ = self._bm_obj_and_grad(self._pack(L0), H, y_target, N, r)
+                f_warm, _ = self._bm_obj_and_grad(self._pack(Lw), H, y_target, N, r)
+                if np.isfinite(f_warm) and f_warm < f_buzz:
+                    L0 = Lw
+                    self.n_warm_starts = getattr(self, 'n_warm_starts', 0) + 1
         v0 = self._pack(L0)
         # Tolerances matter a lot here: on REAL (not synthetic-random) FRF
         # data, ~70% of bins hit a 200-iteration cap at tight tolerances
@@ -665,6 +737,33 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         r = self._band_structural_rank()
         return int(max(1, (r if r is not None else N) - 1))
 
+    @staticmethod
+    def _max_drive_coherence_of(X):
+        """Largest |X_ij| / sqrt(X_ii X_jj) over drive pairs -- the same
+        (magnitude) measure max_drive_coherence caps on the SDP path."""
+        d = np.real(np.diag(X))
+        den = np.sqrt(np.maximum(np.outer(d, d), 1e-300))
+        c = np.abs(X)/den
+        np.fill_diagonal(c, 0.0)
+        return float(np.max(c))
+
+    def _buzz_solve_all(self, H_clean, sysid_response_cpsd):
+        """The instant baseline every line starts on (base class), optionally
+        coherence-capped (fix 8, 2026-10-25; field 22, default 0 = off).
+
+        Lines the scheduler has not yet solved keep this baseline, and the base
+        class leaves it uncapped on purpose: it takes its cross terms from the
+        system-ID response, which had independent drives.  But after the
+        pseudoinverse those lines can still carry drive coherence near 1 --
+        the 2026-10-24 comparison read a MAXIMUM of 0.98-1.00 for the SDP law
+        itself, from exactly these lines.  cap_baseline = 1 applies
+        max_drive_coherence to the baseline too.  Also applies to the
+        deadlock escape, which rebuilds the baseline."""
+        out = super()._buzz_solve_all(H_clean, sysid_response_cpsd)
+        if self.cap_baseline and self.max_drive_coherence < 1.0:
+            out = _cap_drive_coherence(out, self.max_drive_coherence)
+        return out
+
     def _per_line_k(self, sv):
         """Directions to keep at one line, chosen from that line's own
         singular values (svd_select = 1).  See PER-LINE SINGULAR-VECTOR
@@ -693,9 +792,8 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         return max(1, int(np.sum(ratios >= thr)))
 
     def _solve_one_bin(self, H, y_target, X_warm=None):
-        # X_warm is the base class's IRLS warm start; the factored solve here
-        # reaches the dB objective directly and has no use for it, but the
-        # signature has to match so the SDP fallback below still gets it.
+        # X_warm is this line's current drive.  The SDP fallback uses it for
+        # its IRLS weights; the fast path uses it as a starting point (fix 5).
         if not self._h_changed_this_call:
             # H is unchanged since the last call -- nothing is re-
             # estimating it live right now, so the fast unconstrained
@@ -709,9 +807,34 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
                 # nothing is lost by working in a rotated basis here.
                 Vk = self._restricted_basis(H)
                 if Vk is None:
-                    return self._bm_solve(H, y_target)
-                Xk = self._bm_solve(H @ Vk, y_target)
-                return Vk @ Xk @ Vk.conj().T
+                    X = self._bm_solve(H, y_target, X_warm=X_warm)
+                else:
+                    Xw = None if X_warm is None else Vk.conj().T @ X_warm @ Vk
+                    Xk = self._bm_solve(H @ Vk, y_target, X_warm=Xw)
+                    X = Vk @ Xk @ Vk.conj().T
+                # dB-OBJECTIVE COHERENCE GUARD (fix 6, 2026-10-25; field 23).
+                # With the dB objective the unconstrained factored solve drove
+                # MEDIAN pairwise drive coherence (gamma^2) to 0.99-1.00 at 6
+                # drives (compare_optdiag.py, 2026-10-24): fully dependent
+                # drives, the failure this file's top docstring warns about.
+                # The linear objective did not (0.66 unrestricted).
+                #   1 (default): if this line's solution breaks
+                #     max_drive_coherence, re-solve THIS LINE with the SDP,
+                #     which holds the cap as a constraint.
+                #   2: shrink the offending cross terms after the solve
+                #     (cheap, but measured at +1.8 dB error: capping afterwards
+                #     breaks the inter-drive cancellation the solve relied on).
+                #   0: off (pre-2026-10-25).
+                if (self.db_coherence_guard and self.error_domain == 'db'
+                        and self.max_drive_coherence < 1.0
+                        and self._max_drive_coherence_of(X) > self.max_drive_coherence + 1e-6):
+                    if self.db_coherence_guard == 2:
+                        self.n_db_guard_caps = getattr(self, 'n_db_guard_caps', 0) + 1
+                        return _cap_drive_coherence(X[None], self.max_drive_coherence)[0]
+                    self.n_db_guard_sdp = getattr(self, 'n_db_guard_sdp', 0) + 1
+                    self.n_safe_solves += 1
+                    return super()._solve_one_bin(H, y_target, X_warm=X_warm)
+                return X
             except Exception as e:
                 print(f"[optimal_diagonal_control_fast] BM solve raised {type(e).__name__}: {e} "
                       f"-- falling back to SDP for this bin", flush=True)

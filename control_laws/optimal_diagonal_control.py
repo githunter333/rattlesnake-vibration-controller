@@ -122,6 +122,19 @@ response_trim_gate_db - how close the solver must have come to its own target
               Deliberately NOT error_threshold_db, which is the scheduler's
               "worth refining" bar and answers a different question -- see
               the comment in __init__ and what run 35 measured.
+max_solve_ms_per_update - field 21 (fields 16-20 are optimal_diagonal_control_fast's
+              own and are ignored here).  Milliseconds of line solving per
+              call; 0 (default) = off, max_bins_per_update alone decides.  > 0:
+              solve lines in the usual priority order while the solve time
+              spent so far plus a running estimate of one solve fits under
+              this, never more than max_bins_per_update.  The first solve of
+              a call always runs.  Step 1 (drifted lines) may use at most
+              half.  Only line solving counts; the per-call bookkeeping
+              (error triage across the band, logging) is a fixed cost on
+              top, reported in the log as "other".  Set max_bins_per_update high (e.g. 400) to let time
+              decide.  The parser drops EMPTY fields, so every field before
+              21 must be written out, e.g. with a 500 ms budget:
+              1e-6,0.5,400,1.0,0.95,4,-9,0,2,2.0,0,3,0.5,0.5,0.5,0,3,1e-6,0.05,0,500
 A bare single value (no comma) is accepted too, read as `reg`.
 
 WHAT KIND OF LOOP THIS IS
@@ -156,6 +169,8 @@ open loop, which understates it just as badly.  Precisely:
 The honest one-line description is an indirect adaptive (self-tuning)
 regulator: fast model update, optional slow error trim.
 """
+
+import time
 
 import numpy as np
 
@@ -340,6 +355,17 @@ class optimal_diagonal_control:
         # differently conditioned article without re-tuning.  Negative means
         # an absolute ratio, |value|.
         self.drive_rcond = 2.0
+        # TIME BUDGET PER CALL (field 21, added 2026-10-25), in milliseconds of
+        # line solving.  0 (default) = off: max_bins_per_update alone sets the
+        # work per call, exactly as before.  > 0: the scheduler keeps solving
+        # lines, in its usual priority order, until this much solve time has
+        # been spent, still never more than max_bins_per_update lines.  A count
+        # runs very differently depending on which lines come up (worst lines
+        # take longer), on the machine, and -- for the fast subclass -- on
+        # whether this call fell back to the SDP (~9x slower per line on the
+        # rig's FRF).  A time limit holds the cycle either way.  To let time
+        # alone decide, set max_bins_per_update high (e.g. 400).
+        self.max_solve_ms_per_update = 0.0
         # RESPONSE-ERROR TRIM -- fields 11-14, OFF by default.  Every
         # behaviour change in this file ships defaulted off (commit
         # 45d417a3); this one is no exception, so an archived profile that
@@ -388,6 +414,8 @@ class optimal_diagonal_control:
                 if len(parts) >= 13: self.response_trim_step_db = abs(float(parts[12]))
                 if len(parts) >= 14: self.response_trim_deadband_db = abs(float(parts[13]))
                 if len(parts) >= 15: self.response_trim_gate_db = abs(float(parts[14]))
+                # fields 16-20 belong to optimal_diagonal_control_fast
+                if len(parts) >= 21: self.max_solve_ms_per_update = max(0.0, float(parts[20]))
             except ValueError:
                 pass  # keep defaults if the string doesn't parse
 
@@ -794,6 +822,47 @@ class optimal_diagonal_control:
         self._H_last_used = H_clean
         H_changed = self.H_cache is None or not np.array_equal(H_clean, self.H_cache)
         budget = self.max_bins_per_update
+        # Time budget (max_solve_ms_per_update).  Checked BEFORE each solve;
+        # the first solve of a call always runs, so a budget smaller than one
+        # solve still makes progress.  Step 1 may use at most half the time,
+        # mirroring its half-the-count cap.
+        _t0 = time.perf_counter()
+        _limit = self.max_solve_ms_per_update/1000.0
+        self._solves_this_call = 0
+        self._stopped_by_time = False
+        # PREDICTIVE: a solve is started only if the time spent so far PLUS a
+        # running estimate of one solve still fits.  A plain "is there time
+        # left?" check let one ~100 ms SDP solve start just under a 300 ms
+        # limit and finish far past it (12-drive test: 560-670 ms calls).
+        def _time_left(fraction=1.0):
+            if _limit <= 0 or self._solves_this_call == 0:
+                return True
+            # SOLVE time only: the scheduler's fixed bookkeeping before the
+            # first solve (error triage over the whole band) is not counted --
+            # at 12 drives x 30 controls it is ~250 ms on its own, and counting
+            # it left room for one solve per call.
+            est = getattr(self, '_solve_s_avg', 0.0)
+            if self._solve_s_this_call + est <= fraction*_limit:
+                return True
+            self._stopped_by_time = True
+            return False
+        def _solve(f):
+            ts = time.perf_counter()
+            X = self._solve_one_bin(H_clean[f], self._eff_target(f), X_warm=self.output_cpsd[f])
+            dt = time.perf_counter() - ts
+            # Running average of one solve.  The law's FIRST solve is left out:
+            # it includes building the cvxpy problem (the SDP is built once and
+            # reused), several times a normal solve, and seeding the average
+            # with it held the 12-drive test at one solve per call for many
+            # calls while the average decayed.
+            self._n_solves_life = getattr(self, '_n_solves_life', 0) + 1
+            if self._n_solves_life > 1:
+                prev = getattr(self, '_solve_s_avg', None)
+                self._solve_s_avg = dt if prev is None else 0.7*prev + 0.3*dt
+            self._solves_this_call += 1
+            self._solve_s_this_call += dt
+            return X
+        self._solve_s_this_call = 0.0
 
         # --- Step 1: re-solve drifted, previously-refined bins ---
         # Capped at half the budget so persistent (or noise-driven false-
@@ -826,11 +895,15 @@ class optimal_diagonal_control:
             drifted = np.array([], dtype=int)
 
         n_fix = min(drifted.size, drift_budget, budget)
-        fixed_this_call = drifted[:n_fix]
-        for f in fixed_this_call:
-            self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self._eff_target(f),
-                                                     X_warm=self.output_cpsd[f])
+        done = []
+        for f in drifted[:n_fix]:
+            if not _time_left(0.5):
+                break
+            self.output_cpsd[f] = _solve(f)
             self.H_cache[f] = H_clean[f]
+            done.append(f)
+        fixed_this_call = np.array(done, dtype=int)
+        n_fix = int(fixed_this_call.size)
         if n_fix > 0:
             self.err_db_cache[fixed_this_call] = self._err_db(H_clean, fixed_this_call)
             self.n_frf_updates += int(n_fix)
@@ -847,13 +920,15 @@ class optimal_diagonal_control:
             above_err = err_db[err_db > self.error_threshold_db]
             order = above[np.argsort(-above_err)]
 
-            n_refine = min(order.size, budget)
-            self.n_deferred = int(order.size - n_refine)
-            for f in order[:n_refine]:
-                self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self._eff_target(f),
-                                                     X_warm=self.output_cpsd[f])
+            n_refine = 0
+            for f in order[:min(order.size, budget)]:
+                if not _time_left():
+                    break
+                self.output_cpsd[f] = _solve(f)
                 self.sdp_refined[f] = True
                 self.H_cache[f] = H_clean[f]
+                n_refine += 1
+            self.n_deferred = int(order.size - n_refine)
             if n_refine > 0:
                 self.err_db_cache[order[:n_refine]] = self._err_db(H_clean, order[:n_refine])
             self.n_sdp_refinements += int(n_refine)
@@ -886,12 +961,14 @@ class optimal_diagonal_control:
             stale_err = err_db_r[degraded]
             stale_order = stale[np.argsort(-stale_err)]
 
-            n_stale = min(stale_order.size, budget)
-            self.n_stale_deferred = int(stale_order.size - n_stale)
-            for f in stale_order[:n_stale]:
-                self.output_cpsd[f] = self._solve_one_bin(H_clean[f], self._eff_target(f),
-                                                     X_warm=self.output_cpsd[f])
+            n_stale = 0
+            for f in stale_order[:min(stale_order.size, budget)]:
+                if not _time_left():
+                    break
+                self.output_cpsd[f] = _solve(f)
                 self.H_cache[f] = H_clean[f]
+                n_stale += 1
+            self.n_stale_deferred = int(stale_order.size - n_stale)
             if n_stale > 0:
                 self.err_db_cache[stale_order[:n_stale]] = self._err_db(H_clean, stale_order[:n_stale])
             self.n_stale_refinements += int(n_stale)
@@ -946,6 +1023,9 @@ class optimal_diagonal_control:
               f"cum_sdp_refinements={self.n_sdp_refinements}, cum_frf_updates={self.n_frf_updates}, "
               f"cum_stale_refinements={self.n_stale_refinements}, "
               f"cum_solver_failures={self.n_solver_failures}, n_refined_total={int(np.sum(self.sdp_refined))}/{self.F}, "
+              f"solves_this_call={self._solves_this_call} ({1e3*self._solve_s_this_call:.0f} ms solving, "
+              f"{1e3*(time.perf_counter() - _t0 - self._solve_s_this_call):.0f} ms other)"
+              f"{' (time limit ' + format(self.max_solve_ms_per_update, 'g') + ' ms reached)' if self._stopped_by_time else ''}, "
               f"self_predicted_rms_db_per_channel={np.array2string(self_rms_per_channel, precision=2)}"
               f"{self._trim_log_fragment()}",
               flush=True)
