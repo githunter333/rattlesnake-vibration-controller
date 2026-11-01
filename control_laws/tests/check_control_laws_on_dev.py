@@ -15,7 +15,9 @@ The plant is a synthetic 8-response x 6-drive modal FRF.  This checks that
 each law runs and returns a sane drive CPSD; it says nothing about how well
 any law controls.
 
-Usage:  python control_laws/tests/check_control_laws_on_dev.py [law_name ...]
+Usage:  python control_laws/tests/check_control_laws_on_dev.py [--plant NAME] [law_name ...]
+   --plant  synthetic (default, the 8x6 modal plant below) or a frame_plant.py
+            layout: 6x8, 10x14, 10x14_rankdef
 """
 import inspect
 import os
@@ -168,8 +170,18 @@ def run_law(script, name, obj, p, params=""):
     return ["function", "generator", "class"][ftype], time.perf_counter() - t0, notes
 
 
-def main(only=None):
-    p = synthetic_plant()
+def make_plant(name):
+    if name == "synthetic":
+        return synthetic_plant()
+    sys.path.insert(0, HERE)
+    from frame_plant import frame_plant, summary
+    p = frame_plant(name)
+    print(summary(p))
+    return p
+
+
+def main(only=None, plant="synthetic"):
+    p = make_plant(plant)
     results = []
     for script in RV_SCRIPTS:
         path = os.path.join(LAW_DIR, script)
@@ -204,4 +216,10 @@ def main(only=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:] or None))
+    args = sys.argv[1:]
+    plant = "synthetic"
+    if "--plant" in args:
+        i = args.index("--plant")
+        plant = args[i + 1]
+        del args[i:i + 2]
+    sys.exit(main(args or None, plant))
