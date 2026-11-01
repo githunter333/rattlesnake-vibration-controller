@@ -92,7 +92,7 @@ def run(p, cls, params, n_cycles, n_frames, seed=1):
     iu = np.triu_indices(X.shape[1], 1)
     coh_med = float(np.median(c[:, iu[0], iu[1]]))
     refined = int(np.sum(law.sdp_refined[sel]))
-    return dict(errs=np.array(errs), solved=np.array(solved), ms=np.array(ms), lines=np.array(lines), t_init=t_init,
+    return dict(X=X, errs=np.array(errs), solved=np.array(solved), ms=np.array(ms), lines=np.array(lines), t_init=t_init,
                 drive=drive, coh=coh_med, refined=refined, n_sel=int(sel.sum()))
 
 
