@@ -35,7 +35,8 @@ from frame_plant import frame_plant                      # noqa: E402
 # Validated default categorical palette (dataviz skill): slot 1 blue, slot 2 orange.
 C_SDP, C_FAST = '#2a78d6', '#eb6834'
 C_SPEC, C_BEST = '#1f1f1e', '#a8a7a0'
-INK, MUTED, GRID = '#1f1f1e', '#6b6a64', '#e6e5e0'
+INK, MUTED = '#1f1f1e', '#6b6a64'
+FRAME, GRID_MAJOR, GRID_MINOR = '#55544f', '#b9b8b1', '#e2e1dc'
 
 
 def main():
@@ -66,6 +67,7 @@ def main():
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
+    from matplotlib.ticker import FixedLocator, FuncFormatter, LogLocator, NullFormatter
     n = len(names)
     ncol = 4 if n > 8 else 2
     nrow = int(np.ceil(n/ncol))
@@ -87,20 +89,33 @@ def main():
         ax.set_yscale('log')
         ax.set_xlim(90, 1100)
         ax.set_ylim(ylo, yhi)
-        ax.grid(True, which='major', color=GRID, lw=0.8)
-        ax.grid(True, which='minor', color=GRID, lw=0.4, alpha=0.6)
-        for s in ('top', 'right'):
-            ax.spines[s].set_visible(False)
-        for s in ('left', 'bottom'):
-            ax.spines[s].set_color(GRID)
-        ax.tick_params(colors=MUTED, labelsize=8, which='both')
+        # Frequency: labels at 100, 200, 300, 500, 700, 1000 Hz, a grid line every
+        # 10 Hz below 100 Hz and every 100 Hz above.  Level: a major line every
+        # decade, a minor line at 2-9 x each decade.
+        ax.xaxis.set_major_locator(FixedLocator([100, 200, 300, 500, 700, 1000]))
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f'{v:g}'))
+        ax.xaxis.set_minor_locator(LogLocator(base=10, subs=np.arange(1, 10)))
+        ax.xaxis.set_minor_formatter(NullFormatter())
+        ax.yaxis.set_major_locator(LogLocator(base=10, numticks=12))
+        ax.yaxis.set_minor_locator(LogLocator(base=10, subs=np.arange(2, 10), numticks=12))
+        ax.yaxis.set_minor_formatter(NullFormatter())
+        ax.set_axisbelow(True)
+        ax.grid(True, which='major', color=GRID_MAJOR, lw=0.9)
+        ax.grid(True, which='minor', color=GRID_MINOR, lw=0.5)
+        for s in ax.spines.values():                     # a frame around every panel
+            s.set_visible(True)
+            s.set_color(FRAME)
+            s.set_linewidth(1.0)
+        ax.tick_params(which='both', direction='in', top=True, right=True, color=FRAME)
+        ax.tick_params(which='major', length=5, labelsize=8.5, labelcolor=INK)
+        ax.tick_params(which='minor', length=2.5)
         ax.set_title(f'{names[m]}', loc='left', fontsize=10.5, fontweight='bold', color=INK, pad=14)
         ax.text(0.0, 1.015, f'rms error: SDP {rms(y_sdp, m):.1f}  fast {rms(y_fast, m):.1f}  '
                 f'best {rms(y_best, m):.1f} dB', transform=ax.transAxes, fontsize=8, color=MUTED, va='bottom')
         if m % ncol == 0:
-            ax.set_ylabel('ASD (units²/Hz)', fontsize=8.5, color=MUTED)
+            ax.set_ylabel('ASD (units²/Hz)', fontsize=9, color=INK)
         if m // ncol == nrow - 1 or m + ncol >= n:
-            ax.set_xlabel('Frequency (Hz)', fontsize=8.5, color=MUTED)
+            ax.set_xlabel('Frequency (Hz)', fontsize=9, color=INK)
             ax.tick_params(labelbottom=True)
     handles = [Line2D([], [], color=C_SPEC, lw=1.2, ls=(0, (4, 3)), label='Target spec'),
                Line2D([], [], color=C_BEST, lw=4.0, label='Best achievable (least rms dB over all channels jointly)'),
