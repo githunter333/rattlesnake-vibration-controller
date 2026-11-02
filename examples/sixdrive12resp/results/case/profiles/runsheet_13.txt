@@ -1,0 +1,58 @@
+RUN 13 -- optimal_diagonal_control_fast with the FRF update OFF
+===============================================================================
+The point of this run: with Update System ID During Control = Y, the fast law's
+Burer-Monteiro path disables itself on every call, so runs 05 and 06 were
+repeats of 03 and 04 and the law's central claim has never been tested. With
+update OFF, H is set once at system_id_update() and never re-passed, so EVERY
+solve for the whole test takes the fast path.
+
+profile_13_optdiagfast_updateoff.xlsx differs from profile_05 in exactly ONE
+cell: Update System ID During Control, Y -> N. Verified cell by cell.
+
+-------------------------------------------------------------------------------
+LAUNCH
+-------------------------------------------------------------------------------
+cd ~/Code/python/rattlesnake-vibration-controller
+
+python rattlesnake.py --profile examples/sixdrive12resp/results/case/profiles/profile_13_optdiagfast_updateoff.xlsx
+
+-------------------------------------------------------------------------------
+SAVE FILENAMES  (into examples/sixdrive12resp/results/runs/)
+-------------------------------------------------------------------------------
+run 13  optimal_diagonal_control_fast  update OFF  1e-6,0.05,20,1.0,0.95,6
+          system id :  run13_optdiagfast_updateoff_sysid
+          streaming :  run13_optdiagfast_updateoff_stream
+          spectral  :  run13_optdiagfast_updateoff_spec
+
+-------------------------------------------------------------------------------
+AT THE RIG
+-------------------------------------------------------------------------------
+  Control Averaging Type = Exponential, Coefficient = 0.04   (confirm it --
+      the GUI has reverted this to Linear between runs before)
+  Update System ID During Control = N    <-- the whole point; check it twice
+  System ID Averages = 20,  System ID Level = 1.0 V RMS
+  RAMP THE TEST LEVEL. Neither optimal-diagonal law has a startup level cap;
+      they solve against the full specification and command it immediately.
+  Watch for a SPEED difference against run 05. The fast path is the reason
+      this law exists; if the wall-clock per control cycle is the same as
+      run 05, the path still is not engaging and that is the finding.
+
+-------------------------------------------------------------------------------
+WHAT THIS RUN IS AND IS NOT COMPARABLE TO
+-------------------------------------------------------------------------------
+NOT directly comparable to runs 01-12. update_tf_during_control is in
+score_runs_sdynpy.py's MUST_MATCH list, so the harness will correctly flag it
+as NOT COMPARABLE. That is intended -- this is a separate experiment, not a
+13th row of the twelve-run matrix. Scored on its own it answers two questions:
+
+  1. Does the Burer-Monteiro solve match the SDP in accuracy?
+     Compare against run 05 knowing the plant model is frozen in 13 and live
+     in 05, so a difference confounds solver with model adaptation.
+  2. What does the fast path's drive actually look like?
+     The docstring claims it drives pairwise drive coherence to EXACTLY 1.0 in
+     ~100 % of bins -- confirmed empirically at a 12-drive scale, never on this
+     system. The saved drive CPSD settles it directly.
+
+Note max_drive_coherence = 0.95 is carried over from profile_05 for provenance
+cleanliness, but it has NO effect on the fast path, which is unconstrained by
+design. It only ever applies to the SDP fallback.

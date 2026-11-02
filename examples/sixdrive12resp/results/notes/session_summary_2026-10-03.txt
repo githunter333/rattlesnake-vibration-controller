@@ -1,0 +1,94 @@
+================================================================================
+SESSION SUMMARY -- 2026-10-03
+CONSOLIDATION.  THE DOCUMENTATION SET IS NOW COMPLETE
+================================================================================
+No hardware runs, no new measurements, no corrections.  One commit, 55e3f201.
+A short day of consolidation, and the summary is short to match.
+
+PRODUCED
+  notes/control_law_final_states.txt    164 lines, one block per law
+
+--------------------------------------------------------------------------------
+WHAT IT IS
+--------------------------------------------------------------------------------
+The modification register answers "what was changed".  This answers "what do I
+have".  It is organised BY LAW rather than by modification: for each of the
+seven laws, what it is, how it is configured now, what changed and briefly why,
+and whether to use it.  Nothing in it is new -- every figure is carried from
+work already recorded -- but until now the final state of any given law had to
+be assembled from three documents and the source.
+
+The shape it settles into:
+
+  CARRY FORWARD
+    optimal_diagonal          best accuracy, 5.62 dB linear and 5.58 on the
+                              moving plant, and no level loop at all
+    optimal_diagonal_fast     same accuracy, and with the demotion gate
+                              repaired the first reproducible drive in the
+                              programme -- 17.0 / 18.4 / 16.2 V^2 across three
+                              repeats against 153 / 485 / 245 before
+    match_trace_pseudoinverse weakest on accuracy for a structural reason, and
+                              the only one that reads the measured response and
+                              holds level
+
+  PROMISING, NOT READY
+    diagonal_congruence       best raw number in the set, 5.23 dB, and has
+                              never held level on any run
+
+  BASELINES
+    buzz, pseudoinverse       open loop by construction.  What "no control law"
+                              looks like
+
+  NOT RUNNABLE
+    octave_band_switching     parameter collision with the base class, five-
+                              line fix outstanding
+
+Three facts are true of every law and were given their own section, because
+each is the kind of thing a reader otherwise has to rediscover: the startup
+cap is the only behaviour change on by default; the drive-coherence cap default
+splits 1.0-off / 0.95-on between the two families; and the plant is rank 5 with
+eight control channels, so two must be conceded whatever the law does.
+
+The response-error trim got its own closing section rather than a line in a
+table.  "We built this, it does not work, and here is why structurally" is the
+most useful paragraph in the file for anyone deciding what to try next.
+
+--------------------------------------------------------------------------------
+THE DOCUMENTATION SET
+--------------------------------------------------------------------------------
+Four documents now cover the work, and they do not overlap:
+
+  control_law_final_states.txt      what each law IS now, and whether to use it
+  control_law_modifications.txt     what was CHANGED, why, and its final state
+  optimal_diagonal_parameters.txt   the fifteen-field parameter string, field
+                                    by field, and the three traps in it
+  all_runs_chart.txt                every one of the 56 run slots, what it was
+                                    for and what happened
+
+Plus the per-topic results notes (run 49, run 50, runs 51/52/55, modal shift
+and damping) and the dated session summaries.  Someone picking this up cold
+should start with final_states, then the run chart.
+
+--------------------------------------------------------------------------------
+STATE
+--------------------------------------------------------------------------------
+The branch is NINE COMMITS AHEAD of githunter333 and unpushed.  Everything
+since the three-week report is local only:
+
+    git push githunter333 control-law-development-2026-09
+
+--------------------------------------------------------------------------------
+OPEN
+--------------------------------------------------------------------------------
+Unchanged from 10-02.  Nothing was closed today and nothing was added.
+
+  - The frozen-H0 calculation.  One script, no new runs, and it separates plant
+    movement from distortion in the 294 Hz band-boundary failure instead of
+    leaving it as inference.  Still the highest-value next step.
+  - The other seven channels of the 0 dB coherent-vs-specification result.
+  - Correcting the coherence numbers and the run-42 sentence in the 09-26
+    report.  That report is now the only document carrying known errors.
+  - The "flat across a 12.7x span" sentence in run49_results.txt and the report.
+  - Runs 53 and 54, the fast law's trim pair on the moving plant.
+  - octave_band_switching_control's five-line parameter fix.
+  - If runs 15, 17, 18, 24 or 25 are repeated, negate drive_rcond first.

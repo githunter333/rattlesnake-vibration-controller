@@ -1,0 +1,190 @@
+================================================================================
+HOW MUCH THE NONLINEAR PLANT MOVES THE MODAL FREQUENCIES AND DAMPING
+2026-09-29   bounded-softening article, sdynpy_frame6x12_system_nonlinear_boundedsoften
+================================================================================
+
+Scripts:  code/modal_shift_and_damping.py         closed form, every mode, every level
+          code/verify_modal_shift_damping.py      direct time integration check
+          code/make_modal_shift_figures.py        fig8, fig9
+Data:     notes/modal_shift_and_damping.json
+          notes/modal_shift_damping_verify_+0dB.json
+          notes/modal_shift_damping_white_+0dB.json
+
+33 flexible modes, 120.0 - 899.5 Hz.  27 above 300 Hz are softened; the six
+below are exactly linear (nonlinear term identically zero).  zeta0 on the
+softened modes is 0.00701 - 0.01187.
+
+--------------------------------------------------------------------------------
+THE ANSWER
+--------------------------------------------------------------------------------
+Equivalent-linear (Gaussian statistical linearization) properties of the 27
+softened modes.  "shift" is how far the frequency falls below its linear value.
+
+  level    ---- frequency shift % ----    ---- zeta / zeta0 ----    of which
+   dB      median    min       max        median    max           1/sqrt(g)
+  -----------------------------------------------------------------------------
+   -18      0.015    0.011     0.016      1.0140   1.0269          1.0002
+   -12      0.061    0.044     0.064      1.0283   1.0540          1.0006
+    -6      0.242    0.181     0.254      1.0579   1.1086          1.0024
+    -3      0.488    0.380     0.502      1.0838   1.1545          1.0049
+     0      0.995    0.901     0.999      1.1239   1.2207          1.0100
+    +2      1.625    1.569     9.291      1.1660   1.7394          1.0165
+    +4      2.763    2.507    13.867      1.2280   1.9671          1.0284
+    +8      8.995    6.558    30.676      1.6215   3.1833          1.0988
+
+The six linear modes are identically 0.000% and 1.0000 at every level.
+
+At the 0 dB design point the plant is a 1% frequency softening and a 12%
+damping rise.  Below -6 dB both are under a quarter of a percent and a
+6% damping rise -- effectively a linear article.
+
+The fixed point converges to a residual of 1e-14 at every level, so the
+numbers above are the converged self-consistent state, not an iteration count.
+
+--------------------------------------------------------------------------------
+RESULT 1 -- THE DAMPING IS 88% MORE AMPLITUDE-DEPENDENT THAN INTENDED
+--------------------------------------------------------------------------------
+The builder sets ZETA_RATIO = 1.10 and sizes the quadratic damping term with
+
+    c2[mask] = (ZETA_RATIO - 1.0) * zeta0[mask] * 3*np.pi / (4 * sig_t[mask])
+
+That is the SINUSOIDAL describing function for c2*qd*|qd|, c_eq = (8/3pi)*c2*V.
+Under a Gaussian process the equivalent coefficient comes from power balance:
+
+    E[|qd|^3] = 2*sqrt(2/pi) * sigma_v^3        =>   c_eq = 2*sqrt(2/pi)*c2*sigma_v
+
+The two differ by (3/4)*sqrt(2*pi) = 1.8800.  The article is used only under
+random excitation, so the intended +0.10 is +0.188 before feedback.  Response
+suppression from the extra damping pulls it back, and the converged 0 dB state
+is +0.124 rather than the +0.10 designed.
+
+This is the same class of error as the stiffness calibration fixed in August:
+a sinusoidal describing function applied to a Gaussian process.
+
+NOT A DEFECT IN ANY RUN.  The plant is bounded and stable at every level tested
+and every saved run remains valid.  What is wrong is the DOCUMENTED intent, and
+ZETA_RATIO no longer means what its name says.  Two options, neither urgent:
+rescale c2 by 1/1.8800 to make 1.10 true, or rename the constant and record
+that the realised value is +0.124 at 0 dB.  Rescaling changes the plant and
+invalidates the existing run set against it; renaming does not.
+
+--------------------------------------------------------------------------------
+RESULT 2 -- PART OF THE DAMPING RISE IS FREE, AND IS NOT THE c2 TERM
+--------------------------------------------------------------------------------
+The modal equation is  qdd + 2*zeta0*wn*qd + g*wn^2*q = f.  Softening scales the
+stiffness by g and leaves the damping COEFFICIENT alone, so the natural
+frequency falls to wn*sqrt(g) while c does not move, and the damping RATIO rises
+as 1/sqrt(g) with no quadratic term at all.
+
+At 0 dB that accounts for 1.0100 of the 1.1239, so about 8% of the damping rise
+is a bookkeeping consequence of the frequency shift and 92% is the c2 term.  At
++8 dB the free part is 1.0988 of 1.6215.
+
+Worth stating because it means a softening-only plant -- one with c2 = 0 -- is
+still not a constant-damping plant.
+
+--------------------------------------------------------------------------------
+RESULT 3 -- ABOVE 0 dB THE UNIFORMITY BREAKS, ONE MODE AT A TIME
+--------------------------------------------------------------------------------
+At 0 dB every softened mode sits between 0.901% and 0.999% -- the calibration is
+uniform to within a tenth of a percent, which is what it was designed to be.
+
+Above 0 dB the median stays orderly while single modes break away:
+
+   +2 dB   median 1.625%   one mode at 9.291%    (464.4 Hz)
+   +4 dB   median 2.763%   306.5 Hz at 13.867%, 478.7 Hz at 12.54%
+   +8 dB   median 8.995%   519.8 Hz at 30.676%, 499.6 Hz at 26.19%
+
+The mechanism is the one the builder's loop-gain guard was written for: the
+shaped drive is notched at each resonance, the resonance slides off its own
+notch into a hotter part of the drive spectrum, and that mode's local loop gain
+passes 1 while the rest of the band is still well behaved.  The guard is
+evaluated at the 0 dB design point only, so it does not see this.
+
+Consequence for the run set: +4 dB and +8 dB are NOT "the same plant, driven
+harder".  They are a plant with a few modes far past the design point and the
+rest near it.  Run 49's +8 dB point should be read with that in mind, and it is
+the likely mechanism behind the tail leakage into the linear control group seen
+there.
+
+--------------------------------------------------------------------------------
+RESULT 4 -- TWO DIFFERENT ANSWERS, AND BOTH ARE CORRECT
+--------------------------------------------------------------------------------
+Everything above is the EQUIVALENT-LINEAR answer: the properties of the best
+linear system matching the response in a mean-square sense.  That is the right
+number for anything that consumes an FRF in an rms sense, which includes every
+control law here.
+
+A modal fit to a MEASURED FRF returns something different, because the
+resonance wanders with the instantaneous amplitude across the record.  Nine
+softened modes, direct time integration, white-band excitation (fig 9):
+
+  - the FRF PEAK moves LESS than the equivalent-linear frequency, by a factor
+    0.836 on average (range 0.676 - 0.962).  Small excursions dominate by count
+    and they soften least, so the peak sits above the mean-square answer.
+
+  - the HALF-POWER width reads HIGH, and the error grows with the shift:
+
+        shift measured      apparent zeta / true zeta
+           0.26 %                  1.004
+           0.31 %                  1.012
+           0.51 %                  1.030
+           0.84 %                  1.078
+           1.24 %                  1.178
+           1.33 %                  1.220
+           1.42 %                  1.334
+           1.81 %                  1.599
+           2.35 %                  1.678
+
+    roughly 1 + 0.12*(shift in %)^2.  At the 0 dB design point the inflation is
+    a few percent; by +4 dB a half-power fit would report damping 30-60% above
+    the true equivalent-linear value with no damping mechanism having changed.
+
+So "how much does the damping change" has two answers that diverge exactly
+where the plant is most interesting.  Any damping number taken off a measured
+FRF on this article above about 1% shift is an upper bound, not a measurement.
+
+--------------------------------------------------------------------------------
+VERIFICATION
+--------------------------------------------------------------------------------
+Direct time integration, fs = 20 kHz, 24 realisations x 20 s = 480 s of record
+per mode, the shaped run-40 drive at 0 dB.  Linear and nonlinear simulations
+share identical noise and integrator so the scheme's own frequency bias cancels.
+
+  mode      sigma_q sim/pred     c_eq meas/pred     E|qd|^3 / sigma_v^3
+                                                    (Gaussian = 1.5958)
+  300.9 Hz      1.0007              1.0003               1.5993
+  464.4 Hz      1.1467              1.0917               2.2830
+  728.2 Hz      1.0071              1.0027               1.6118
+  899.5 Hz      1.0098              1.0039               1.6024
+
+Three of four modes confirm the response to within 1% and the equivalent damping
+coefficient to within 0.4%, with the measured E[|qd|^3] landing on the Gaussian
+value to three digits.  That is the Gaussian assumption tested directly rather
+than assumed.
+
+The 464.4 Hz mode is the exception and it is informative rather than an error:
+its velocity is markedly non-Gaussian (2.283 against 1.596), the response runs
+15% above prediction and the damping 9% above.  It is the same mode that breaks
+away first at +2 dB.  Heavy-tailed response and early runaway are the same
+phenomenon seen two ways.
+
+The frequency check is separated from the response check deliberately.  An H1
+estimate formed from the shaped control drive is starved of excitation exactly
+at the peak, because match_trace notches the drive there, so the measured peak
+frequency is biased by however deep that mode's notch is.  The frequency
+numbers in result 4 therefore come from flat-band excitation with sigma_q
+measured from the simulation and the closed form evaluated at that measured
+sigma_q -- nothing is assumed about what response the drive produces.
+
+--------------------------------------------------------------------------------
+WHAT THIS DOES NOT COVER
+--------------------------------------------------------------------------------
+- Measured f and zeta extracted from the saved run 49/50/55 spectra.  At 1 Hz
+  resolution a 0.745% shift on a 400 Hz mode is 3 lines and a 12% damping change
+  widens the half-power band by about one line.  Frequency would confirm at the
+  top levels; damping would not resolve.  Not attempted.
+- Cross-coupling between modes.  Every calculation here treats the modal
+  equations as uncoupled, which is what the virtual hardware also does.
+- The +4 dB down-sweep point.  Hysteresis is unresolved and is a separate
+  question from the level curve above.

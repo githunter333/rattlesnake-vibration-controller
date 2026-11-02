@@ -1,0 +1,159 @@
+Session summary -- 2026-09-20
+System: 6-drive / 8-control-channel frame (examples/sixdrive12resp), Rattlesnake random
+vibration control.  Branch control-law-development-2026-09 at 7dbd1d5e (pushed).
+Runs 33 and 34.  Both profiles unedited; comparability with their earlier runs was the point.
+
+Purpose: close the two stale rows in the four-law table, and get the live-FRF guards onto
+a law other than optimal_diagonal_control_fast.  Both done.  One claim of mine was wrong
+and is corrected in section 1.
+
+===============================================================================
+1. A CORRECTION FIRST -- THE GUARDS ARE NOT INHERITED BY ALL THE LAWS
+===============================================================================
+On 09-19 I wrote, twice, that the two live-FRF guards live in the base class and are
+therefore inherited by every law.  That is false.  Checked, not assumed:
+
+    optimal_diagonal_control                                  <- guards live here
+    optimal_diagonal_control_fast(optimal_diagonal_control)       inherits
+    octave_band_switching_control(optimal_diagonal_control)       inherits
+    match_diagonal_congruence                                 standalone class
+    match_trace_pseudoinverse                                 a plain function
+
+Only the optimal_diagonal family gets them.  Neither match_trace nor congruence does.  The
+stated bonus for these two runs -- "field-tests the guards on two more laws" -- was wrong,
+and the run plan was changed accordingly: run 34 became optimal_diagonal (which DOES
+inherit them) rather than congruence.
+
+Note octave_band_switching_control also inherits the guards and has never been run in this
+campaign at all.
+
+===============================================================================
+2. CONGRUENCE DID NOT NEED RE-RUNNING -- VERIFIED
+===============================================================================
+Nothing has touched control_laws.py or diagonal_congruence_control.py since commit
+45d417a3 (09-18 15:27).  Run 20 was taken 09-18 17:36, two hours after it.  Every commit
+since modified only optimal_diagonal_control.py and _fast.py, which congruence does not
+inherit from.  The congruence law today is byte-for-byte what produced run 20, so its row
+is current and a re-run would be a repeatability check, not a refresh.  See section 5 for
+why that check now matters more than it did.
+
+===============================================================================
+3. RUN 34 -- optimal_diagonal, profile_03 unedited (repeat of runs 03 and 19)
+===============================================================================
+  run              date    rms   >3dB    level   maxV   driveV2  easy6   ch7    ch8
+  03 optdiag      09-12   5.62  19.1%   +0.08   4.42     67.30   2.44  10.97   9.84
+  19 optdiag      09-18   5.68  19.1%   +0.17   4.40     67.42   2.50  11.06   9.93
+  34 optdiag      09-20   5.64  19.4%   +0.12   4.37     67.15   2.46  11.01   9.85
+
+Three code generations, every column unchanged, drive within 0.4% across all three.  The
+benchmark is stable and none of the eight commits since 09-12 perturbed it.
+
+GUARDS PASSED THE FIELD TEST ON A SECOND LAW.  One firing, on call 7, 15 of 901 in-band
+bins, worst ratio 46.4 -- then silent for the remaining 354 calls.  No deadlock escapes,
+cum_solver_failures = 0.
+
+Compare run 32 (the fast law): fired on calls 7, 8 and 9, covering 4, 20 and 3 bins, worst
+45.4 / 67.0 / 26.7.  TWO DIFFERENT LAWS, SAME CALL NUMBERS, SAME HANDFUL OF BINS, SAME
+MAGNITUDE.  The excursion is a property of the rig's startup transient -- the live H1
+estimate settling before enough averaging is behind it -- not of either law.  That is what
+a guard should catch once and then stop talking about.
+
+The cum_frf_updates prediction held: 3580 at call 361, ~10 per call, as expected from
+profile_03's explicit frf_update_threshold = 0.05.  Not a regression, just that profile's
+setting.
+
+===============================================================================
+4. RUN 33 -- match_trace_pseudoinverse, profile_01 unedited (repeat of run 01)
+===============================================================================
+  run              date    rms   >3dB    level   maxV   driveV2  easy6   ch7    ch8
+  01 matchtrace   09-12   8.22  59.8%   +0.09   7.24    108.12   5.85  13.73  12.13
+  33 matchtrace   09-20   8.15  58.5%   +0.17   7.88    168.54   5.73  13.75  12.04
+
+Per-channel mean bias, the two runs side by side:
+  run 01   [-2.36 -3.04 -2.57 -2.44 -1.30 -0.97]  ch7 -6.82  ch8 -7.49
+  run 33   [-2.08 -2.86 -2.57 -2.32 -0.86 -0.96]  ch7 -6.81  ch8 -7.48
+
+No prediction was registered for this run, deliberately, because nobody had looked at why
+run 01 scored badly.  The answer: eight days and three sets of changes to control_laws.py
+later, the law does the same thing to within a tenth of a dB.
+
+THE 8.22 rms WAS NEVER A STALE-CODE ARTIFACT.  match_trace_pseudoinverse is simply weak on
+this plant, and now we know it rather than suspect it.
+
+AND THE NUMBERS SAY WHY, matching the law's own docstring.  Every channel sits BELOW spec
+in mean bias -- all six achievable ones between -0.86 and -2.86 -- yet the overall level is
++0.17 dB.  That is only possible if a minority of lines sit far above spec while most sit
+below, which is what 58.5% outside +/-3 dB at an 8.15 rms describes.  The law computes ONE
+REAL SCALAR per frequency line, spec_trace/response_trace, and multiplies the whole drive
+CPSD by it.  The trace is therefore correct BY CONSTRUCTION and the distribution across the
+eight channels is whatever the pseudoinverse happens to give.  Nothing in the law controls
+it.  optimal_diagonal, which solves per channel, lands at 19.4% out at a similar level.
+
+===============================================================================
+5. THE PATTERN THAT IS NOW ESTABLISHED ACROSS LAWS: DRIVE DOES NOT REPEAT
+===============================================================================
+Run 33's accuracy reproduced run 01 to a tenth of a dB.  Its DRIVE did not:
+108.12 -> 168.54 V^2, max 7.24 -> 7.88 V, a 56% increase for the same response.
+
+That is the third law to show it:
+  optimal_diagonal_fast, update off   153 -> 485 -> 245 V^2   (runs 24, 26, 27)
+  match_trace_pseudoinverse           108 -> 169 V^2          (runs 01, 33)
+  optimal_diagonal                     67.30 -> 67.42 -> 67.15 V^2  -- DOES repeat
+  optimal_diagonal_fast, update ON     17.0 -> 18.4 -> 16.2 V^2     -- DOES repeat
+
+The two that repeat are the two that are not sitting at a conditioning limit: the
+coherence-capped SDP, and the restricted factored solve with drive_rcond.  The two that do
+not are the unconstrained factored solve and a pseudoinverse at rcond = 1e-3.  Hypothesis,
+not finding -- match_trace has been run twice, which is enough to notice and not enough to
+conclude.
+
+CAVEAT THIS PUTS ON YESTERDAY'S CONGRUENCE ANALYSIS.  The 09-19 log computes the optimal
+uniform rescale for congruence, and concludes that forcing 0 dB overall would make every
+measure worse and that about -1.4 dB is the right target.  All of that came from ONE run's
+spectra.  If congruence's +3.04 dB offset moves run to run the way drive does, that -1.4 dB
+is one sample rather than a property of the law.  A single repeat of profile_07 settles it,
+and it should happen BEFORE anyone acts on the offset analysis.
+
+===============================================================================
+6. THE FOUR KEY LAWS, ALL NOW ON CURRENT CODE
+===============================================================================
+  law                        run  date    rms   >3dB    level   maxV  driveV2  easy6
+  optimal_diagonal            34  09-20  5.64  19.4%   +0.12   4.37    67.2   2.46
+  optimal_diagonal_fast       32  09-19  6.08  23.0%   +0.01   2.01    16.2   3.00
+  match_diagonal_congruence   20  09-18  5.39  48.8%   +3.04   5.46    75.3   4.13
+  match_trace_pseudoinverse   33  09-20  8.15  58.5%   +0.17   7.88   168.5   5.73
+
+Two solid.  Two with roughly half their lines outside +/-3 dB, for DIFFERENT structural
+reasons: congruence from per-line scatter at a low rms (its errors are balanced, not
+small), match_trace from having no per-channel control at all.
+
+This supersedes section 8 of the 09-19 log, which had stale rows for optimal_diagonal and
+match_trace.
+
+===============================================================================
+7. OPEN
+===============================================================================
+1. Congruence repeatability -- one run of profile_07.  Cheapest question on the board, and
+   it gates the offset analysis (section 5).
+2. Congruence per-line scatter: 48.8% out against optimal_diagonal's 19.4% at similar rms.
+   Cause unknown.  This is the real congruence problem, not the level offset.
+3. match_trace drive repeatability -- 108 vs 169 V^2 from two runs.  Worth one more run if
+   the law matters; it may not, given section 4.
+4. Run 30's divergence trigger.  Still unexplained, still one instance.
+5. octave_band_switching_control inherits the guards and has never been run at all.
+6. Plant coverage: all 34 runs on sdynpy_frame6x12_system.npz.  Five other plants untouched
+   (_higherz, _shifted, _shifted_allmodes, _nonlinear, _nonlinear_allmodes).
+7. Housekeeping unchanged: results/notes/.probe cannot be deleted through the mount, and
+   results/runs/un21_optdiagfast_capon_gatefixed_sysid.nc4 is missing its leading "r".
+
+===============================================================================
+8. FILES
+===============================================================================
+Runs (results/runs, 2026-09-20)
+  33  match_trace_pseudoinverse, cap 0.95, update ON   profile_01, unedited
+  34  optimal_diagonal_control, cap 0.95, update ON    profile_03, unedited
+Console logs captured with tee, first time for both:
+  results/notes/run33_console.log   (367 lines)
+  results/notes/run34_console.log   (731 lines)
+Runsheet: results/case/profiles/runsheet_33_34.txt
+No code changed today.

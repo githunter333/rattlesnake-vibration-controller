@@ -1,0 +1,228 @@
+RUNS 46 and 47 -- match_trace on the ESCAPE-CALIBRATED nonlinear plant
+================================================================================
+Third attempt at the same experiment.  Runs 42 (single-mode article) and 44
+(all-modes article) both failed, for two different reasons, and both failures
+are worth keeping because they define why this article is built the way it is.
+
+--------------------------------------------------------------------------------
+WHY 42 AND 44 FAILED
+--------------------------------------------------------------------------------
+RUN 42, single-mode article, strength 1.  Stopped after system ID.  Computed
+from the system model and run 40's actual commanded drive, with the
+voltage-to-force scaling verified (B = [[0],[M^-1 phi^T]], transformation =
+identity, so 1 V = 1 N exactly): q_rms/q0_ref = 0.0067.  Only a tiny fraction
+of a broadband 13.5 V drive lands on one mode, and shift goes as amplitude
+squared, so even strength 400 gave -0.018%.  Not a moving plant.
+
+RUN 44, all-modes article, strength 100.  The time integration overflowed:
+
+    sdynpy_nonlinear_system_virtual_hardware.py:151:
+        RuntimeWarning: overflow encountered in power
+        return k3s * q ** 3 + c2s * qd * np.abs(qd)
+
+with k3 reaching -2.55e19, NaNs then propagating into the FFT convolution.
+That is ESCAPE, not a jump.  A softening cubic has a FINITE potential well:
+the restoring force wn^2*q + k3*q^3 turns negative at q_esc = wn/sqrt(|k3|),
+and beyond that the solution runs away.  The strength had been chosen against
+the Duffing JUMP criterion (shift/zeta approaching 1), which never binds here
+-- escape binds first and by a wide margin.
+
+THE TRAP, and it is worth stating because it cost a run: you cannot buy
+frequency shift by turning up k3.
+
+    shift  ~  (3/8)|k3| A^2 / wn^2     rises linearly with |k3|
+    q_esc  =  wn / sqrt(|k3|)          falls as 1/sqrt(|k3|)
+
+so the shift available AT escape is 3/8 = 37.5%, fixed, whatever |k3| is.
+Turning up strength raises the shift and moves the cliff toward you at the
+same rate.  With random-drive peaks at ~4 sigma you need q_esc > 4*q_rms,
+capping the usable shift near 2.3%, and with real margin nearer 0.5-1%.
+
+Measured on the all-modes file, min over modes of q_esc/(4 q_rms):
+
+    strength  1: 4.06 safe    4: 2.03 marginal   10: 1.28 marginal
+             25: 0.81 ESCAPES               100: 0.41 ESCAPES
+
+So strength 25 -- the value recommended before 100 -- would also have failed.
+The binding mode was #31 at 837 Hz, where the randomised k3 draw landed at
+2.7e18, and that mode is not the one carrying the shape change.  A single
+uniform multiplier cannot serve both.  That is the defect this article fixes.
+
+--------------------------------------------------------------------------------
+THE ARTICLE
+--------------------------------------------------------------------------------
+sdynpy_frame6x12_system_nonlinear_escapecal.npz, built 2026-09-23 by
+code/build_nonlinear_frf_system_escapecal.py.
+
+Each mode's k3 is set from its own escape amplitude relative to the WORST-CASE
+modal amplitude that mode sees under EITHER drive condition:
+
+    |k3_i| = ( wn_i / (MARGIN * q_worst_i) )^2 ,   MARGIN = 10
+    q_worst_i = max( q under run 40's control drive ,
+                     q under a flat 1 V rms system-ID drive )
+
+both computed by projecting the drive CPSD onto mode i through the physical
+model -- measured, not assumed from a nominal voltage.  The result:
+
+    33 flexible modes, 120.0 - 899.5 Hz
+    first-order shift at 0 dB     0.268 - 0.375 %, median 0.375 %
+    q_esc/(4 q) margin            2.500 on EVERY mode, under EITHER drive
+    damping ratio at q_worst      x1.10 on every mode
+
+THIS FILE WAS CALIBRATED THREE TIMES.  Both earlier attempts failed, in
+opposite directions, and the record matters because the margin is now the only
+thing standing between this and another lost run.
+
+  Attempt 1 -- per-mode reference, MARGIN 6, referenced to the CONTROL drive
+  alone.  Run 46's system ID overflowed at strength 1.  A flat system-ID drive
+  and the shaped control drive excite the modes completely differently
+  (per-mode ratios 0.25 to 1.2), so calibrating on one does not bound the
+  other; the tightest mode was left with 1.267x margin on 4-sigma peaks, and
+  the integration starts from rest so the switch-on transient ate it.
+  Console kept as run46_attempt1_overflow_console.log.
+
+  Attempt 2 -- a single global amplitude scale.  Safe, and useless: it puts
+  essentially the whole shift on the one strongest mode, so the median LINE
+  barely moves.  d_shape fell to 0.0025, below the 0.0070 noise floor.
+
+  Attempt 3, this one -- per-mode again, but referenced to the worst case over
+  both drives, MARGIN raised to 10.  Every mode keeps its shift AND every mode
+  has q_esc >= 10*q under either drive, so 4-sigma peaks sit at 2.5x headroom
+  by construction rather than by luck.
+
+NOTE ON |k3|.  It reaches 1.15e20, LARGER than the value that overflowed in
+attempt 1.  Not a contradiction: the overflow is a symptom of escape, not of
+large k3.  k3*q^3 only overflows once q has already run away, and q cannot run
+away while the margin holds.  But it does mean the margin is the whole
+defence -- see the startup check.
+
+The first-order formula overestimates -- checked against the single-mode
+file's own numerical calibration it reads 8.9% where that builder solved
+-4.0%, a factor of 2.2 -- so expect a realised shift nearer 0.5%.  Still 35x
+what the all-modes file could deliver at a safe strength.
+
+STRENGTH 1 IS THE DESIGN POINT AND THERE IS NO HEADROOM ABOVE IT.  Strength s
+scales |k3| by s and q_esc by 1/sqrt(s):
+
+    strength 1.00 -> margin 2.500      strength 2.00 -> margin 1.768
+    strength 4.00 -> margin 1.250      strength 6.25 -> margin 1.000 (the cliff)
+
+Margin 1.25 is essentially the 1.267 that failed in attempt 1, so strength 4
+is already inside the region that overflowed.  USE 1.  If it misbehaves, drop
+to 0.5 (margin 3.54).  Do NOT go above 2.
+
+--------------------------------------------------------------------------------
+PREDICTED, from the system model, before the runs
+--------------------------------------------------------------------------------
+Per-line SHAPE change, the same normalised metric the refresh gate uses.
+Reference: run 39 on the linear plant, noise floor 0.0070, startup-estimate
+offset 0.0522.
+
+    across the -12 dB -> 0 dB step   median 0.0983   95th 0.3330   14x noise
+    system ID (~linear) -> 0 dB      median 0.1050   95th 0.3545   15x noise
+
+2.0x the 0.05 refresh threshold at the median, so the gate should fire over
+most of the band rather than on a tail.  Smaller than attempt 1 promised
+(0.274), because the safe shift is 0.375% rather than 1.04% -- but attempt 1's
+number was never achievable, since that calibration could not be run at all.
+
+--------------------------------------------------------------------------------
+RUN 46 -- escape-calibrated nonlinear, refresh OFF     (baseline)
+--------------------------------------------------------------------------------
+Profile : profile_36_matchtrace_nlesc_norefresh.xlsx      NEW, 2026-09-23
+Params  : 1e-3,0.95,-9.0,,0,0,1        refresh OFF, diagnostics ON
+Strength: RATTLESNAKE_NONLINEARITY_STRENGTH=1
+  SAVE AS  run46_matchtrace_nlesc_norefresh_{sysid,spec,stream}.nc4
+
+--------------------------------------------------------------------------------
+RUN 47 -- escape-calibrated nonlinear, refresh ON t=0.05     (the test)
+--------------------------------------------------------------------------------
+Profile : profile_37_matchtrace_nlesc_refresh005.xlsx      NEW, 2026-09-23
+Params  : 1e-3,0.95,-9.0,,1,0.05,1
+Strength: THE SAME AS RUN 46.  Not recorded in the nc4 files -- console only.
+  SAVE AS  run47_matchtrace_nlesc_refresh005_{sysid,spec,stream}.nc4
+
+Both: Update System ID During Control Y.  Start at -12 dB, settle, then 0 dB.
+rcond stays at 1e-3, as decided for runs 44/45 -- see the note there on
+distortion inflating the singular-value spectrum.  Expect rank 6 retained on
+most lines and therefore high drive.
+Saves to   examples/sixdrive12resp/results/runs/
+Console to examples/sixdrive12resp/results/notes/run4N_console.log
+
+MOVE THE DRIFT FILE ASIDE after run 46:
+    cd ~/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/results/notes
+    mv match_trace_frf_drift.npz run46_match_trace_frf_drift.npz
+
+--------------------------------------------------------------------------------
+PRE-REGISTERED
+--------------------------------------------------------------------------------
+1. A STEP IN THE DRIFT DIAGNOSTIC AT THE LEVEL CHANGE, median ~0.098 and 95th
+   ~0.333 against a 0.0070 noise floor.  Quantitative, from the system model.
+   Run 39 on the linear plant showed NO level-change artifact -- largest
+   post-settling jump 0.0123 against neighbours 0.0121 and 0.0112 -- so any
+   step here is the nonlinearity and nothing else.
+2. NO OVERFLOW.  No "overflow encountered in power" in either console.
+   Attempt 1 produced two within the system ID.  If it appears again at 2.5x
+   margin the problem is NOT the calibration -- look at the integrator's
+   timestep before recalibrating a fourth time.
+3. THE LEVEL LOOP MUST CONVERGE, level dB within -0.5 to +0.5.  A level-only
+   loop chasing a softening plant is the textbook failure mode.  If the level
+   walks, that is a finding about the law, not a setup fault -- record it.
+4. RUN 47's REFRESH COUNT SHOULD NOT DECAY TO NEAR ZERO the way run 40's did
+   on the linear plant (901 -> 6-18).  Here the plant keeps moving with level,
+   so the gate should keep firing.
+5. NO ACCURACY PREDICTION.  Nothing is known about this law on a moving plant,
+   and my predictions about match_trace's drive have been wrong twice.  It is
+   entirely possible the refresh makes things WORSE, since control-level FRF
+   estimates carry more distortion than the system ID does.  That would be a
+   finding, and it is the reason to take 46 and 47 as a pair.
+
+--------------------------------------------------------------------------------
+LAUNCH
+--------------------------------------------------------------------------------
+  cd ~/Code/python/rattlesnake-vibration-controller
+  pkill -9 -f "envs/rattlesnake/bin/python" || true ; sleep 1
+
+  RUN 46:
+  RATTLESNAKE_NONLINEARITY_STRENGTH=1 \
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/profile_36_matchtrace_nlesc_norefresh.xlsx \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run46_console.log
+
+  RUN 47 (same strength):
+  RATTLESNAKE_NONLINEARITY_STRENGTH=1 \
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/profile_37_matchtrace_nlesc_refresh005.xlsx \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run47_console.log
+
+CHECK ON STARTUP:
+    grep "nonlinearity_strength" .../run46_console.log
+must print nonlinearity_strength=1 and n_modes=33.
+Then, BEFORE letting it proceed:
+    grep -c "overflow encountered" .../run46_console.log     must print 0
+Run 44 and attempt 1 of run 46 both produced it within the system ID.  Kill
+the run at the first occurrence.
+
+--------------------------------------------------------------------------------
+PROFILE PROVENANCE
+--------------------------------------------------------------------------------
+profile_36 and profile_37 are each profile_01 with exactly THREE cells
+changed, verified cell by cell across both sheets:
+    [Hardware] B1  6 -> 7
+    [Hardware] B2  linear npz -> _nonlinear_escapecal.npz
+    [Frame 6x12 Random] B14  the parameter string
+They differ from each other in B14 alone.
+
+--------------------------------------------------------------------------------
+WHAT THESE RUNS DO NOT DO
+--------------------------------------------------------------------------------
+They do not test gap-based rank (rcond negative).  That is run 48, against 47
+as its control, and the distortion finding from run 44's system ID makes it
+more pointed than it would have been on the linear plant.
+
+They do not test the response-error trim or the optimal-diagonal laws here.
+The trim in particular has a far stronger case on this article than on the
+linear one, where the model mismatch measured 0.060 dB rms.
+
+Runs 42 and 44 kept their system IDs.  They cost nothing to retain and they
+are the only record of those two articles' identification.

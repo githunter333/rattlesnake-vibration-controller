@@ -1,0 +1,162 @@
+GLOBAL CVA FRF -- HANDOFF BRIEF -- 2026-08-25
+Written so a cold session can pick this up without re-deriving anything.
+System throughout: 6-drive / 12-response frame, 8 control channels (nodes
+7-14), fs = 5120 Hz, 33 modes, band of interest 100-1000 Hz.
+
+===============================================================================
+1. WHAT THIS WORK IS
+===============================================================================
+A global (batch, non-local, linear) CVA subspace realization that identifies
+a state-space model (A,B,C,D) from ONE short record of broadband drive +
+response, then evaluates the FRF as H(f) = C(zI-A)^-1 B + D.
+
+The point is SHORT-RECORD FRF ESTIMATION: getting a usable FRF without
+waiting to Welch-average many blocks. This is the natural follow-on to the
+averaging-lag finding in frf_averaging_and_allmodes_study_2026-08-14.txt
+(Part A): with TF-update ON, more averaging is monotonically WORSE because a
+boxcar window of N blocks lags a drifting H by ~N/2 blocks. If a single short
+record can produce the FRF, that lag-vs-drift tradeoff largely goes away.
+
+===============================================================================
+2. STATUS: VALIDATED
+===============================================================================
+Validated against ground truth frf_frame6x12_H.npz at lags=40, rank=66 on
+2 s of broadband data:
+  - recovers 33/33 true modes to within 2%
+  - all poles stable, max|eig| = 0.994
+  - FRF relative error 0.098 over 100-1000 Hz
+
+vs classical Welch/H1 at matched record length:
+
+    duration   CVA rel_err   H1 rel_err
+      0.25 s      0.423        0.729
+      0.50 s      0.228        0.556
+      1.00 s      0.141        0.197
+      2.00 s      0.098        0.126
+      4.00 s      0.080        0.101
+
+CVA reaches a given accuracy on roughly 2-4x less data than H1 in the
+short-record regime. The advantage is largest where it matters most (short
+records) and narrows as data grows, which is the expected shape.
+
+===============================================================================
+3. FILES
+===============================================================================
+code/global_cva_frf.py            186 lines. The method. UNTRACKED.
+    delaybuild(data, nch, lags)      lag-major Hankel/delay matrix
+    _whiten(M, tol)                  SVD whitening
+    global_cva_v2(y, u, lags, ...)   -> dict(A,B,C,D,rank,cc,...)
+    frf_from_ss(A,B,C,D,freqs,dt)    H = C(zI-A)^-1 B + D
+    modes_from_A(A, dt, ...)         -> (freq_hz, zeta, max|eig|)
+    The module docstring is the primary design record -- read it first.
+
+code/validate_global_cva.py       131 lines. The validation harness. UNTRACKED.
+    Rebuilds the virtual acquisition from sdynpy_frame6x12_system.npz,
+    sweeps duration in [0.25, 0.5, 1, 2, 4] s, compares CVA vs H1 vs ground
+    truth, prints the table above, writes global_cva_frf_validation.png.
+    Constants at top: fs=5120, LAGS=40, RANK=66.
+
+results/global_cva_frf_validation.png   produced by validate_global_cva.py
+results/global_cva_frf_pairs.png        NO GENERATING SCRIPT IN REPO (see 6.1)
+
+Run with:
+    python examples/sixdrive12resp/code/validate_global_cva.py
+
+===============================================================================
+4. THE TWO STRUCTURAL FIXES THAT MADE IT WORK
+===============================================================================
+An earlier attempt failed badly -- unstable poles up to |eig| = 30, FRF error
+20-50x. Do not reintroduce either of these:
+
+4.1 NON-OVERLAPPING past/future for the canonical-correlation step, but the
+    state sequence for the A,B regression built by applying the SAME
+    projection J to past rows ONE SAMPLE apart.
+
+    Why: cvaonestep's rank comes from rank(Spp) over a ~960-row nearest-
+    neighbor subset; locally the trajectory lies on a low-dimensional
+    manifold, so Spp really is near-rank-deficient and the SVD tolerance
+    recovers the true local order. GLOBALLY, over all ~10k sequential rows,
+    the past matrix spans the whole state space -- Spp is legitimately
+    high-rank and the tolerance never finds the true order. So in a global
+    method the order must come from the CANONICAL CORRELATIONS instead, and
+    those only carry information if past and future do NOT overlap (with
+    block=1 they are all ~1.0, which is what the first attempt saw).
+
+    But non-overlapping blocks must NOT define the state transition directly
+    -- that would make A advance by `lags` samples. Classical construction:
+        x(tau) = J @ P[tau],  x(tau+1) = J @ P[tau+1]
+    Consecutive ROWS of the past Hankel matrix P are one sample apart, so A
+    is a genuine one-sample transition.
+
+4.2 DIRECT FEEDTHROUGH D. These are ACCELERATION outputs; the true system has
+    D_accel = phi_response @ M^-1 @ phi_excitation.T != 0 (acceleration
+    responds instantaneously to force). H = C(zI-A)^-1 B with no +D
+    structurally cannot match, especially at high frequency.
+
+Index convention (delaybuild: row r covers samples [r, r+L-1]):
+    past row i    -> samples [i,     i+L-1],  state time tau = i+L
+    future row i  -> samples [i+L, i+2L-1] = Yh[i+L]   (adjacent, no overlap)
+    x(tau)   = J @ [Yh[i],   Uh[i]]
+    x(tau+1) = J @ [Yh[i+1], Uh[i+1]]
+    u(tau), y(tau) = u[:, i+L], y[:, i+L]
+
+4.3 H1 CONJUGATION CONVENTION (in validate_global_cva.py, verified against a
+    pure-delay test case): scipy's csd(a,b) = E[conj(A) B]. H1 needs
+    Syu[i,j] = E[Y_i conj(U_j)] = csd(u_j, y_i) -- INPUT first, output
+    second. Passing csd(y,u) returns the complex conjugate, flipping the
+    phase sign and making H1 look far worse than it is. The comparison table
+    in section 2 is only fair because of this fix.
+
+===============================================================================
+5. KNOWN LIMITS / THINGS NOT YET DONE
+===============================================================================
+- rank=66 is HARDCODED in the validation, not discovered. global_cva_v2 has
+  a largest-relative-drop heuristic on the canonical-correlation spectrum
+  when rank=None, but it has NOT been validated -- every reported number
+  above used the known-correct rank. Automatic order selection is the single
+  biggest open question before this could run unattended.
+- lags=40 likewise hand-chosen, not swept.
+- Noise-free. Validation drives the virtual system with clean
+  np.random.randn(6,n)*0.05 and lsim, seed 0. No measurement noise, no
+  sensor noise floor, no drift. Untested on the .nc4 records from live
+  Rattlesnake runs.
+- Linear only. Not tried against the nonlinear system
+  (sdynpy_frame6x12_system_nonlinear_allmodes.npz), where the whole premise
+  of a single LTI realization is in question.
+- Open loop only. Never run inside the control loop, so the closed-loop
+  identification bias that motivated all of this (excitation shaped by the
+  control law rather than broadband) is untested here. This is the actual
+  destination of the work.
+- Never run live on Rattlesnake. Offline simulation only.
+
+===============================================================================
+6. STATE OF THE TREE (as of 2026-08-25)
+===============================================================================
+6.1 global_cva_frf_pairs.png has no generating script. It is timestamped
+    13:04, four minutes after global_cva_frf_validation.png (13:00), and
+    validate_global_cva.py only writes the latter. It was made by an ad-hoc
+    script that was never saved. Presumably the closely-spaced mode pairs
+    (the ~2-4 Hz pairs noted in Part B of the averaging study) -- but that is
+    inference from the filename, not knowledge. Either regenerate it from a
+    saved script or treat the image as unreproducible.
+
+6.2 UNTRACKED: both .py files and both .png files are untracked. Nothing in
+    this work is in git history. Commit before relying on it.
+
+6.3 frf_averaging_and_allmodes_study_2026-08-14.txt was WIPED in the working
+    tree (1 byte, mtime 2026-08-22 09:05), after commit 4cf386fc had logged
+    the all-33-modes results into it. Content is intact in git. Restore with:
+        git checkout -- examples/sixdrive12resp/results/frf_averaging_and_allmodes_study_2026-08-14.txt
+    That file is the context for WHY this CVA work exists; recover it before
+    picking the work back up.
+
+===============================================================================
+7. SUGGESTED NEXT STEPS, ROUGHLY IN ORDER
+===============================================================================
+1. Restore the wiped study write-up (6.3), commit the CVA work (6.2).
+2. Validate the automatic rank heuristic against the known rank=66, then
+   sweep lags to see how sensitive the result is.
+3. Add measurement noise to the validation and find where CVA's short-record
+   advantage over H1 breaks down.
+4. Run it against a real .nc4 record from a live run.
+5. Only then: closed loop, and the nonlinear system.

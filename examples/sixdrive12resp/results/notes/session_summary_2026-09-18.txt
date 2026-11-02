@@ -1,0 +1,250 @@
+Session summary -- 2026-09-18
+System: 6-drive / 8-control-channel synthetic frame (examples/sixdrive12resp), Rattlesnake
+random vibration control.  Branch: optimaldiaglaws (cut today from the merged startup-cap
+work).  Live GUI runs 19 through 28 plus offline analysis.
+
+The day's question, in the user's words: "we need to get a fast law working if at all
+possible."  optimal_diagonal_control_fast had been producing ragged control ever since it
+was made to actually run its own algorithm (the gate fix of 09-17).  It now works with the
+FRF update off, and the reason it did not is understood.  With the FRF update on it does
+not yet, and the cause of that was found late in the day but not yet confirmed on the rig.
+
+===============================================================================
+0. HOUSEKEEPING FIRST -- THE MERGE, AND THE DEFAULTS PUT BACK
+===============================================================================
+The 09-17 startup-cap work (branch fix/startup-cap-trace, six laws) was merged to dev and
+pushed by the user through GitKraken.  I do not push; git authentication stays with the
+user.
+
+45d417a3 (15:27) "control_laws: default every behaviour change back OFF, keep only the
+startup cap".  This was the user's call after seeing the twelve-run comparison table: go
+back to the configuration that produced those good results and attack the fast law in
+isolation.  running_ceiling_db back to 1e9 (off), refresh_shape off by default.  Verified
+against 2fb800a0: cycle 2 onward bit-identical for the open-loop laws, 0.0e+00 difference
+for optimal_diagonal_control_fast.  The startup cap is the only behaviour change that
+stayed on.
+
+Standing user decision recorded here because it shapes every run below: the coherence cap
+is allowed on all the laws EXCEPT optimal diagonal fast, which is unconstrained by design.
+
+===============================================================================
+1. WHY THE FAST LAW WAS RAGGED -- THE SOLUTION WAS UNREALIZABLE, NOT WRONG
+===============================================================================
+The unconstrained Burer-Monteiro solve puts drive energy in near-null directions of H.
+The predicted response then depends on inter-drive cancellation the rig cannot reproduce:
+the answer is correct for the model and wrong for the hardware.
+
+Measured offline by perturbing the commanded drive 1 %:
+
+  configuration                   rms    level    rms +1%   level +1%
+  factored, unconstrained        4.64    -0.42     11.85    +16.69
+  factored + drive_rcond 1e-2    3.73    +1.94      4.68     +3.80
+  SDP + coherence cap 0.95       4.16    -0.50      7.23     +7.92
+  SDP, cap off                   4.09    -0.49      7.98     +9.09
+
+A 1 % drive perturbation predicted +16.69 dB.  Run 22 on the rig measured +14.29 dB at
+17.84 V peak.  That is the prediction landing, and it is the whole explanation for the
+ragged control.
+
+MY ERROR, for the record: drive_rcond had been gated to dB error domain only, leaving the
+factored path unconstrained in its DEFAULT linear mode.  Run 22 was the consequence.
+Fixed in 6970a717 (18:20) -- drive_rcond now applies in BOTH error domains.  This was the
+user's option 3 ("its ok to make drive_rcond apply in linear mode if that is feasible")
+and it turned out to be the whole fix; options 1 (soft coherence penalty) and 2 (dither +
+FRF update) were not needed and option 2 remains untried.
+
+===============================================================================
+2. THE SWEEP THAT SET drive_rcond -- RUNS 22 TO 25
+===============================================================================
+drive_rcond confines the factored solve to the right-singular directions of H with
+sigma >= threshold * sigma_max.
+
+  run  drive_rcond   rms    % out    level    max V   drive V^2   easy six
+   22  off           9.91   52.9 %  +14.29    17.84      859.4      8.82
+   23  1e-2          6.56   26.9 %   +3.55     9.23      284.9      3.72
+   24  3e-2          6.30   22.9 %   +0.75     6.50      153.4      3.21
+   25  5e-2          6.61   25.4 %   +1.17     6.99      160.7      3.70
+   19  SDP + cap     5.68   19.1 %   +0.17     4.40       67.4      2.50
+
+3e-2 is the minimum.  The user asked how sensitive that would be to plant damping, and
+then asked for it to be automatic.
+
+===============================================================================
+3. MAKING THE THRESHOLD AUTOMATIC -- bbb9aa02
+===============================================================================
+drive_rcond is now expressed as a MULTIPLE of the plant's own singular-value spread
+(default 2.0; a negative value is read as an absolute ratio, so the old numbers still
+work).  _effective_drive_rcond measures the spread from H itself, with gap detection to
+find the structural floor rather than the identification noise floor.
+
+In-band median sigma_k/sigma_1 on this plant: 1.0000  0.3189  0.0844  0.0324  0.0152
+0.0017.  sigma6 is the noise floor -- the plant is rank 5, not 6.  sigma5/sigma1 = 0.0152
+is the smallest structural direction, and 2.0 x that is 3.0e-2, the swept answer.
+
+Two bugs found and fixed while building this, both worth remembering because the same
+mistake appears again in section 5:
+  - The spread was measured over ALL lines, giving 0.1435 instead of 0.0152 -- a factor of
+    9.  Out-of-band lines have no excitation and their singular values are noise.  Fixed
+    by masking to in-band bins.
+  - Scaling off sigma_min instead of sigma5 gave a required multiple of 18 instead of 2.
+    Fixed by gap detection.
+  - A single-bin fallback plus a permanent cache made an offline harness report 10.34 dB
+    for a configuration the control loop scores at 5.95.  Fixed; no caching until H_cache
+    is populated.
+
+Runs 26 and 27 confirmed it: the law derived 0.0302 from run 26's identification and
+0.0303 from run 27's, without being told, and run 27 reproduced hand-tuned run 24 on
+every accuracy measure.  Verified to 1-2 % across five separate system IDs.
+
+===============================================================================
+4. WHAT REPEATS AND WHAT DOES NOT -- READ THIS BEFORE QUOTING ANY DRIVE NUMBER
+===============================================================================
+  run                  rms   % out   level   max V   drive V^2
+  27 auto (repeat)    6.27   22.8 %  +0.55    9.83      245.4
+  26 auto             6.38   23.9 %  +3.06   12.80      484.7
+  24 hand 3.0e-2      6.30   22.9 %  +0.75    6.50      153.4
+  offline prediction  5.96      --   -0.74    2.07       16.2
+
+Accuracy repeats: rms within 0.1 dB, per-channel within 0.2 dB.  Drive does not: 153 ->
+485 -> 245 V^2 for the same commanded solution, and all three are 10-30x the offline
+prediction.  This law sits near the conditioning limit, so the response is reproducible
+and the drive is not.
+
+Consequence: single-run drive comparisons earlier in this project were over-interpreted.
+"2.3x the SDP" should read "150-500 V^2 against the SDP's 67".  Budget for the spread.
+
+===============================================================================
+5. FRF UPDATE ON -- RUN 28, AND THE BUG IT EXPOSED
+===============================================================================
+Offline first, solving on H and running on a perturbed plant (rms dB / level dB):
+
+  configuration                   exact        H off 2%      H off 5%      H off 10%
+  factored, unconstrained      4.52 / -0.39  4.63 / +4.06  8.95 /+10.57  13.72 /+16.23
+  factored + auto drive_rcond  5.90 / -0.74  4.33 / -0.56  3.78 / +0.23   4.13 / +2.25
+  SDP + coherence cap          4.05 / -0.50  3.56 / +0.80  5.11 / +4.68   8.61 / +9.55
+
+The restricted factored path is the MOST FRF-robust of the three: slightly worse with an
+exact model, clearly better with a wrong one.  drive_rcond was added for drive-realization
+error and handles model error at least as well, and better than the coherence cap does.
+
+That undercuts the demotion gate's premise.  The gate demotes to the SDP whenever H moves
+more than frf_update_threshold, but at 5 % model error the restricted factored path beats
+the SDP, so demoting trades a better solver for a worse one and pays 18x the time for it.
+
+Run 28 (probe, FRF update on, threshold 0.05) then measured the gate over 549 calls:
+
+  median 4.3736, 90th 6.2169, max 179.6692, demoted 99 %
+
+A 437 % change in the FRF every cycle is not physical.  The base class's own drift metric,
+which looks only at refined (in-band) bins, read median 0.1705 on the same data.  A factor
+of 25 between two measurements of the same quantity.
+
+CAUSE: _h_moved compared live H against cached H over the whole 2049-bin array.  1148 of
+those bins are out of band -- no drive energy, so the live H1 estimate is noise and its
+relative change per cycle is enormous.  The gate was responding to out-of-band noise and
+never to the plant.  Exactly the same mistake as measuring the singular-value spread over
+all lines (section 3), in a different function.
+
+Because the gate tripped on essentially every call, optimal_diagonal_control_fast was
+byte-for-byte the base class whenever the FRF update was on -- which is the same failure
+the relative-change threshold was introduced on 09-17 to fix, reintroduced through the
+measurement instead of through the comparison.
+
+SECOND EFFECT, same parameter: frf_update_threshold also sets the base class's drift
+budget (optimal_diagonal_control.py:465,473).  At 0.05 nearly every previously-refined bin
+counted as drifted, so 10 of the 20 bins per cycle went to re-solving old bins forever --
+run 28 reached cum_frf_updates = 5570 and climbing.  Half the refinement budget, spent
+permanently on noise.
+
+FIX (written, staged, NOT COMMITTED -- see section 7): _h_moved now restricts both arrays
+to in-band bins before taking the norms, and logs the running distribution (median, 90th,
+max, demotion rate) on every trip and every 25th call.  That logging matters because only
+the FINAL FRF is saved in a run file, so a saved run shows cumulative drift (about 28 %
+between system ID and end of control on run 21) and says nothing about the per-cycle
+movement the gate actually tests.
+
+Checked that this does not show up when comparing two system-ID FRFs: runs 26 and 27
+differ by 0.1033 measured either way.  A system ID excites the whole band, so the
+discrepancy only appears with the live control-phase estimate.
+
+===============================================================================
+6. SET UP AND WAITING -- RUN 29
+===============================================================================
+profile_26_optdiagfast_updateon_gatefix.xlsx, runsheet_29.txt (both in results/case/
+profiles).  Fast law, FRF update ON, auto drive_rcond, frf_update_threshold raised
+0.05 -> 0.5.
+
+0.5 is a FIRST ESTIMATE, not a measurement: in-band per-cycle movement is of order 0.17
+median, so 0.05 would still demote on most cycles.  The run's own log sets the final
+default.
+
+Save as run29_optdiagfast_updateon_gatefix_{sysid,spec,stream}.nc4 -- including the
+stream, which run 28 does not have.
+
+Acceptance check written into the runsheet: the fast law's log and the base class's
+"H drift on refined bins" line are independent measurements of the same quantity and
+should now agree within about a factor of 2.  If they still differ by an order of
+magnitude, the fix is wrong.
+
+===============================================================================
+7. OPEN ITEMS
+===============================================================================
+1. BLOCKED: the _h_moved fix is staged but uncommitted.  .git/HEAD.lock has been present
+   since 21:46 and the mount denies unlink, so git cannot take the ref.  The user needs to
+   run, outside this session:
+       rm -f ~/Code/python/rattlesnake-vibration-controller/.git/*.lock
+   Commit message is saved at "Claude outputs/pending/commit_msg_h_moved_inband.txt".
+   The fix IS live in the working tree, so run 29 does not have to wait for this.
+   (Standing protocol: I ask rather than move locks aside.  Moving them risked concurrent
+   access with GitKraken, which is the most plausible cause of the inadvertent working-
+   tree rollback on 09-17.)
+2. Branch optimaldiaglaws is unpushed.
+3. The demotion threshold default is still 0.05 in code.  It should be set from run 29's
+   measured distribution, not guessed.
+4. Option 2 from the user's list -- dither on the drives with the FRF update on -- has not
+   been attempted.  It is the fallback if run 29's identification degrades.
+5. Housekeeping: results/runs/un21_optdiagfast_capon_gatefixed_sysid.nc4 is missing the
+   leading "r".  Run 20's spec file arrived with a stray space in the name and was
+   renamed; this one has not been.
+
+===============================================================================
+8. FILES WRITTEN OR CHANGED TODAY
+===============================================================================
+Code (branch optimaldiaglaws)
+  45d417a3  control_laws: default every behaviour change back OFF, keep only the startup cap
+  6970a717  optimal_diagonal_control_fast: drive_rcond applies in BOTH error domains
+  bbb9aa02  drive_rcond is now a multiple of the plant's own singular-value spread
+  UNCOMMITTED  optimal_diagonal_control_fast: measure FRF movement in-band only
+
+Documents
+  examples/sixdrive12resp/code/optdiagfast_findings_2026-09-18.md   (runs 19-28 write-up)
+  examples/sixdrive12resp/results/case/profiles/runsheet_29.txt
+  examples/sixdrive12resp/results/case/profiles/profile_24, _25, _26
+  Claude outputs/pending/commit_msg_h_moved_inband.txt
+
+Runs (results/runs, all 2026-09-18)
+  19 optimal_diagonal_control, cap on, startup cap, update on
+  20 match_diagonal_congruence, cap on, startup cap, update on
+  21 optimal_diagonal_control_fast, cap on, gate fixed, update on
+  22 fast, linear domain, update off, drive_rcond OFF      -- the failure case
+  23 fast, drive_rcond 1e-2, update off
+  24 fast, drive_rcond 3e-2, update off                    -- the sweep minimum
+  25 fast, drive_rcond 5e-2, update off
+  26 fast, automatic drive_rcond, update off
+  27 fast, automatic drive_rcond, update off               -- repeat of 26
+  28 fast, update ON, probe                                -- no stream saved
+
+===============================================================================
+9. RETRACTIONS STANDING FROM THIS WORK
+===============================================================================
+Kept here because each was stated confidently before being checked, and the findings
+document carries them too.
+  - The damping-sensitivity analysis (0.089 -> 0.153, "use 5e-2").  The analytic FRF I
+    rebuilt from M/K/C produced no near-zero sigma6, which is inconsistent with the
+    rank-5 structure the measured plant shows.  Those numbers must not be used.
+  - "Run 13 had a weak system ID" (retracted 09-17, repeated here because it still gets
+    quoted).  I compared run 13's channel-7 minimum against other runs' non-channel-7
+    minima.  Channel 7 reads 0.28-0.54 on all thirteen identifications; it is a property
+    of the rig.  Scored like against like, run 13's ID was the best of the set.
+  - "1.37 dB is model error."  The control-phase FRF predicting its own data to 0.06 dB
+    is near-tautological -- it is an H1 estimate fit to that very drive.

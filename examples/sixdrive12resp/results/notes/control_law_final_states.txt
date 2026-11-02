@@ -1,0 +1,164 @@
+================================================================================
+CONTROL LAWS -- FINAL STATE
+sixdrive12resp, branch control-law-development-2026-09, as of 2026-10-03
+================================================================================
+One page per law: what it is, how it is configured now, what changed and why,
+and whether to use it.  Detail lives elsewhere -- control_law_modifications.txt
+for the full modification register, optimal_diagonal_parameters.txt for the
+parameter string, all_runs_chart.txt for the runs behind every number.
+
+Accuracy figures are in-band per-channel rms error, dB, lower better.  Linear
+plant unless stated.  Nonlinear figures are on the coherence-weighted column,
+because raw rms counts distortion as signal.
+
+================================================================================
+CARRY FORWARD
+================================================================================
+
+optimal_diagonal_control                                      BEST ON ACCURACY
+  Closes on the identified plant model, open on the response error.  Solves an
+  SDP per bin with the drive-coherence cap as a constraint.
+  Linear 5.62 dB.  Moving plant 5.58 dB at 0 dB, 1.9 dB better than match_trace
+  on 38% less drive, and it holds that margin at every level.
+  WEAKNESS: no level loop.  Level error +0.31 / +1.98 / +8.00 dB at -18 / 0 /
+  +4 dB.  At +4 dB the response is 8 dB over specification and the law cannot
+  see it.  That point is a runaway, not a control point.
+  CHANGED
+    startup level cap   now clamps on predicted response, not on a drive CPSD
+                        compared against a response quantity.  Was ~10 dB too
+                        aggressive and unit-dependent.         ON, -9.0 dB
+    drive-coherence cap unchanged, but note the default here is 0.95, ON --
+                        NOT 1.0 as in the match_trace family.  Costs +0.02 dB
+                        because it is a constraint, not a post-process.
+    live FRF guards     per-bin divergence guard and deadlock escape, after a
+                        run diverged to 1.8e5 V.               ON
+    dB error objective  spreads error across channels the plant cannot reach.
+                        Not what this rig wants.               OPT-IN, off
+    response-error trim closes the level loop in principle.  Does not work --
+                        see below.                             OPT-IN, off
+  NOTE drive_rcond (field 10) is parsed here and never used.  It is inert.
+  USE IT.  Best accuracy available.  Do not run it above 0 dB without watching
+  level, and do not turn the trim on.
+
+optimal_diagonal_control_fast                  SAME ACCURACY, REPRODUCIBLE DRIVE
+  As above with a Burer-Monteiro factored path for bins the plant has not moved.
+  Linear 5.64 dB -- statistically the same law.
+  CHANGED
+    demotion gate       was bit-equality over all 2049 bins, 1148 of them out
+                        of band and noise.  99% of calls demoted, so the fast
+                        path never ran and runs 05/06 are the base law under
+                        this law's name.  Now a relative Frobenius change
+                        measured in band.                      ON
+    drive_rcond         now a multiple of the plant's own singular-value
+                        spread, default 2.0, so it tracks a differently
+                        conditioned article without re-tuning.  Negative means
+                        an absolute ratio.                     ON, 2.0
+  RESULT THAT MATTERS: with the gate repaired, commanded drive is reproducible
+  at 17.0 / 18.4 / 16.2 V^2 across three repeats against a 16.2 V^2 offline
+  prediction -- against 153 / 485 / 245 V^2 before.  An unreproducible drive is
+  not a control law.
+  NEVER RUN ON THE MOVING PLANT.  Profiles 44 and 45 exist and are untouched.
+  USE IT, but it is unproven on a plant that moves.
+
+match_trace_pseudoinverse                         WEAKEST, AND THE ONLY TRACKER
+  Open on the response error -- the only one of the three that reads the
+  measured response.  Applies one real scalar per line to the previous command.
+  Linear 7.21 dB cap off, 7.37 dB with the refresh on.  Moving plant 7.40-7.47
+  dB, essentially flat with level.
+  WEAKNESS IS STRUCTURAL, not stale code: one scalar per line gives it no way to
+  control how error is distributed across channels.  Run 33 reproduced run 01 to
+  a tenth of a dB four code generations later.
+  STRENGTH: level control is the tightest in the set, +0.05 to +0.51 dB, and it
+  holds level where optimal_diagonal does not.
+  CHANGED
+    startup level cap   as above.                              ON, -9.0 dB
+    gated drive-shape   the FRF used to enter once at startup and never again.
+    refresh             Now re-synthesised from the current FRF, gated per line
+                        on change since that line's own last solve.  Worth
+                        0.52-0.63 dB on the moving plant.      OPT-IN, off
+    gap-based rank      cuts at the largest gap in the singular-value spectrum
+                        instead of an absolute rcond.  Cross-estimate rank
+                        agreement 24.5% -> 88.7%.            OPT-IN (neg rcond)
+  KNOWN LIMIT: the refresh gate responds to the RATE of plant change, not the
+  amount.  Two of four level changes produced no refresh at all.  A slowly
+  drifting structure would slip under it.  Wants an accumulated-change
+  criterion before it meets hardware.
+  USE IT when level control matters more than accuracy, or when the plant moves
+  and you need the FRF tracked.
+
+================================================================================
+PROMISING, NOT READY
+================================================================================
+
+diagonal_congruence                              BEST RAW ACCURACY, NO LEVEL
+  Linear 5.23 dB, the best number in the whole set -- and it has NEVER held
+  total level on any run, best 2.78 dB off.  A low rms with half the lines out
+  means the errors are balanced, not small.
+  CHANGED
+    anti-windup ceiling now judges level from the measured response over one
+                        bounded step, not from the response predicted through
+                        H.  The model is exactly what cannot be trusted when
+                        the FRF is being re-estimated live.    ON, 12.0 dB
+    projected target    read on the first control() call instead of __init__,
+                        which ran before system identification and so demanded
+                        a file derived from an FRF that did not yet exist.  ON
+    startup clamp       reordered after the floor-and-silence and coherence
+                        steps, which lift level back through it.  ON
+  NEVER RUN ON THE MOVING PLANT.  The level problem is unsolved and is the thing
+  to fix before anything else.
+
+================================================================================
+OPEN LOOP BY CONSTRUCTION
+================================================================================
+
+buzz_control                 5.91 dB cap off.  No feedback, no error integrator.
+pseudoinverse_control        7.01 dB cap off.  Same.
+  Neither tracks anything.  For both, the drive-coherence cap is pure damage --
+  1.99 dB and 3.47 dB respectively -- because there is no correction mechanism
+  downstream of it.  Cap OFF is the correct setting for this family, which is
+  the reverse of the usual intuition.
+  CHANGED: startup clamp fixed on buzz; one added to pseudoinverse, which had
+  none.  Nothing else.
+  Keep as baselines.  They are what "no control law" looks like.
+
+================================================================================
+NOT RUNNABLE
+================================================================================
+
+octave_band_switching_control
+  Has never been run and cannot be without a fix: its parameter positions
+  collide with the base class, reading fields 5-9 as its own where the base now
+  reads drive_rcond and the startup cap.  Five-line fix.
+  This is the intended vehicle for wider-bandwidth control -- fine acquisition,
+  control decisions aggregated into bands.
+
+================================================================================
+TRUE OF EVERY LAW
+================================================================================
+  * The startup level cap is the ONLY behaviour change enabled by default, at
+    -9.0 dB, because it is wanted.  Everything else is opt-in, so a profile
+    naming no new fields reproduces the twelve-run reference set byte for byte.
+  * The drive-coherence cap default SPLITS: 1.0 (off) in match_trace, buzz and
+    pseudoinverse; 0.95 (on) in optimal_diagonal, its fast variant and
+    congruence.  Omitting the field does not turn it off on those three.
+  * "Update Transfer Function During Control" was a silent no-op in two of the
+    three carried-forward laws.  Rattlesnake passes an FRF every cycle and never
+    calls system_id_update during control, so a law that reacted only inside
+    system_id_update did nothing.  All three now read the live FRF in control().
+  * The plant is rank 5 with 8 control channels.  Two channels must be conceded
+    whatever the law does, and both carried-forward laws concede the same two,
+    already at -18 dB before the plant moves.  Every accuracy figure here is a
+    rank-5 floor, not an absolute one.
+
+================================================================================
+THE ONE NEGATIVE RESULT WORTH KNOWING
+================================================================================
+The response-error trim was built to close the level loop optimal_diagonal
+leaves open.  It does not work, and the reason is structural rather than a
+tuning problem: on a rank-5 plant the solver deliberately concedes channels it
+cannot reach, and a trim that reads residual response error as model error buys
+those channels back at full price.  Live, it improved the two conceded channels
+and degraded five of the six being served.  A windup fix recovered 28% of the
+excess drive but the result still trails trim-off on every measure.
+Level control on this family needs an outer loop on TOTAL POWER, not a
+per-channel correction.  Leave the trim off.

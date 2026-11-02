@@ -1,0 +1,263 @@
+================================================================================
+SESSION SUMMARY -- 2026-09-30 and 2026-10-01
+WHAT THE COHERENCE ACTUALLY MEASURES, AND WHAT THE REPOSITORY NOW CONTAINS
+================================================================================
+No hardware runs.  Twelve commits, 23d8861b through 51b7e702.  Two working days
+since the 09-29 summary; they are covered together because the second is the
+first one's consequences.
+
+STARTING POSITION.  The question that opened the first day -- can multiple
+coherence quantify the portion of each control response that is due to linear
+dynamics -- turned out to have a more interesting answer than yes or no, and
+chasing it exposed two measurement errors and one misreading of the saved data.
+The second day turned the accumulated material into things that can be handed
+to someone else: the plant models, a chart of every run, and a register of
+every control-law modification.
+
+--------------------------------------------------------------------------------
+WHAT WAS PRODUCED
+--------------------------------------------------------------------------------
+  code/plot_channel1_coherent_asd.py      fig10, fig11, fig12
+  code/verify_coherence_bias.py           where the bias correction comes from
+  code/make_moving_plant_figures.py       fig13, fig14
+  code/make_run_chart.py                  the run chart
+  notes/all_runs_chart.txt                56 runs, one block each
+  notes/control_law_modifications.txt     13 modifications, final states
+  notes/moving_plant_scores.json          every moving-plant spectrum,
+                                          scored one way
+  four .npz plant models now versioned, with README_npz.txt
+
+--------------------------------------------------------------------------------
+RESULT 1 -- COHERENCE ANSWERS A DIFFERENT QUESTION THAN THE ONE ASKED
+--------------------------------------------------------------------------------
+Rattlesnake already computes multiple coherence per control channel and saves it
+as frf_coherence.  The identity diag(H Sxx H^H)/diag(Syy) reproduces it to the
+digit, so the coherent and incoherent response power split is available offline,
+per channel and per line, from data already on disk.
+
+But it cannot see the softening.  Under Gaussian excitation an amplitude-
+dependent stiffness splits the response into a part exactly proportional to the
+drive plus an orthogonal remainder, and coherence counts the first part as
+linear.  That first part IS the whole 1% frequency shift and the whole 12.4%
+damping rise measured on 09-29.  Coherence cannot tell a moved linear system
+from the original one.  Run 51 at -18 dB reads 0.9973 on a plant that has
+already softened.
+
+So the two measurements are complementary halves and neither alone is the
+nonlinearity:
+
+    df/f and zeta/zeta0        the equivalent-linear half -- a different
+                               linear plant
+    1 - gamma^2                the residual half -- what looks like nothing
+                               linear at all
+
+What coherence does see works.  The third harmonic lands at 1250-1450 Hz, out of
+band, so in-band incoherence is essentially all intermodulation.  On
+channel 1 at 0 dB, 33.4% of in-band response power is not linearly
+explained by the six drives, against 1.2% at -18 dB.
+
+
+--------------------------------------------------------------------------------
+RESULT 2 -- THE SAVED CPSDs ARE REFERENCED TO FULL LEVEL, NOT TO THE TEST LEVEL
+--------------------------------------------------------------------------------
+The -18 dB response matches the full specification to -0.17 dB, and the saved
+specification matrix is byte-identical at every level.  The saved response and
+drive CPSDs are therefore referenced to the FULL-LEVEL specification, not
+absolute at the test level.
+
+This is why a -18 dB and a 0 dB trace sit nearly on top of each other instead of
+18 dB apart.  Any plot or statement that treats them as absolute G^2/Hz at the
+test level is wrong by the test level.  All figures from this session label the
+axis accordingly.
+
+--------------------------------------------------------------------------------
+RESULT 3 -- THE PUBLISHED COHERENCE NUMBERS ARE BIASED HIGH, AND BY HOW MUCH
+--------------------------------------------------------------------------------
+At one line, gamma^2 = ||P_X y||^2 / ||y||^2: the fraction of the response
+vector's energy lying in the p-dimensional subspace the drives span.  A response
+unrelated to the drives is isotropic in C^n_d, so a fixed p-dimensional subspace
+catches p/n_d of it -- exactly, the ratio being Beta(p, n_d - p).  With six
+drives and twenty frames that is 0.30.  A response with NO linear relationship
+to the drives measures 0.30 here, not zero.  Monte Carlo at this configuration,
+40000 trials:
+
+    true gamma^2    0.00    0.40    0.70    0.90    0.99
+    measured        0.3004  0.5747  0.7875  0.9296  0.9930
+    corrected back  0.0006  0.3925  0.6964  0.8994  0.9900
+
+The correction is gamma_adj^2 = 1 - (1 - gamma_hat^2) * n_d/(n_d - p).  Nothing
+in it is fitted; it is a function of the estimate and two counts.
+
+n_d WAS THE ASSUMPTION, AND IS NOW MEASURED.  frames_in_cpsd is 20 but the
+frames overlap 50% with a Hann window.  Pushing noise uncorrelated with the
+drives through the real Welch chain:
+
+    no overlap      bias 0.2999    n_eff 20.01    factor 1.4283
+    50% overlap     bias 0.3109    n_eff 19.30    factor 1.4513
+
+The no-overlap case recovers the theory to 0.03%, which validates the chain.
+The rig's overlap costs 0.7 of an average.
+
+CONSEQUENCE FOR THE 09-26 REPORT.  Every coherence figure in it is high by about
+0.30*(1-gamma^2), and the coherent-column scoring used raw gamma^2 as a weight,
+so the weighting was systematically generous exactly where distortion was worst.
+"Coherence falls from 0.938 to 0.697" is really 0.911 to 0.567 -- the effect is
+larger, not smaller, but the numbers as published are wrong.
+
+A CONJUGATION TRAP, recorded because it cost a wrong answer.  Sxx must be X^H X,
+conjugating the FIRST factor.  Conjugating the second gives conj(X^H X), the
+quadratic form then uses the transpose of the inverse, and the null case reads
+0.41 instead of 0.30.  Real-valued test data hides it completely -- an isolation
+test on real frames returned 0.2998 and looked correct.  The first attempt at
+the n_eff measurement was wrong for this reason and was nearly reported as
+evidence that the correction itself was bad.  The production code in
+spectral_processing.py uses the correct convention.
+
+--------------------------------------------------------------------------------
+RESULT 4 -- THE CONTROL IS BETTER THAN THE ERROR NUMBER SAYS
+--------------------------------------------------------------------------------
+Control channel 1 at 0 dB, in band, against a 0.9492 G specification:
+
+    total response                  1.3195 G    +2.86 dB
+    coherent, gamma^2 x total       1.0772 G    +1.10 dB
+    coherent, bias-corrected        0.9524 G    +0.03 dB
+
+The part of the response the six drives explain linearly, with the finite-
+average inflation removed, is within three hundredths of a decibel of
+specification.  The apparent 2.86 dB overshoot at full level is almost entirely
+content that is not linearly related to the drive -- not a control error in any
+sense the law could have fixed by commanding differently.
+
+Two caveats before this is quoted.  It is one channel, and channel 1 is not one
+of the two the rank-5 solver concedes, so it flatters the set; the other seven
+need checking.  And the whole-band number depends on the bias correction, which
+is now measured rather than assumed but is still a mean correction applied line
+by line.
+
+--------------------------------------------------------------------------------
+RESULT 5 -- A CONTROL FAILURE AT THE LINEAR / SOFTENED BAND BOUNDARY
+--------------------------------------------------------------------------------
+Channel 1 runs +15.03 dB over specification at 294 Hz at 0 dB, against +5.14 dB
+at 306 Hz at -18 dB.  In the 200-400 Hz window four modes are exactly linear
+(214.37, 246.94, 249.18, 286.25 Hz) and three soften (300.86, 306.47, 335.24 Hz,
+coming down 0.97-0.99% at 0 dB).  The gap between the top linear mode and the
+first softened one closes from 14.61 to 11.70 Hz, a 20% narrowing, and the
+failure sits IN THAT GAP rather than on either peak.  The mode that does not
+move is the one whose control fails, because the FRF shape between the two
+changes even though neither peak is where the error is.
+
+It is not a clean control miss.  Over 288-300 Hz at 0 dB the response is
++14.07 dB over specification, of which +9.84 dB is coherent and only +4.86 dB
+survives the bias correction; median coherence there falls to 0.40 against 0.997
+at -18 dB.  Both mechanisms fire on the same lines.  Across the whole 200-400 Hz
+window the bias-corrected coherent response is +0.59 dB over specification, so
+nearly all of the apparent +6.14 dB error in this band is content the drives do
+not explain linearly.
+
+This is very likely the same mechanism as the tail leakage into the linear
+control group seen at +8 dB in run 49, but here it is visible at the design
+point.  It wants confirming against a frozen-H0 calculation, which would
+separate plant movement from distortion cleanly instead of by inference.
+
+--------------------------------------------------------------------------------
+RESULT 6 -- BOTH LAWS CONCEDE THE SAME TWO CHANNELS, BEFORE THE PLANT MOVES
+--------------------------------------------------------------------------------
+Every moving-plant spectrum was rescored by one definition, validated against
+the stored runs_51_52_55_optdiag.json values to three decimals.  Level error for
+run 50 did not exist before and is computed here.
+
+On accuracy optimal_diagonal is 1.9 dB better than match_trace at every level
+and holds that as the plant moves.  On level it loses completely: +8.00 dB at
++4 dB demand against match_trace's +0.51 dB.  Neither of those is new, but the
+per-channel breakdown is:
+
+    channel            1     2     3     4     5     6     7     8
+    optimal_diagonal  5.08  1.93  3.04  2.56  1.98  2.26 11.08  8.50
+    match_trace       6.38  4.77  5.66  5.18  4.09  3.99 12.79 11.32
+
+Both laws concede channels 7 and 8, which is what a rank-5 plant does to eight
+control channels, and both concede them ALREADY AT -18 dB, before the plant has
+moved at all.  The concession is a rank consequence, not a nonlinearity
+consequence.  The entire difference between the laws is in the six they can
+reach: 1.9-5.1 dB against 4.0-6.4 dB.
+
+--------------------------------------------------------------------------------
+WHAT THE REPOSITORY NOW CARRIES
+--------------------------------------------------------------------------------
+PLANT MODELS, 43-59 kB each, exempted from the **/*.npz rule by explicit
+negations rather than by git add -f, so they stay visible to git status:
+
+    sdynpy_frame6x12_system.npz                          linear article
+    sdynpy_frame6x12_system_nonlinear_allmodes.npz       builder input
+    sdynpy_frame6x12_system_nonlinear_boundedsoften.npz  nonlinear article
+    sdynpy_frame6x12_system_higherz.npz                  identical mass and
+        stiffness, every modal damping ratio scaled by exactly 4.000, median
+        zeta 0.00834 -> 0.03336.  A control rather than a second article, and
+        never run.
+
+README_npz.txt describes the fields and records the ZETA_RATIO caveat, so anyone
+loading the nonlinear model learns its realised damping rise is +0.124 at 0 dB
+rather than the +0.100 the constant's name implies.  The builder also reads an
+11 MB run-40 spectrum that stays out, so the model can be used but not rebuilt
+from a fresh clone.
+
+THE RUN CHART, all_runs_chart.txt.  56 slots, 40 runs with saved data, 16 never
+taken.  Two of the 40 produced nothing scorable and four were nonlinear attempts
+that escaped or could not be excited, leaving 34 scored linear runs and six on
+the bounded-softening plant.  Most of the gaps were closed by evidence rather
+than abandoned; only runs 53 and 54 are genuinely outstanding.
+
+THE MODIFICATION REGISTER, control_law_modifications.txt.  Thirteen changes
+across five laws, each with what was wrong, what it does now, what was measured,
+and the state the code is in -- every default read from the source rather than
+from the write-ups.  Five are on by default, and four of those five are repairs
+to things that were simply wrong: a startup clamp in the wrong units and the
+wrong order, a demotion gate that never let the fast path run, an anti-windup
+ceiling that trusted the model it should have been guarding, and a projected
+target read before its file could exist.  Everything that changes what a law
+DOES is opt-in, which is why the twelve-run reference set still reproduces.
+
+--------------------------------------------------------------------------------
+A SIXTH RETRACTION, AND TWO OF MY OWN ERRORS
+--------------------------------------------------------------------------------
+RUN 42 DID NOT OVERFLOW.  The 09-26 report says of the cubic articles that "four
+runs were attempted on it and all four ended the same way -- arithmetic overflow
+in the time integration".  All four console logs were checked directly: 44, 46
+and 48 each show the overflow at line 151 of
+sdynpy_nonlinear_system_virtual_hardware.py, but run 42's log is six lines
+with zero overflow warnings.  It was stopped after system identification
+because the single-mode article could not be excited enough to move its FRF,
+q_rms/q0_ref = 0.0067.  Three escaped, one was stopped for lack of effect.
+The 09-23 and 09-24 session summaries have it right; the report lost the
+distinction and still contains the wrong sentence.
+
+TWO PROCESS FAILURES WORTH RECORDING, both mine.  The first n_eff measurement
+returned 0.41 for the null case and was nearly reported as evidence the bias
+correction was badly wrong; the cause was the conjugation above.  And the
+figure 13 legend was moved to "fix" an overlap, landed directly on top of both
+match_trace traces, and was shipped without re-rendering to check -- the
+delivered version was worse than the one it replaced.  Both were caught, one by
+a sanity case that should have been run first and one by the user.
+
+A COLOUR PALETTE THAT FAILED ITS OWN VALIDATOR.  The dark step of the first blue
+ramp was #10365c, lightness 0.328 against a 0.43 floor, so it rendered as
+near-black rather than blue; the light step was too pale and both were under the
+chroma floor.  Chosen by eye instead of by running the validator, which is
+exactly what the validator exists to prevent.  Replaced with #5aa5e4 / #1a5fa0 /
+#cc5a28, all inside the band and separated by dE 20.4 or better under normal
+vision and both CVD simulations.
+
+--------------------------------------------------------------------------------
+OPEN
+--------------------------------------------------------------------------------
+- The frozen-H0 calculation.  Dividing by the -18 dB sysid H0 instead of the
+  live FRF turns the residual into distortion PLUS plant shift, which is what
+  "the portion due to the original linear dynamics" actually means.  One script,
+  no new runs, and it would settle result 5.
+- The other seven channels of result 4.
+- Correcting the coherence numbers and the run-42 sentence in the 09-26 report.
+- The "flat across a 12.7x span" sentence, still mixing two level ranges in both
+  run49_results.txt and the report.
+- Runs 53 and 54, the fast law's trim pair on the moving plant.
+- octave_band_switching_control still needs its five-line parameter fix before
+  it can run at all.

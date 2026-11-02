@@ -1,0 +1,154 @@
+RUNS 15 and 16 -- the optimal-diagonal pair with the dB error objective
+===============================================================================
+WHAT THESE RUNS TEST
+-------------------------------------------------------------------------------
+Run 14 showed the optimal-diagonal family does not fail to reach 13X+ and 14X+
+-- it SELLS them. Both solve paths minimized squared error in LINEAR units,
+where the most a channel can ever cost is its own target squared: drive its
+response to zero and the penalty stops growing. In dB it grows without bound.
+The specification is flat at -30 dB on all eight channels but the plant's row
+gain is not (3.8 to 10.3 dB), so the solver bought the easy channels with the
+hard ones -- correctly, given what it was asked to minimize.
+
+Both laws now minimize dB error. The factored path does it directly; the SDP
+path does it by iteratively reweighted least squares, which keeps every
+subproblem convex and its coherence-cap constraint valid.
+
+  run 15   optimal_diagonal_control_fast   dB via Burer-Monteiro
+  run 16   optimal_diagonal_control        dB via IRLS on the SDP
+
+FRF UPDATE IS OFF for both, deliberately. It makes run 14 an EXACT baseline
+for run 15: same profile, same system ID, same everything, with error_domain
+the only difference. There is no equivalent baseline with the update on --
+runs 05 and 06 were the base SDP law under the fast law's name, because the
+old bit-equality gate demoted every bin. An update-on pair is the natural
+follow-on once these two land.
+
+-------------------------------------------------------------------------------
+PARAMETERS -- both runs use the same string
+-------------------------------------------------------------------------------
+    1e-6,0.05,20,1.0,0.95,6,-9.0,1,2,1e-2
+     |    |    |  |   |    | |    | | |
+     |    |    |  |   |    | |    | | drive_rcond   confine the factored solve
+     |    |    |  |   |    | |    | |               to sigma >= 1e-2*sigma_max
+     |    |    |  |   |    | |    | n_irls_passes   SDP path only
+     |    |    |  |   |    | |    error_domain      1 = dB (0 = old linear)
+     |    |    |  |   |    | startup_test_level_cap_db
+     |    |    |  |   |    bm_rank
+     |    |    |  |   max_drive_coherence
+     |    |    |  error_threshold_db
+     |    |    max_bins_per_update
+     |    frf_update_threshold
+     reg
+
+drive_rcond is the one that is not obvious. Removing the ceiling on what
+missing a channel costs also removes any limit on the drive spent chasing a
+barely-reachable one. Unconstrained, the factored path reached pooled 1.93 dB
+-- better than the rcond-1e-3 reachability floor itself -- and paid +10.4 dB
+mean drive, +30.2 dB on the worst bin, at eigenvalue participation 1.02, i.e.
+a nearly rank-one drive down a near-singular direction. reg does not fix that:
+it penalizes every direction equally, and at reg=1.0 the drive was still
++7.8 dB mean while the accuracy had fallen back to floor level. 1e-2 is the
+point on the curve that is better than the old law on BOTH axes.
+
+-------------------------------------------------------------------------------
+LAUNCH
+-------------------------------------------------------------------------------
+cd ~/Code/python/rattlesnake-vibration-controller
+
+run 15:
+python rattlesnake.py --profile examples/sixdrive12resp/results/case/profiles/profile_15_optdiagfast_db_updateoff.xlsx
+
+run 16:
+python rattlesnake.py --profile examples/sixdrive12resp/results/case/profiles/profile_16_optdiag_db_updateoff.xlsx
+
+-------------------------------------------------------------------------------
+SAVE FILENAMES  (into examples/sixdrive12resp/results/runs/)
+-------------------------------------------------------------------------------
+run 15  optimal_diagonal_control_fast   dB   update OFF
+          system id :  run15_optdiagfast_db_sysid
+          streaming :  run15_optdiagfast_db_stream
+          spectral  :  run15_optdiagfast_db_spec
+
+run 16  optimal_diagonal_control        dB   update OFF
+          system id :  run16_optdiag_db_sysid
+          streaming :  run16_optdiag_db_stream
+          spectral  :  run16_optdiag_db_spec
+
+-------------------------------------------------------------------------------
+BEFORE STARTING EACH ENVIRONMENT
+-------------------------------------------------------------------------------
+  1. Launch terminal prints, for run 15 only:
+         [optimal_diagonal_control_fast] bm_rank=6
+     Run 16 must NOT print that line -- if it does, the wrong profile loaded.
+  2. Both print an __init__ line; confirm max_bins_per_update=20 and
+     max_drive_coherence=0.95 in it.
+  3. GUI: Update System ID During Control = N. Check it twice.
+  4. System ID: judge it on median (expect ~0.998), 5th percentile (~0.97) and
+     the count of lines with any channel below 0.75 (expect 13-30 of 901). Do
+     NOT judge it on the bare minimum over all channels -- control channel 7
+     reads 0.28-0.54 on every identification this rig has produced and tells
+     you nothing.
+
+-------------------------------------------------------------------------------
+PREDICTED -- offline, run 14's own FRF, full control loop, 70 cycles
+-------------------------------------------------------------------------------
+RUN 15 against RUN 14 (same law, same profile, objective the only difference):
+
+  cycle        run 14 [linear]            run 15 [dB]
+     1      10.06 dB                   10.06 dB        startup cap, both
+     2       3.65 dB                    3.45 dB
+    10       4.26 dB                    3.64 dB
+    46       4.74 dB  drive +29.1       3.74 dB  drive +24.0   band covered
+    70       4.74 dB                    3.74 dB
+
+  per channel at convergence, 7X+ through 14X+:
+     run 14   [4.1  0.8  1.4  1.0  0.6  0.6  9.5  8.3]
+     run 15   [2.0  5.0  2.6  1.5  1.0  1.3  6.5  5.4]
+
+  Pooled 4.74 -> 3.74 dB and drive DOWN 5.1 dB. 13X+ 9.5 -> 6.5, 14X+ 8.3 ->
+  5.4, 7X+ 4.1 -> 2.0.
+
+  EXPECT ONE CHANNEL TO GET WORSE: 8X+ goes 0.8 -> 5.0 dB. That is the trade,
+  not a fault. The linear objective was holding 8X+ well BELOW its own
+  reachability floor of 2.78 dB by spending the error on 13X+ and 14X+; the dB
+  objective stops doing that. If 8X+ matters more to you than the pooled
+  figure, that is an argument for a per-channel weighting, not for the old
+  objective.
+
+  Cycle time 113 ms against run 14's 106 ms -- the dB objective is essentially
+  free on this path.
+
+RUN 16: pooled settles near 3.4 dB by cycle 2 and drifts slowly down (3.36 dB
+  at cycle 12, 3.16 dB measured at solver level over the sampled band).
+
+  IT IS SLOW: 4.3 SECONDS PER CONTROL CYCLE, against run 03/04's ~1.3 s, because
+  IRLS is three SDP solves per bin instead of one. 46 cycles to cover the band
+  is about 3.5 minutes of solve time. The drive keeps playing while the law
+  thinks, so this is slow convergence, not a stall. Do not mistake it for the
+  hang that run 14 looked like -- and note the console now says so itself once
+  there is no work left.
+
+-------------------------------------------------------------------------------
+WHAT TO WATCH
+-------------------------------------------------------------------------------
+  Run 15: per-cycle time should stay near run 14's. The terminal must print no
+      line reading "FRF moved ... safe SDP path this call" -- with the update
+      off H never moves, so one such line means the update is on after all.
+  Run 16: expect no bm_rank line and multi-second cycles from the start.
+  Both: drive voltages. Run 15 is predicted to need LESS drive than run 14
+      (-5.1 dB on the band total). If it needs more, drive_rcond is not doing
+      its job and that is the finding.
+
+-------------------------------------------------------------------------------
+COMPARABILITY
+-------------------------------------------------------------------------------
+Run 15 is directly comparable to run 14 -- identical profile but for the
+control parameters. Run 16 is NOT comparable to runs 03/04 (they had the FRF
+update on) and is best read against run 15 as the same objective reached by a
+different solver. Expect the two to disagree: the factored path is restricted
+to the well-conditioned subspace and the SDP path is restrained instead by the
+coherence cap, so they minimize the same thing under different constraints.
+Measured at solver level on the sampled band: 3.83 dB for the factored path,
+3.16 dB for the SDP. The SDP path being MORE accurate, at 60x the time and
+more drive, is the expected order here.

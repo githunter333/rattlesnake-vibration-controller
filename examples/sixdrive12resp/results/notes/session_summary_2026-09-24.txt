@@ -1,0 +1,217 @@
+================================================================================
+SESSION SUMMARY -- 2026-09-24
+BOUNDED SOFTENING: THE NONLINEAR PLANT THAT CANNOT ESCAPE
+================================================================================
+
+STARTING POSITION
+-----------------
+Four nonlinear runs (42, 44, 46, 48) had been taken on softening-CUBIC plant
+files and all four ended the same way: overflow in the time integration at
+sdynpy_nonlinear_system_virtual_hardware.py:151,
+
+    RuntimeWarning: overflow encountered in power
+        return k3s * q ** 3 + c2s * qd * np.abs(qd)
+
+That is escape, not a jump.  A softening cubic gives a FINITE potential well:
+the restoring force wn^2 q + k3 q^3 (k3 < 0) reaches zero at
+
+    q_esc = wn / sqrt(|k3|)
+
+and reverses beyond it.  The trap, restated because it is the whole story of
+the cubic article: raising |k3| raises the shift linearly and moves the cliff
+closer as 1/sqrt(|k3|) at exactly the same rate, so the shift available AT
+escape is fixed at 3/8 = 37.5% whatever |k3| is.  With 4-sigma random peaks
+that caps the usable shift near 0.5-1%; escapecal's MARGIN=10 put it at
+0.375%, and run 48 escaped anyway.  You cannot buy effect with strength.
+
+Four amplitude predictions were made across that campaign and all four were
+wrong.  That record is the reason everything below was MEASURED rather than
+asserted.
+
+THE IDEA (user's, from a Mathematica/MATLAB SDOF demo)
+------------------------------------------------------
+A softening stiffness that saturates instead of reversing:
+
+    Ks(x, r) = x * (exp(-1e6*|x/3|) + 0.5*r)
+
+Both factors stay positive for x > 0, so the restoring force never changes
+sign.  It saturates onto a residual linear stiffness 0.5*r*K and the potential
+keeps opening as 0.5*(0.5r)*K*x^2.  There is no well, so there is nothing to
+escape from.  This is not a larger margin on the cubic -- it removes the
+failure mode structurally.
+
+TWO CHANGES MADE IN PORTING IT
+------------------------------
+1. NORMALIZED so g(0) = 1.  In the original Ks'(0) = 1 + 0.5r, so the
+   small-amplitude natural frequency is w*sqrt(1+0.5r), not w.  Normalized,
+   the small-amplitude modal frequency is EXACTLY the measured wn, which is
+   what lets the article start from the same linear FRF it always did.
+
+2. GAUSSIAN kernel exp(-(q/qt)^2) rather than exp(-|q|/qt).  The Gaussian
+   matches the cubic term for term at small amplitude,
+
+       g(q) ~ 1 - (1-alpha) q^2/qt^2   <->   k3 = -(1-alpha) wn^2/qt^2
+       qt = q_esc * sqrt(1-alpha)
+
+   so escapecal's per-mode calibration maps across unchanged, and the shift
+   stays QUADRATIC in level (6 dB -> 4x) instead of linear.  The |q| form has
+   a kink at q = 0 and gives a shift linear in level, compressing the contrast
+   across a level change -- which is the whole experiment.
+
+Final form:
+
+    g(q) = alpha + (1-alpha) exp(-(q/qt)^2)        alpha = 0.35
+    F(q) = wn^2 q g(q)
+    nl   = F - wn^2 q = wn^2 q (1-alpha) expm1(-(q/qt)^2)      <= 0
+
+expm1 is exact as q -> 0 and saturates at -1, so the term cannot overflow at
+any amplitude.  alpha >= 0.3086 keeps dF/dq positive everywhere (below that
+the tangent stiffness dips negative over a band -- still bounded, still no
+escape, but jumpy and stiff to integrate).
+
+WHAT WAS BUILT
+--------------
+examples/sixdrive12resp/code/bounded_softening.py
+    Kernel, closed-form Gaussian statistical linearization, closed-form
+    inverse for qt, in-band mode selection, 7 self-tests (all pass).  Tests
+    include a direct numerical no-escape proof and a 2nd-order CONVERGENCE
+    check against the cubic, not just a tolerance.
+
+components/sdynpy_nonlinear_system_virtual_hardware.py
+    New bounded-softening branch keyed on nl_soft_qts / nl_soft_wn2s /
+    nl_soft_alpha, taking precedence when present.  The cubic path is
+    untouched, so existing plant files behave bit-identically.
+    Unsoftened modes carry qt = inf -> expm1(0) = 0 exactly: they are not
+    approximately linear, they are exactly linear.
+    STRENGTH scales qt as qt/sqrt(strength), which reproduces
+    k3_eff = strength*k3 at small amplitude while leaving alpha untouched.
+    So unlike escapecal ("DESIGN POINT IS STRENGTH 1, no headroom"), this
+    file is bounded at ANY strength.  Verified to 400.
+
+examples/sixdrive12resp/code/build_nonlinear_frf_system_boundedsoften.py
+    Plant builder.  Self-consistent calibration (see below), loop-gain guard
+    that ABORTS if the design point is unstable, system-ID contamination
+    check, numerical escape check.
+    Output: results/case/sdynpy_frame6x12_system_nonlinear_boundedsoften.npz
+
+examples/sixdrive12resp/code/verify_bounded_softening.py
+    Time-domain verification.  The 33 modes decouple completely in modal
+    coordinates (both the linear part and the nonlinear term are diagonal),
+    so they integrate independently and cheaply with the same RK4 and the
+    same N_SUB=4 the virtual hardware uses, driven by modal forces
+    synthesized from run 40's MEASURED drive CPSD.
+    Shift is measured as k_eq = E[F(q) q]/E[q^2] -- the realized equivalent
+    stiffness -- NOT from a PSD peak.  A 0.5 Hz PSD grid cannot resolve the
+    0.06% expected at -12 dB; this can, with no windowing bias.
+
+THE ERROR THE VERIFICATION CAUGHT (this is the important part)
+--------------------------------------------------------------
+First build targeted 5% shift at 0 dB, sized on the LINEAR modal response.
+Time integration measured 29%.  A factor of six.
+
+Two feedbacks were missing, both amplifying:
+
+  1. Softening lowers modal stiffness -> response grows -> softens further.
+     For a white force this alone is mild: sigma ~ g^-0.75, fixed point near
+     5.8%.
+  2. The control drive is SHAPED.  match_trace notches it at each resonance
+     to flatten the response.  When the resonance moves it slides off its own
+     notch into a much hotter part of the drive spectrum.  THAT is the large
+     term, and no white-noise estimate can see it.
+
+Measured response growth from softening alone: sigma(g_target)/sigma(linear)
+ran 1.10 - 3.27x at the 5% target.
+
+FIXED-POINT STABILITY -- the real constraint
+--------------------------------------------
+The loop sigma -> g(sigma) -> sigma(g) has a gain.  Above 1.0 the design
+point is UNSTABLE: the plant does not settle there, it jumps past to the
+far-softened stable state.  Measured gain vs target, run 40 drive:
+
+    target     max loop gain     modes unstable
+     0.20%         0.065              0/33
+     0.50%         0.187              0/33
+     1.00%         0.507              0/33
+     1.50%         0.764              0/33
+     2.00%         0.996              0/33   <-- cliff
+     3.00%         1.695              3/33
+     5.00%         2.650              9/33   <-- the first build; jumped to 29%
+
+The cliff is at 2.0%.  Built at 1.0%, gain 0.507 -- a factor of two of margin.
+The builder now ABORTS if gain >= 1 and warns above 0.7.
+
+VERIFICATION RESULT (strength 1, run 40 drive, 4 x 2 s blocks)
+---------------------------------------------------------------
+    level     designed     measured (median)
+    -18 dB     0.015%        0.014%
+    -12 dB     0.060%        0.057%
+     -6 dB     0.242%        0.229%
+      0 dB     1.000%        0.996%
+
+Within 4% on every mode but one, which realizes 1.53% against 1.00% design --
+the mode nearest the cliff.  Linear sigma/design across all levels 0.96-1.04,
+confirming the builder's amplitude model and the integrator independently.
+
+ESCAPE STRESS
+-------------
+    strength   level    result
+        25     +0 dB    FINITE   max|q|/qt  18.2   shift 39.9%
+        25    +12 dB    FINITE   max|q|/qt  51.7   shift 40.8%
+       400     +0 dB    FINITE   max|q|/qt  83.4   shift 40.8%
+       400    +12 dB    FINITE   max|q|/qt 196.2   shift 40.8%
+
+400x the nonlinearity and 4x the level the article will ever run.  The shift
+saturates at 40.84% = 1 - sqrt(0.35), exactly the alpha asymptote, and simply
+cannot go further.  For comparison the cubic escaped at strength 25 (margin
+0.81) and escaped in practice at strength 1 on run 46.
+
+SYSTEM ID CONTAMINATION -- a finding, not just a setting
+---------------------------------------------------------
+The shift is quadratic in modal amplitude, and the flat system-ID drive
+excites the modes differently from the shaped control drive: measured per-mode
+ratio q_sysid/q_control = 1.183 worst case, consistent with the 0.25-1.2 range
+escapecal measured.  So at full level the identified FRF carries softening
+ALREADY BAKED IN, mode-dependently.
+
+At the 1.0% design: median 0.22%, worst 1.27% (mode 3, 246.9 Hz).
+    ==> RUN SYSTEM ID AT -4.5 dB to hold every mode under 0.5%.
+
+This is a candidate explanation for run 48's system ID "looking significantly
+noisier than the linear system sysid".  Part of that was very likely not noise
+at all -- it was each resonance sitting at a different shifted frequency.
+
+MODE SELECTION -- unresolved
+-----------------------------
+The chosen rule was "in-band modes only" (100-1000 Hz).  On this plant that is
+a NO-OP: all 33 flexible modes lie between 120.0 and 899.5 Hz, so every mode
+is softened and there is no linear control group in the measurement.
+
+If a genuine subset is wanted, two options, both a one-line change:
+  (a) contiguous sub-band, e.g. soften only above 400 Hz, so the FRF shows a
+      visible boundary between softened and linear regions;
+  (b) top-N by modal participation.
+
+OPEN CAVEAT
+-----------
+All of the above is OPEN LOOP against run 40's fixed drive.  In the closed
+loop the controller re-notches every cycle, which will change the loop gain in
+a direction that cannot be predicted from here -- chasing the resonance could
+reduce the slide-off effect or deepen it.  The 2x stability margin exists for
+that uncertainty.
+
+WHERE THIS LEAVES THE ARTICLE
+------------------------------
+  * effect: 1.0% at 0 dB vs 0.375% realized by escapecal's cubic -- 2.7x
+  * level contrast: 0.014% -> 1.0%, a 71x span across the -18 to 0 dB change
+  * failure mode: removed, not mitigated.  No escape at any level or strength.
+  * predicted vs measured: agrees to 4%.  First time on this article.
+
+NEXT
+----
+  1. Decide the mode subset (all 33, or a sub-band with a linear control group)
+  2. Profiles + runsheet: system ID at -4.5 dB, environment -18 -> -12 -> -6 -> 0
+  3. match_trace with the gated FRF refresh (refresh 0.05) as the first law
+  4. Still outstanding from before: runs 36-38 (response-error trim pair)
+     allocated and untaken; gap-rank rig test on the linear plant; a
+     match_trace repeat (7.374 with 56% drive repeatability is one run, not an
+     established result)

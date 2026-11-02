@@ -1,0 +1,154 @@
+RUNS 42 and 43 -- match_trace on the NONLINEAR plant
+================================================================================
+First runs on any article other than sdynpy_frame6x12_system.npz.  This is the
+experiment the refresh was built for: a plant whose FRF genuinely moves with
+level, so a drive shape frozen at system-ID amplitude is actually wrong by the
+time control reaches full level.
+
+--------------------------------------------------------------------------------
+THE ARTICLE
+--------------------------------------------------------------------------------
+sdynpy_frame6x12_system_nonlinear.npz -- same M, C, K as the linear baseline,
+so identical FRF at vanishing amplitude, plus an amplitude-dependent softening
+cubic stiffness and quadratic damping on ONE mode (120.0 Hz, zeta 0.040) in
+modal coordinates.  Calibrated so that going from modal amplitude q0 to 2*q0
+gives about -4% in frequency and x1.20 in damping ratio.
+
+Hardware Type 7 (SDynPy Nonlinear System Integration), not 6.  Both cells
+matter -- type 6 with this file would run it as a pure linear system and the
+console would say so.
+
+--------------------------------------------------------------------------------
+READ THIS BEFORE SETTING THE LEVEL.  The effect may be far too small at 1.
+--------------------------------------------------------------------------------
+The nonlinearity is calibrated against nl_reference_drive_level_vrms = 20.0 V
+RMS of MODE-SHAPED drive.  This profile runs System ID Level at 1 V RMS, and
+match_trace at 0 dB commands roughly 4 V per drive spread across 100-1000 Hz,
+of which only a fraction lands on the 120 Hz mode.
+
+Frequency shift scales as amplitude SQUARED.  Taking A/q0 ~ 0.2 as a generous
+estimate, the shift at control level is about
+
+    -4% x (0.2/2)^2  =  -0.04%
+
+which is not a plant change, it is nothing.  That estimate is rough -- it
+ignores how the random drive's spectral shape projects onto the target mode,
+which could push it either way -- but the order of magnitude is the point.
+
+RATTLESNAKE_NONLINEARITY_STRENGTH multiplies k3 and c2 together and is read
+live from the environment (default 1.0, 0 recovers the linear baseline
+exactly).  Because the shift goes as k3*A^2, multiplying k3 by s is the same as
+multiplying amplitude by sqrt(s).  So strength 25 buys a factor of 5 in
+effective amplitude, strength 100 a factor of 10.
+
+RUN 42 IS THEREFORE A CALIBRATION AS WELL AS A BASELINE.  Take it at
+strength 1 first, look at the drift diagnostic, and decide from that:
+
+    d_ref settles near 0.05, like the LINEAR plant (runs 39/40)
+        -> the nonlinearity is not engaging.  Re-run 42 at strength 25 before
+           going anywhere near run 43.  Do not read a null result from run 43
+           as "the refresh does not help" when the plant never moved.
+    d_ref settles well above 0.05, and keeps climbing as level rises
+        -> the plant is moving.  Proceed to run 43 at the same strength.
+
+The strength used is NOT recorded in the nc4 files.  It goes in the console log
+and it must go in the notes, or the run is uninterpretable later.
+
+--------------------------------------------------------------------------------
+RUN 42 -- nonlinear, refresh OFF          (baseline + calibration)
+--------------------------------------------------------------------------------
+Profile : profile_32_matchtrace_nl_norefresh.xlsx        NEW, 2026-09-22
+Params  : 1e-3,0.95,-9.0,,0,0,1      refresh OFF, diagnostics ON
+  SAVE AS  run42_matchtrace_nl_norefresh_{sysid,spec,stream}.nc4
+
+--------------------------------------------------------------------------------
+RUN 43 -- nonlinear, refresh ON t=0.05     (the actual test)
+--------------------------------------------------------------------------------
+Profile : profile_33_matchtrace_nl_refresh005.xlsx       NEW, 2026-09-22
+Params  : 1e-3,0.95,-9.0,,1,0.05,1    refresh ON, threshold 0.05
+  SAVE AS  run43_matchtrace_nl_refresh005_{sysid,spec,stream}.nc4
+  SAME strength as run 42.  The pair is void otherwise.
+
+Both: Update System ID During Control Y.  Start at -12 dB, settle, then 0 dB.
+Saves to examples/sixdrive12resp/results/runs/
+Console to examples/sixdrive12resp/results/notes/run4N_console.log
+
+MOVE THE DRIFT FILE ASIDE BEFORE EACH RUN -- the law always writes the same
+name and run 40's copy has not been preserved yet:
+    cd ~/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/results/notes
+    mv match_trace_frf_drift.npz run40_match_trace_frf_drift.npz    # once
+    ... after run 42:  mv match_trace_frf_drift.npz run42_match_trace_frf_drift.npz
+
+--------------------------------------------------------------------------------
+PRE-REGISTERED
+--------------------------------------------------------------------------------
+No accuracy prediction is registered for either run.  Nothing is known about
+how this law behaves on a moving plant, and inventing a number would be
+theatre.
+
+What IS registered:
+
+1. RUN 42 MUST DIFFER FROM RUN 39 IN THE DRIFT DIAGNOSTIC, or the strength is
+   too low.  Run 39 on the linear plant: noise floor 0.0070, d_ref settling at
+   0.0522.  A nonlinear run at adequate strength should show d_ref climbing as
+   the level ramps and settling materially higher.  d_ref ~= 0.05 means the
+   plant did not move -- raise strength, do not proceed.
+2. THE LEVEL LOOP MUST STILL CONVERGE in both runs.  level dB within
+   -0.5 to +0.5.  A softening plant under a level-only loop is the classic
+   way to chase a moving resonance; if the level walks, that is a finding
+   about the law, not a fault in the setup, and it should be recorded rather
+   than tuned away.
+3. RUN 43's REFRESH COUNT SHOULD NOT DECAY TO ZERO the way run 40's did
+   (901 -> 6-18).  On a genuinely moving plant the gate should keep firing,
+   at a rate that tracks the level ramp.  A decay to near zero means the
+   shape converged and the plant stopped moving -- which would again point at
+   insufficient strength.
+4. Run 42 and 43 must use the SAME strength, recorded in both consoles.
+
+--------------------------------------------------------------------------------
+LAUNCH
+--------------------------------------------------------------------------------
+  cd ~/Code/python/rattlesnake-vibration-controller
+  pkill -9 -f "envs/rattlesnake/bin/python" || true ; sleep 1
+
+  RUN 42:
+  RATTLESNAKE_NONLINEARITY_STRENGTH=1 \
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/profile_32_matchtrace_nl_norefresh.xlsx \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run42_console.log
+
+  RUN 43 (same strength as 42):
+  RATTLESNAKE_NONLINEARITY_STRENGTH=1 \
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/profile_33_matchtrace_nl_refresh005.xlsx \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run43_console.log
+
+CHECK ON STARTUP, before letting it run:
+    grep "nonlinearity_strength" run42_console.log
+must print n_modes=1 and the strength you set.  If it says n_modes=0 or warns
+about missing nl_* keys, the hardware type or the file path is wrong and the
+run is a linear run wearing a nonlinear name.
+
+--------------------------------------------------------------------------------
+PROFILE PROVENANCE
+--------------------------------------------------------------------------------
+profile_32 and profile_33 are each profile_01 with exactly THREE cells changed,
+verified cell by cell across both sheets:
+    [Hardware] B1  6 -> 7                 nonlinear integration
+    [Hardware] B2  linear npz -> nonlinear npz
+    [Frame 6x12 Random] B14  the parameter string
+They differ from each other in B14 alone.
+
+--------------------------------------------------------------------------------
+WHAT THESE RUNS DO NOT DO
+--------------------------------------------------------------------------------
+They do not test the gap-based rank criterion (rcond negative).  That is a
+third run against run 43 as its control, and mixing it in here would confound
+two changes.
+
+They do not test the response-error trim or the optimal-diagonal laws on this
+article.  Those are separate and they are also waiting on this plant.
+
+The all-modes variant, sdynpy_frame6x12_system_nonlinear_allmodes.npz, is
+untouched.  If one mode at adequate strength proves too local an effect, that
+file spreads the nonlinearity across every mode and is the next thing to try.

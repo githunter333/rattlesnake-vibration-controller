@@ -1,0 +1,145 @@
+RUN 39 -- match_trace_pseudoinverse: measure the per-line FRF drift
+================================================================================
+A MEASUREMENT run, not a control-law change.  The command is bit-identical to
+run 33's; the only difference is that the law now records how much the FRF
+moves, per frequency line, so a refresh threshold can be set from data instead
+of by analogy with optimal_diagonal_control.
+
+WHY.  With "Update Transfer Function During Control" ON, this law reads the FRF
+exactly once -- in the cycle-1 pseudoinverse -- and never again.  Steady state
+is output = last_output * trace_ratio, a per-line real scalar.  It tracks LEVEL
+against a re-estimated plant while holding a drive SHAPE synthesised from the
+plant as it looked before the test started.  So for runs 01 and 33 the FRF
+update was a complete no-op.
+
+A gated refresh now exists (field 5, refresh_threshold).  Nothing has ever
+measured the quantity it gates on.  Run 35 measured the fast law's GLOBAL
+in-band movement at median 0.185 per cycle, but a global norm cannot say which
+lines moved, and match_trace is a per-line law.  This run produces the per-line
+distribution.
+
+NOTE THE LAW IDENTITY.  match_trace_pseudoinverse, the plain function at
+control_laws.py:520 -- "pi" here is PSEUDOINVERSE.  NOT
+match_trace_pseudoinverse_pi, the PI-controlled class at control_laws.py:864.
+Different laws, numbers not comparable.  profile_29 is derived from profile_01,
+which is the plain one.
+
+--------------------------------------------------------------------------------
+THE RUN
+--------------------------------------------------------------------------------
+Profile : profile_29_matchtrace_frfdiag.xlsx      NEW, created 2026-09-22
+Script  : control_laws/control_laws.py     Function: match_trace_pseudoinverse
+Params  : 1e-3,0.95,-9.0,,0,0,1
+          field 0  rcond                      1e-3   as run 01/33
+          field 1  max_drive_coherence        0.95   as run 01/33
+          field 2  startup_test_level_cap_db  -9.0   THE DEFAULT, written out
+                                                     only so 5 and 6 can be reached
+          field 3  (empty)                            deliberately unread by this
+                                                     law -- it is running_ceiling_db
+                                                     for the open-loop laws, and
+                                                     match_trace skips it so strings
+                                                     are not portable between families
+          field 4  refresh_shape              0      OFF -- the shape is NOT refreshed
+          field 5  refresh_threshold          0      unused while field 4 is off
+          field 6  frf_diag                   1      RECORD ONLY
+Update System ID During Control : Y        Start at -12 dB, settle, then 0 dB.
+
+  SAVE AS  run39_matchtrace_frfdiag_sysid.nc4
+           run39_matchtrace_frfdiag_spec.nc4
+           run39_matchtrace_frfdiag_stream.nc4
+
+  Save into  examples/sixdrive12resp/results/runs/
+  Console to examples/sixdrive12resp/results/notes/run39_console.log
+  The law also writes, by itself, every 25 cycles:
+             examples/sixdrive12resp/results/notes/match_trace_frf_drift.npz
+  That .npz is the actual deliverable.  The nc4 files are the usual scoring
+  inputs; the npz is what sets the threshold, and it is NOT recoverable from
+  them afterwards.
+
+--------------------------------------------------------------------------------
+PROFILE PROVENANCE
+--------------------------------------------------------------------------------
+profile_29 is profile_01 with exactly one cell changed -- B14, the parameter
+string -- verified cell by cell.  And verified by construction: the two strings
+were parsed and the closed loop run for eight cycles on run 33's identification,
+giving max |run39 string - run33 string| = 0.000e+00.  The instrumentation
+cannot move the command.
+
+--------------------------------------------------------------------------------
+PRE-REGISTERED
+--------------------------------------------------------------------------------
+The scored result must reproduce run 33, which itself reproduced run 01 to
+within a tenth of a dB:
+
+    rms        8.22    accept 8.0 - 8.45
+    % out      27.5    accept 26.5 - 28.5
+    level dB   +0.09   accept -0.15 - +0.35
+    drive_trace 0.55   accept within 15%
+
+If it lands outside, the instrumentation is not as inert as the offline test
+says and nothing else from this run should be used.
+
+WHAT THE npz DECIDES.  It holds, per cycle and per in-band line:
+    d_prev     shape change since the previous cycle   -- the NOISE scale
+    d_ref      shape change since cycle 1              -- the DRIFT scale
+    d_ref_raw  the same, un-normalised, for comparison
+"Shape" means each line normalised by its own Frobenius norm first.  That
+normalisation is not cosmetic: a per-line GAIN change is absorbed exactly by
+trace_ratio and needs no re-solve.  Measured while writing the tests --
+drifting H by a pure scalar and refreshing those lines changed the command by
+7e-11, i.e. not at all.  A gate on the raw metric would fire on every one of
+those lines and buy nothing.
+
+READ IT LIKE THIS:
+  d_ref grows through the run while d_prev stays flat
+      -> real plant drift.  Set refresh_threshold above the d_prev 95th
+         percentile and below where d_ref ends up.  The gate earns its place.
+  d_ref just sits at the d_prev level
+      -> the movement is estimator noise.  There is nothing for a refresh to
+         track on this plant, and that is the finding: report it and move to
+         the nonlinear article rather than tuning a threshold against noise.
+
+EXPECTED, honestly: the second.  Run 35 measured the model mismatch on this
+plant at 0.060 dB rms and run 33 reproduced run 01 after eight days.  This
+plant does not move.  The run is still worth taking, because the per-line
+distribution has never been measured and it is the reference against which the
+nonlinear article's numbers will mean something.
+
+--------------------------------------------------------------------------------
+LAUNCH
+--------------------------------------------------------------------------------
+  cd ~/Code/python/rattlesnake-vibration-controller
+  pkill -9 -f "envs/rattlesnake/bin/python" || true ; sleep 1
+
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/profile_29_matchtrace_frfdiag.xlsx \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run39_console.log
+
+AFTER THE RUN
+  ls -la examples/sixdrive12resp/results/notes/match_trace_frf_drift.npz
+  grep -c "FRF drift cycle" examples/sixdrive12resp/results/notes/run39_console.log
+Both must be non-zero.  If the npz is missing, the law could not write to the
+notes directory and the per-line data is lost -- the console lines carry the
+percentiles as a fallback, which is why the console must be captured.
+
+--------------------------------------------------------------------------------
+NUMBERING
+--------------------------------------------------------------------------------
+Runs 36, 37 and 38 remain allocated to the response-error trim pair in
+runsheet_35_38.txt and have not been taken.  Taking 39 first leaves a gap;
+the numbers are identifiers, not timestamps, and nothing depends on the order.
+
+--------------------------------------------------------------------------------
+WHAT THIS RUN DOES NOT DO
+--------------------------------------------------------------------------------
+It does not turn the refresh on.  That is a separate run, with a threshold this
+one supplies.
+
+It does not test the rcond question.  The initial solve puts drives 5 and 6 at
+40-90x the power of drives 1-4 and 98.6% coherent with each other, because
+rcond = 1e-3 sits just under this plant's median sigma_6/sigma_1 = 0.0017 and
+so retains the identification noise floor.  Raising rcond to 2e-3 drops the
+rank to 5 and takes a factor of ten out of the commanded drive.  Worth its own
+sweep, profile edits only, not mixed into this run.
+
+It does not touch the plant question.  Still sdynpy_frame6x12_system.npz.

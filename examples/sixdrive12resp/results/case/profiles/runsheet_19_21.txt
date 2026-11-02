@@ -1,0 +1,120 @@
+RUNS 19, 20, 21 -- back to the laws that produced the twelve-run table
+===============================================================================
+NO NEW PROFILES. These re-use profile_03, profile_07 and profile_05 EXACTLY as
+they were for runs 03, 07 and 05. Nothing in the workbooks changed. The only
+variable is the control-law code, which is the comparison worth making.
+
+-------------------------------------------------------------------------------
+WHAT CHANGED IN THE CODE, AND WHAT DID NOT
+-------------------------------------------------------------------------------
+Every behaviour change from this week is now OPT-IN and off by default
+(commit 45d417a3). Verified against the code as it stood at 2fb800a0, at
+default parameters:
+
+    match_trace_pseudoinverse, buzz_control, pseudoinverse_control
+        cycle 2 onward identical to 1e-13 or exactly 0
+    optimal_diagonal_control                 cycles 2-3 exactly 0
+    optimal_diagonal_control_fast            bit-identical, 0.0e+00
+    match_trace_pseudoinverse_pi             startup cap only
+
+Turned back OFF by default: the dB error objective on both optimal-diagonal
+laws (with it, drive_rcond and the IRLS passes are inert); the per-cycle
+running ceiling on pseudoinverse_control and buzz_control; the live-FRF
+drive-shape refresh on the match_trace pair.
+
+KEPT ON, deliberately:
+
+  THE STARTUP LEVEL CAP, -9 dB, on every law, with both its bugs fixed. It had
+  compared tr(specification) against tr(DRIVE) -- not dimensionless -- and the
+  coherence cap ran after it and lifted the level back through the ceiling.
+  This is the one intended difference from runs 03/05/07.
+
+  THE FAST LAW'S FRF-CHANGE GATE, now on relative Frobenius change against
+  frf_update_threshold rather than bit equality. This is why run 21 is not a
+  repeat: with the update ON and the old gate, H was never bit-identical, every
+  bin fell through to the SDP, and runs 05 and 06 were the BASE law under the
+  fast law's name. The factored path has never actually been tested.
+
+The coherence cap is available on every law and is ON (0.95) in all three
+profiles. On optimal_diagonal_control_fast it governs the SDP fallback only --
+the factored path is unconstrained by construction. That is the intended
+exception, not an oversight.
+
+-------------------------------------------------------------------------------
+RUN 19 -- optimal_diagonal_control, cap 0.95, FRF update ON   (= run 03)
+-------------------------------------------------------------------------------
+python rattlesnake.py --profile examples/sixdrive12resp/results/case/profiles/profile_03_optdiag_capon.xlsx
+
+    system id :  run19_optdiag_capon_sysid
+    streaming :  run19_optdiag_capon_stream
+    spectral  :  run19_optdiag_capon_spec
+
+  Run 03 scored rms 5.62 dB, 11.2% of lines out, drive 0.07469 V^2, level
+  +0.09 dB. Expect the same to within the startup cap's effect, which for this
+  open-loop law is the first command only.
+
+-------------------------------------------------------------------------------
+RUN 20 -- match_diagonal_congruence, cap 0.95, FRF update ON   (= run 07)
+-------------------------------------------------------------------------------
+python rattlesnake.py --profile examples/sixdrive12resp/results/case/profiles/profile_07_congruence_capon.xlsx
+
+    system id :  run20_congruence_capon_sysid
+    streaming :  run20_congruence_capon_stream
+    spectral  :  run20_congruence_capon_spec
+
+  Run 07 scored rms 5.31 dB, 19.8% out, drive 0.04694 V^2, level +2.85 dB.
+
+  EXPECT A SMALL RESIDUAL DIFFERENCE HERE, unlike run 19. Congruence is a
+  feedback law whose update is multiplicative on the previous drive, so a
+  different first command is never completely forgotten. Simulated over 25
+  cycles the old code reached 4.94 dB and the new code 5.07 dB, with the drive
+  differing 28%. It converges to the same neighbourhood by a different path.
+  If run 20 lands materially away from 5.3 dB, that is worth knowing.
+
+-------------------------------------------------------------------------------
+RUN 21 -- optimal_diagonal_control_fast, cap 0.95, FRF update ON   (= run 05)
+-------------------------------------------------------------------------------
+python rattlesnake.py --profile examples/sixdrive12resp/results/case/profiles/profile_05_optdiagfast_capon.xlsx
+
+    system id :  run21_optdiagfast_capon_sysid
+    streaming :  run21_optdiagfast_capon_stream
+    spectral  :  run21_optdiagfast_capon_spec
+
+  THIS IS THE ONE THAT IS NOT A REPEAT. Run 05 scored 5.64 dB and was, we now
+  know, the base SDP law. With the gate fixed the factored Burer-Monteiro path
+  should actually engage.
+
+  WATCH THE PER-CYCLE TIME. The factored solve measured 2.6 ms/bin against the
+  SDP's 65 ms/bin offline, so a 20-bin cycle should be roughly 150 ms rather
+  than about 1.3 s. If it still feels like run 05, the path still is not
+  engaging and that is the finding.
+
+  EXPECT SOME "FRF moved ... safe SDP path this call" LINES. With the update on
+  the live FRF does move, and any cycle where it moves more than
+  frf_update_threshold (0.05) correctly demotes every bin. A burst early then
+  fewer is the healthy pattern; nothing but demotions means the live estimate
+  never settles.
+
+  The interesting comparison is run 21 against run 03/19, NOT against run 05 --
+  run 05 and run 03 were the same law.
+
+-------------------------------------------------------------------------------
+AT THE RIG, ALL THREE
+-------------------------------------------------------------------------------
+  Confirm in the GUI: Update System ID During Control = Y, Control Averaging
+  Exponential / 0.04, System ID Averages 20, Level 1.0 V RMS, estimator H1.
+
+  Run 21 only: the launch terminal must print
+      [optimal_diagonal_control_fast] bm_rank=6
+  Runs 19 and 20 must NOT print it.
+
+  Judge the system ID on median (~0.998), 5th percentile (~0.97) and the count
+  of lines with any channel below 0.75 (13-30 of 901). NOT on the bare minimum
+  over all channels -- control channel 7 reads 0.28-0.54 on every
+  identification this rig has produced and says nothing about run quality.
+
+  SAVE THE SPECTRAL DATA on all three. Run 14 has none and it has cost us a
+  baseline all week.
+
+  The first command now comes in at -9 dB re specification and steps up on the
+  second. That is the startup cap, and it is the intended change.

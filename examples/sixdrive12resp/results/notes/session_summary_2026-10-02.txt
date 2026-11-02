@@ -1,0 +1,124 @@
+================================================================================
+SESSION SUMMARY -- 2026-10-02
+ONE QUESTION ABOUT A PARAMETER STRING, AND WHAT IT TURNED UP
+================================================================================
+No hardware runs.  One substantive commit, 2152257a, plus one housekeeping
+commit.  A short day with a single topic, and the summary is short to match.
+
+STARTING POSITION.  Reviewing the control-law changes, the parameter selections
+and defaults for optimal_diagonal_control did not make sense.  They do not make
+sense, and three structural reasons plus one silent reinterpretation explain
+why.  Checking them also found an error in the modification register written on
+10-01.
+
+PRODUCED
+  notes/optimal_diagonal_parameters.txt    field-by-field reference
+  notes/control_law_modifications.txt      section A2 corrected
+
+--------------------------------------------------------------------------------
+WHY THE STRING IS HARD TO READ
+--------------------------------------------------------------------------------
+extra_parameters is fifteen positional comma-separated fields with no names,
+truncatable only from the right.  To set field 10 you must supply fields 1-9
+even if you only want their defaults, and a string that fails to parse is
+discarded silently with every default left standing.
+
+Three things beyond that:
+
+1. FIELD 6 IS A HOLE IN THE BASE CLASS.  bm_rank is the Burer-Monteiro
+   factorisation rank and only the fast variant has a factored path.  The base
+   parser steps over index 5 entirely -- it goes from parts[4] straight to
+   parts[6].  One parameter format serves both classes, so a base-law profile
+   still has to put a placeholder in field 6 to reach field 7.  Every committed
+   base-law profile puts "6" there, where it does nothing at all.
+
+2. FIELD 10 IS PARSED BY THE BASE CLASS AND USED ONLY BY THE FAST ONE.
+   drive_rcond is inert on optimal_diagonal whatever it is set to.  Run 16 set
+   it to 1e-2 on the base law and it did nothing.
+
+3. FIELD 2 DOES TWO JOBS IN THE FAST LAW, AND ITS SCALE CHANGED.  In both
+   classes frf_update_threshold is the refinement scheduler's drift threshold.
+   In the fast class it ALSO gates demotion to the base solver -- one number,
+   two decisions, which do not obviously want the same value.  And the number is
+   not comparable across the gate repair: 0.05 was set against the old
+   all-bins metric, 0.5 against the repaired in-band one.  Base-law profiles
+   carry 0.05 and fast-law profiles carry 0.5; that is not a tuning decision,
+   it straddles a metric change.
+
+--------------------------------------------------------------------------------
+THE LIVE TRAP -- drive_rcond CHANGED MEANING AND SIX PROFILES PREDATE IT
+--------------------------------------------------------------------------------
+The sign of field 10 is now a mode switch.  Positive is a MULTIPLE of the
+plant's smallest structural singular-value ratio; negative is an ABSOLUTE ratio,
+|value|.  The default is 2.0, because this frame's smallest structural direction
+is sigma_5/sigma_1 = 0.0152 and 2.0 x that is 0.0304 -- the 3e-2 the runs 22-25
+sweep found as a genuine minimum.  Expressed as a multiple it tracks a
+differently conditioned article without re-tuning, which was the point.
+
+Profiles written before the change hold drive_rcond as a positive ABSOLUTE
+ratio, and today's code reads those same numbers as multiples:
+
+    profile                      field 10   meant      now reads as
+    -------------------------------------------------------------------
+    profile_15_optdiagfast_db      1e-2     1.0e-2     1.5e-4
+    profile_16_optdiag_db          1e-2     1.0e-2     inert, base law
+    profile_17_optdiagfast_db      3e-3     3.0e-3     4.6e-5
+    profile_18_optdiagfast_db      1e-2     1.0e-2     1.5e-4
+    profile_24_optdiagfast_rcond   3e-2     3.0e-2     4.6e-4
+    profile_25_optdiagfast_rcond   5e-2     5.0e-2     7.6e-4
+    _superseded_profile_17         1e-3     1.0e-3     1.5e-5
+
+Every one is now small enough that the restriction effectively does not apply.
+That is run 22's configuration, the deliberate failure case: 9.91 dB rms, 52.9%
+of lines out, +14.29 dB level, 859 V^2, because the unconstrained solution is
+unrealisable rather than wrong.  Anyone re-running profile_24 today would get
+run 22's result and have no reason to suspect why.
+
+TO REPRODUCE RUNS 15, 17, 18, 24 AND 25 THE VALUES MUST BE NEGATED.
+
+DECISION: THE PROFILES WERE NOT EDITED.  Editing them would make the archive
+disagree with the runs it produced, which is worse than the trap.  The reference
+note is the record instead.  Profiles 27, 28 and 42-46 were written after the
+change and use 2.0 correctly; profiles 13, 14 and 26 are six fields long and
+never reach field 10.
+
+--------------------------------------------------------------------------------
+A CORRECTION TO THE 10-01 MODIFICATION REGISTER
+--------------------------------------------------------------------------------
+Section A2 said the drive-coherence cap defaults to 1.0, i.e. OFF, in every law.
+That is wrong for three of the six:
+
+    match_trace_pseudoinverse, buzz, pseudoinverse      default 1.0   OFF
+    optimal_diagonal, optimal_diagonal_fast,
+    diagonal_congruence                                 default 0.95  ON
+
+On those three, omitting the field leaves the cap ON.  "Cap off" has to be asked
+for explicitly, which is what profile_04_optdiag_capoff does by passing 1.0.
+The register's summary row has been split and the section rewritten, and it now
+points at the new parameter reference.
+
+The cap costs this law +0.02 dB, so 0.95 is the right default -- the error was
+in the documentation, not the code.  But it is exactly the kind of thing a
+reader takes from a register without re-checking, which is why it is called out
+rather than quietly fixed.
+
+--------------------------------------------------------------------------------
+OPEN
+--------------------------------------------------------------------------------
+Unchanged from 10-01, plus one new item:
+
+- NEW.  If runs 15, 17, 18, 24 or 25 are ever repeated, negate field 10 first.
+  Consider also whether a positive value below about 0.5 should raise a warning
+  at parse time, since no sensible multiple is that small and every such value
+  is almost certainly an absolute ratio written before the change.
+- The frozen-H0 calculation, still the highest-value next step: one script, no
+  new runs, and it separates plant movement from distortion in the 294 Hz
+  band-boundary failure instead of leaving it as inference.
+- The other seven channels of the 0 dB coherent-vs-specification result.
+- Correcting the coherence numbers and the run-42 sentence in the 09-26 report.
+- The "flat across a 12.7x span" sentence in run49_results.txt and the report.
+- Runs 53 and 54, the fast law's trim pair on the moving plant.
+- octave_band_switching_control still needs its five-line parameter fix.  Note
+  that its collision is the same class of problem as everything above: it reads
+  fields 5-9 as its own where the base class now reads drive_rcond and the
+  startup cap.

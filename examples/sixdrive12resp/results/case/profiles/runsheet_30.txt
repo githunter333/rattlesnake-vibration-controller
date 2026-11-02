@@ -1,0 +1,75 @@
+RUN 30 -- repeat of run 29.  THE DRIVE NUMBER IS WHAT THIS RUN IS FOR.
+=============================================================================
+Profile : profile_26_optdiagfast_updateon_gatefix.xlsx   (UNCHANGED -- same
+          file run 29 used.  Do not edit it; an identical repeat is the whole
+          point, exactly as profile_14 was byte-for-byte profile_13.)
+
+Params  : 1e-6,0.5,20,1.0,0.95,6        Update System ID During Control : Y
+
+SAVE AS
+  run30_optdiagfast_updateon_repeat_sysid.nc4
+  run30_optdiagfast_updateon_repeat_spec.nc4
+  run30_optdiagfast_updateon_repeat_stream.nc4
+
+  Watch the save dialog: run 29's spec and stream names were entered swapped
+  and had to be fixed afterwards.  The spec file is ~11 MB, the stream is
+  hundreds of MB -- if the sizes look backwards, they are.
+
+WHY THIS RUN EXISTS
+-------------------------------------------------------------------------------
+Run 29 measured drive 17.0 V^2, max 2.06 V.  The offline prediction for this
+law is 16.2 V^2, max 2.07 V.  That is agreement to 5%, and it would mean the
+drive-realization gap -- the thing that made run 22 land at +14.29 dB and 17.8
+V -- has closed once the FRF tracks the plant as driven.
+
+It is a single run, and the standing finding from runs 24/26/27 is precisely
+that accuracy repeats and DRIVE DOES NOT:
+
+    run 24   153.4 V^2      max  6.50 V
+    run 26   484.7 V^2      max 12.80 V
+    run 27   245.4 V^2      max  9.83 V
+    run 29    17.0 V^2      max  2.06 V     <- the claim under test
+
+So 17.0 is exactly the kind of number that finding says to distrust.  Two
+things argue it is real rather than a lucky draw: it sits a factor of 9 below
+the BOTTOM of the observed spread rather than inside it, and it lands on an
+independent offline prediction to 5%.  Neither is proof.  One repeat settles
+it.
+
+WHAT WOULD FALSIFY IT
+-------------------------------------------------------------------------------
+Drive anywhere in the 150-500 V^2 band.  That would mean run 29 was a draw
+from the same unreproducible distribution as 26 and 27, the FRF update did
+not close the realization gap, and the headline claim comes out of the
+findings document.
+
+A result between about 20 and 60 V^2 is still a large improvement and still
+worth reporting -- but it would have to be reported as a range, not as
+"matches prediction".
+
+EXPECTED, if run 29 was real (accuracy repeats tightly, so these should be
+close):  rms about 6.0-6.1 dB, 22-23% of lines outside +/-3 dB, level within
++/-0.5 dB, easy six about 2.9, channels 7/8 about 11.7/10.3.
+
+NEW IN THE CONSOLE SINCE RUN 29
+-------------------------------------------------------------------------------
+The gate log line now also prints PER-BIN solve counts:
+
+  ... demoted 5%; solves: 12345 fast / 210 SDP (98% fast)
+
+Run 29 had to be confirmed as genuinely fast by three indirect arguments --
+saved metadata, the per-CALL demotion rate, and a drive-coherence signature
+above the SDP's 0.95 cap (6.6% of in-band pairs, against 0.0% for both real
+SDP runs).  The counters existed the whole time and were simply never
+printed.  Now the run says it directly.
+
+REPORT BACK
+-------------------------------------------------------------------------------
+  - one late "FRF moved ..." line, including the new solves: field
+  - one "_refine_batch call #N" line
+  - confirmation the three files saved with the right names
+
+NOT CHANGED, DELIBERATELY
+-------------------------------------------------------------------------------
+frf_update_threshold is still 0.05 in code; profile_26 overrides it to 0.5.
+The default does not move until run 30 confirms run 29.

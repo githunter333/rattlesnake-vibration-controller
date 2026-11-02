@@ -1,0 +1,264 @@
+RUNS 44 and 45 -- ABANDONED 2026-09-23.  SUPERSEDED BY runsheet_46_47.txt
+================================================================================
+Run 44 overflowed the time integration at strength 100 -- escape from the
+softening potential well, not a Duffing jump.  Strength 25, recommended here
+before 100, would have failed the same way (margin 0.81).  The all-modes
+article cannot deliver a usable shift at any safe uniform strength, because
+the mode that limits escape is not the mode carrying the shape change.
+Replaced by sdynpy_frame6x12_system_nonlinear_escapecal.npz, where each
+mode's k3 is calibrated against its own escape amplitude.  Run 44's system ID
+is kept.  Everything below is retained as the record of the attempt.
+================================================================================
+
+RUNS 44 and 45 -- match_trace on the ALL-MODES nonlinear plant
+================================================================================
+Run 42 was abandoned after system ID: the single-mode article cannot be
+excited enough by broadband random control drive to move its FRF.  This is the
+same experiment on the article that can.
+
+--------------------------------------------------------------------------------
+WHY THE SINGLE-MODE PLANT FAILED, AND WHY THIS ONE SHOULD NOT
+--------------------------------------------------------------------------------
+Computed from the system model and run 40's actual commanded drive, with the
+voltage-to-force scaling now VERIFIED rather than assumed -- the virtual
+hardware builds B = [[0],[M^-1 phi_exc^T]] and feeds the drive signal straight
+in as force, with transformation = identity, so 1 V = 1 N exactly:
+
+    single mode   q_rms/q0_ref = 0.0067    (one 120 Hz mode, ref 20 V RMS)
+    all modes     q_rms/q0_ref = 0.2097 worst, 0.1139 median over 33 modes
+                                          (ref 2.5 V RMS)
+
+A factor of 31 on the best mode.  Two reasons: the nonlinearity is on all 33
+flexible modes, so the whole broadband drive contributes instead of one mode's
+projection; and REFERENCE_DRIVE_LEVEL_VRMS was already rescaled from 20.0 to
+2.5 in the builder, commented "to match observed closed-loop drive RMS
+(~1.7-5.6 V across -12 dB to 0 dB)".  Someone hit this before.
+
+Frequency shift goes as amplitude SQUARED, so using the builder's own
+calibration (-4% at A = 2*q0 for the first four modes, -3% +/- 1.5% randomized
+for the other 29):
+
+    strength    1   worst mode -0.044 %   median in band -0.013 %
+    strength    4   worst mode -0.176 %   median in band -0.052 %
+    strength   25   worst mode -1.099 %   median in band -0.324 %
+
+WHAT THE LEVEL STEP ITSELF DOES -- the number that decides the strength.
+
+The experiment is not only "system ID at 1 V, control at 0 dB".  The law
+CONVERGES at -12 dB and then the plant moves underneath it when the level
+steps to 0 dB.  Drive amplitude scales by 0.251 and frequency shift goes as
+amplitude squared, so at -12 dB the modes sit at 6.3% of their 0 dB shift.
+That step is the perturbation, and unlike the startup-estimate offset it
+arrives at a known moment.
+
+Predicted per-line SHAPE change caused by the step, computed by rebuilding K
+with the shifted modal frequencies and scoring it with the SAME normalised
+metric the gate uses (run 39 on the linear plant: noise floor 0.0070,
+startup-estimate offset 0.0522):
+
+    strength   median mode shift   d_shape median    95th    vs noise
+        1           -0.013 %           0.0017       0.0060     0.2x
+        4           -0.052 %           0.0067       0.0238     1.0x
+       25           -0.324 %           0.0418       0.1481     6.0x
+      100           -1.297 %           0.1658       0.5476    23.7x
+
+STRENGTH 100 IS THE STARTING POINT.  Two reasons, and the first is decisive:
+
+  At strength 25 the median line's shape change is 0.0418, BELOW the 0.05
+  refresh threshold.  The gate being tested would not fire on most of the
+  band -- only the top quarter would trip.  Testing a gate with a stimulus
+  that sits under its threshold is not a test.
+
+  At 25 the step effect (0.042) is also the same size as the startup-estimate
+  offset already present (0.052), so the two are confounded in magnitude.
+  They are separable in TIME -- the startup offset settles by about cycle 30,
+  the step arrives when the level changes -- but at strength 100 the step is
+  3x the startup offset and no separation argument is needed.
+
+At strength 100, shift/zeta = 1.30/4 = 0.32, still well below where a Duffing
+oscillator jumps (which needs shift/zeta approaching 1).  Strength 25 remains
+the gentler fallback if 100 misbehaves.
+
+--------------------------------------------------------------------------------
+RUN 44 -- all-modes nonlinear, refresh OFF     (baseline + calibration check)
+--------------------------------------------------------------------------------
+Profile : profile_34_matchtrace_nlall_norefresh.xlsx      NEW, 2026-09-23
+Params  : 1e-3,0.95,-9.0,,0,0,1        refresh OFF, diagnostics ON
+Strength: RATTLESNAKE_NONLINEARITY_STRENGTH=100
+  SAVE AS  run44_matchtrace_nlall_norefresh_{sysid,spec,stream}.nc4
+
+--------------------------------------------------------------------------------
+RUN 45 -- all-modes nonlinear, refresh ON t=0.05     (the test)
+--------------------------------------------------------------------------------
+Profile : profile_35_matchtrace_nlall_refresh005.xlsx     NEW, 2026-09-23
+Params  : 1e-3,0.95,-9.0,,1,0.05,1
+Strength: THE SAME AS RUN 44.  The pair is void otherwise, and the strength is
+          not recorded in the nc4 files -- only in the console.  Put it in the
+          notes.
+  SAVE AS  run45_matchtrace_nlall_refresh005_{sysid,spec,stream}.nc4
+
+Both: Update System ID During Control Y.  Start at -12 dB, settle, then 0 dB.
+System ID runs at 1 V RMS, so the identification sees a nearly linear plant
+and control at 0 dB sees a softened one.  That gap IS the experiment.
+
+MOVE THE DRIFT FILE ASIDE BEFORE EACH RUN.  The law always writes
+match_trace_frf_drift.npz and it is not recoverable from the nc4 files:
+    cd ~/Code/python/rattlesnake-vibration-controller/examples/sixdrive12resp/results/notes
+    mv match_trace_frf_drift.npz run44_match_trace_frf_drift.npz     # after 44
+
+--------------------------------------------------------------------------------
+RUN 44 SYSTEM ID, MEASURED 2026-09-23 -- distortion inflates the spectrum
+--------------------------------------------------------------------------------
+Noticed on the bench as "significantly noisier than the linear sysid", and it
+is, but the important part is not the noise.
+
+                              run 39 LINEAR      run 44 ALL-MODES NL s=100
+  multiple coherence median      0.9978                  0.9910
+  coherence 5th pct              0.9715                  0.8973
+  sigma_k/sigma_1          1 .319 .085 .032 .015 .00167   1 .439 .201 .083 .052 .0106
+  condition sigma_1/sigma_6        597                      94
+
+EVERY small singular value is lifted and sigma_6/sigma_1 rises by a factor of
+6.3.  The plant cannot actually be six times better conditioned -- it is the
+same M, C, K at low amplitude.  This is distortion power filling the weak
+singular directions: nonlinear distortion is not confined to the linear
+plant's column space, so it pours incoherent energy into exactly the
+directions that were near-null and the SVD reads it as signal.  The coherence
+drop and the sigma inflation are one phenomenon seen twice.
+
+CONSEQUENCE FOR RANK, in band:
+
+  absolute rcond 1e-3   linear: rank 6 on 72% of lines
+                        nonlinear: rank 6 on 99% of lines
+  gap, protect 0.05     linear: rank 5 on 76%
+                        nonlinear: rank 5 on 66%
+
+The absolute criterion has stopped discriminating altogether.  Raw startup
+drive trace, median: 0.92 at rcond +1e-3 against 0.033 at rcond -0.05, a
+factor of 27.
+
+DECISION, TAKEN DELIBERATELY: run 44 and 45 go ahead at rcond = 1e-3.
+
+  Reasons: the 44/45 pair is internally consistent whatever rcond is used, so
+  the refresh comparison stays valid; it keeps comparability with runs 39/40
+  on the linear plant; and it is the honest "what happens with today's
+  defaults on a distorting article" case.
+
+  Accepted cost: the startup shape is built on a sixth direction that is
+  mostly distortion, so expect high drive and a possibly struggling level
+  loop.  The -9 dB cap bounds only the FIRST command; steady-state drive is
+  whatever that inefficient shape needs to hit the response trace.
+
+  There is a real possibility the refresh makes things WORSE here, because
+  control-level FRF estimates carry more distortion than the system ID did
+  (distortion grows with drive).  That would be a finding, not a failure, and
+  it is the reason to take 44 and 45 as a pair rather than 45 alone.
+
+  RUN 46 is the follow-up: rcond = -0.05 with run 45 as its control, changing
+  the rank criterion alone.  That is the gap-rank rig test that was already
+  outstanding, and this article makes it far more pointed than the linear one
+  would have.
+
+Note also: the system ID runs at 1 V RMS, where q_rms/q0 is about 0.008 even
+at strength 100, so the frequency shift there is about -0.007%.  The degraded
+system ID is distortion, NOT the FRF having moved.  The FRF moving is what the
+level step is for.
+
+--------------------------------------------------------------------------------
+THE DECISION RULE -- read run 44 before starting run 45
+--------------------------------------------------------------------------------
+The reference is run 39, the same law and diagnostics on the LINEAR plant:
+    settled noise floor (since previous cycle)  0.0070
+    d_ref settled (since cycle 1)               0.0522
+
+At strength 100 the prediction is specific: a STEP in the drift diagnostic at
+the moment the level changes, of median size ~0.166 and 95th ~0.55, against a
+noise floor of 0.0070.  That is 24x the noise and it should be unmistakable in
+the per-cycle console line.
+
+    a clear step at the level change, d_prev jumping to ~0.1-0.2 for a few
+    cycles and d_ref settling well above 0.10
+        -> the plant is moving as designed.  Proceed to run 45.
+    no step, d_ref settling near 0.05 like the linear plant
+        -> the nonlinearity is not engaging despite the prediction, and the
+           prediction is wrong somewhere.  Do NOT simply raise strength again;
+           work out why first.  Do NOT read a null result from 45 as "the
+           refresh does not help" when the plant never moved -- that is the
+           mistake run 42 was stopped to avoid.
+    the level loop fails to settle after the step
+        -> a finding about the law on a moving plant.  Record it, drop to
+           strength 25, and repeat.
+
+--------------------------------------------------------------------------------
+PRE-REGISTERED
+--------------------------------------------------------------------------------
+No accuracy prediction is registered.  Nothing is known about how this law
+behaves on a moving plant, and on this campaign's record my predictions about
+match_trace's drive have been wrong twice.  What is registered:
+
+1. A STEP IN THE DRIFT DIAGNOSTIC AT THE LEVEL CHANGE, median ~0.166 and
+   95th ~0.55 against a 0.0070 noise floor.  This is a quantitative
+   prediction from the system model, not a hope, and it gates everything
+   after it.  Run 39 on the linear plant showed NO level-change artifact --
+   largest post-settling jump 0.0123 against neighbours 0.0121 and 0.0112 --
+   so any step here is the nonlinearity and nothing else.
+2. THE LEVEL LOOP MUST CONVERGE in both.  level dB within -0.5 to +0.5.  A
+   softening plant under a level-only loop is the textbook way to chase a
+   moving resonance.  If the level walks, that is a finding about the law on
+   a nonlinear article, and it should be recorded rather than tuned away.
+3. RUN 45's REFRESH COUNT SHOULD NOT DECAY TO NEAR ZERO the way run 40's did
+   (901 -> 6-18).  On a genuinely moving plant the gate should keep firing at
+   a rate that tracks the level ramp.  Decay to zero again points at
+   insufficient strength.
+4. DRIVE IS NOT PREDICTED.  On the linear plant the refresh raised drive 20.6%
+   while improving rms 9.8%; the refreshed shape uses all six drives instead
+   of two nearly cancelling ones, buying accuracy by paying drive.  Whether
+   that trade holds on a moving plant is unknown.
+
+--------------------------------------------------------------------------------
+LAUNCH
+--------------------------------------------------------------------------------
+  cd ~/Code/python/rattlesnake-vibration-controller
+  pkill -9 -f "envs/rattlesnake/bin/python" || true ; sleep 1
+
+  RUN 44:
+  RATTLESNAKE_NONLINEARITY_STRENGTH=100 \
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/profile_34_matchtrace_nlall_norefresh.xlsx \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run44_console.log
+
+  RUN 45 (same strength):
+  RATTLESNAKE_NONLINEARITY_STRENGTH=100 \
+  /opt/anaconda3/envs/rattlesnake/bin/python -u rattlesnake.py \
+      --profile examples/sixdrive12resp/results/case/profiles/profile_35_matchtrace_nlall_refresh005.xlsx \
+      2>&1 | tee examples/sixdrive12resp/results/notes/run45_console.log
+
+CHECK ON STARTUP before letting it run:
+    grep "nonlinearity_strength" examples/sixdrive12resp/results/notes/run44_console.log
+must print nonlinearity_strength=100 and n_modes=33.  n_modes=1 means the
+single-mode file; n_modes=0 or a warning about missing nl_* keys means the
+hardware type or path is wrong and it is a linear run wearing a nonlinear name.
+
+--------------------------------------------------------------------------------
+PROFILE PROVENANCE
+--------------------------------------------------------------------------------
+profile_34 and profile_35 are each profile_01 with exactly THREE cells
+changed, verified cell by cell across both sheets:
+    [Hardware] B1  6 -> 7                          nonlinear integration
+    [Hardware] B2  linear npz -> _nonlinear_allmodes.npz
+    [Frame 6x12 Random] B14  the parameter string
+They differ from each other in B14 alone.
+
+--------------------------------------------------------------------------------
+WHAT THESE RUNS DO NOT DO
+--------------------------------------------------------------------------------
+They do not test the gap-based rank criterion (negative rcond).  Separate run,
+against 45 as its control.
+
+They do not test the response-error trim or the optimal-diagonal laws here.
+Both are waiting on this article too, and the trim in particular has a much
+stronger case on a moving plant than on the linear one, where the model
+mismatch measured 0.060 dB rms.
+
+Run 42's saved system ID (single-mode article) is kept.  It is the only record
+of that plant's identification and cost nothing to retain.

@@ -1,0 +1,29 @@
+channel,node_number,node_direction,channel_type,role
+1,7,X+,Accel,control
+2,7,Y+,Accel,control
+3,8,X+,Accel,control
+4,8,Y+,Accel,control
+5,9,X+,Accel,control
+6,9,Y+,Accel,control
+7,10,X+,Accel,control
+8,10,Y+,Accel,control
+9,11,X+,Accel,control
+10,11,Y+,Accel,control
+11,12,X+,Accel,control
+12,12,Y+,Accel,control
+13,13,X+,Accel,control
+14,14,X+,Accel,control
+15,15,X+,Accel,response only
+16,16,X+,Accel,response only
+17,17,X+,Accel,response only
+18,18,X+,Accel,response only
+19,1,X+,Force,drive
+20,1,Y+,Force,drive
+21,2,X+,Force,drive
+22,2,Y+,Force,drive
+23,3,X+,Force,drive
+24,3,Y+,Force,drive
+25,4,Y+,Force,drive
+26,5,Y+,Force,drive
+27,6,X+,Force,drive
+28,6,Y+,Force,drive
