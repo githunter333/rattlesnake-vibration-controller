@@ -1,9 +1,9 @@
 {
  "note": "parameters each law resolves from each string, recorded from the code before the parser rewrite (step 1b); see golden_params.py",
  "law_sources": {
-  "optimal_diagonal_control.py": "3ce42d253a244b17",
-  "optimal_diagonal_control_fast.py": "4ef8438a4edc9397",
-  "octave_band_switching_control.py": "ab60e134a4f02be0"
+  "optimal_diagonal_control.py": "5bb2efd7a5a31cdf",
+  "optimal_diagonal_control_fast.py": "a5126543fdb965bd",
+  "octave_band_switching_control.py": "a5eb886b3057062c"
  },
  "environment": {
   "python": "3.11.14",
@@ -3294,9 +3294,9 @@
      "error_threshold_db": "1.0",
      "max_drive_coherence": "0.95",
      "startup_test_level_cap_db": "-9.0",
-     "error_domain": "'linear'",
+     "error_domain": "'db'",
      "n_irls_passes": "2",
-     "drive_rcond": "2.0",
+     "drive_rcond": "0.01",
      "max_solve_ms_per_update": "0.0",
      "response_trim_gain": "0.0",
      "response_trim_limit_db": "3.0",
@@ -3311,9 +3311,9 @@
      "error_threshold_db": "1.0",
      "max_drive_coherence": "0.95",
      "startup_test_level_cap_db": "-9.0",
-     "error_domain": "'linear'",
+     "error_domain": "'db'",
      "n_irls_passes": "2",
-     "drive_rcond": "2.0",
+     "drive_rcond": "0.01",
      "max_solve_ms_per_update": "0.0",
      "response_trim_gain": "0.0",
      "response_trim_limit_db": "3.0",
@@ -3430,8 +3430,8 @@
      "response_trim_gain": "1.0",
      "response_trim_limit_db": "2.0",
      "response_trim_step_db": "0.5",
-     "response_trim_deadband_db": "0.5",
-     "response_trim_gate_db": "0.5"
+     "response_trim_deadband_db": "0.3",
+     "response_trim_gate_db": "0.4"
     },
     "fast": {
      "reg": "1e-06",
@@ -3447,8 +3447,8 @@
      "response_trim_gain": "1.0",
      "response_trim_limit_db": "2.0",
      "response_trim_step_db": "0.5",
-     "response_trim_deadband_db": "0.5",
-     "response_trim_gate_db": "0.5",
+     "response_trim_deadband_db": "0.3",
+     "response_trim_gate_db": "0.4",
      "bm_rank": "6",
      "svd_select": "0",
      "svd_gap_min": "3.0",
@@ -3875,6 +3875,1312 @@
     },
     "octave": {
      "error": "ValueError: Require 0 < fmin < fmax"
+    }
+   }
+  },
+  {
+   "string": "1e-6,,20,1.0,0.95,5",
+   "tags": [],
+   "resolved": {
+    "SDP": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "5",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "None",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "None",
+     "octave_fmax": "None"
+    }
+   }
+  },
+  {
+   "string": "1e-6,,20,1.0,0.95,5,0,6,100,1000",
+   "tags": [],
+   "resolved": {
+    "SDP": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "0.0",
+     "error_domain": "'db'",
+     "n_irls_passes": "100",
+     "drive_rcond": "1000.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "0.0",
+     "error_domain": "'db'",
+     "n_irls_passes": "100",
+     "drive_rcond": "1000.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "5",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "0.0",
+     "error_domain": "'db'",
+     "n_irls_passes": "100",
+     "drive_rcond": "1000.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "0.0",
+     "switch_level_db": "6.0",
+     "octave_fraction": "100",
+     "octave_fmin": "1000.0",
+     "octave_fmax": "None"
+    }
+   }
+  },
+  {
+   "string": ",,,,,5,0,6,100,1000",
+   "tags": [],
+   "resolved": {
+    "SDP": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "0.0",
+     "error_domain": "'db'",
+     "n_irls_passes": "100",
+     "drive_rcond": "1000.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "0.0",
+     "error_domain": "'db'",
+     "n_irls_passes": "100",
+     "drive_rcond": "1000.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "5",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "0.0",
+     "error_domain": "'db'",
+     "n_irls_passes": "100",
+     "drive_rcond": "1000.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "None",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "None",
+     "octave_fmax": "None"
+    }
+   }
+  },
+  {
+   "string": "1e-6,0.5,20,1.0,0.95,,5,0,6,100,1000",
+   "tags": [],
+   "resolved": {
+    "SDP": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "5.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "6",
+     "drive_rcond": "100.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "1000.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "5.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "6",
+     "drive_rcond": "100.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "1000.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "4",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "5.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "6",
+     "drive_rcond": "100.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "1000.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "5.0",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "100.0",
+     "octave_fmax": "1000.0"
+    }
+   }
+  },
+  {
+   "string": "reg: 1e-5",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "reg": "1e-05",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "1e-05",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "4",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "1e-05",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "None",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "None",
+     "octave_fmax": "None"
+    }
+   }
+  },
+  {
+   "string": "reg: 1e-5\nmax_bins_per_update: 10\nmax_drive_coherence: 0.8",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "reg": "1e-05",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "10",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.8",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "1e-05",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "10",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.8",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "4",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "1e-05",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "10",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.8",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "None",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "None",
+     "octave_fmax": "None"
+    }
+   }
+  },
+  {
+   "string": "reg: 1e-5; max_bins_per_update: 10; max_drive_coherence: 0.8",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "reg": "1e-05",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "10",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.8",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "1e-05",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "10",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.8",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "4",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "1e-05",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "10",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.8",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "None",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "None",
+     "octave_fmax": "None"
+    }
+   }
+  },
+  {
+   "string": "# a comment\n\n  REG :  2e-6  # trailing\nMax_Bins_Per_Update: 3",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "reg": "2e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "3",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "2e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "3",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "4",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "2e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "3",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "None",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "None",
+     "octave_fmax": "None"
+    }
+   }
+  },
+  {
+   "string": "error_domain: db",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'db'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'db'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "4",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'db'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "None",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "None",
+     "octave_fmax": "None"
+    }
+   }
+  },
+  {
+   "string": "error_domain: linear",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "4",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "None",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "None",
+     "octave_fmax": "None"
+    }
+   }
+  },
+  {
+   "string": "error_domain: 1",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'db'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'db'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "4",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'db'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "None",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "None",
+     "octave_fmax": "None"
+    }
+   }
+  },
+  {
+   "string": "reg:\nmax_bins_per_update: 7",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "7",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "7",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "4",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "7",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "None",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "None",
+     "octave_fmax": "None"
+    }
+   }
+  },
+  {
+   "string": "svd_select: 1\nsvd_min_keep: -1\nbm_rank: 2",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "error": "ValueError: unknown parameter 'svd_select'; valid names: drive_rcond, error_domain, error_threshold_db, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db"
+    },
+    "fast": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "2",
+     "svd_select": "1",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "-1",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "error": "ValueError: unknown parameter 'svd_select'; valid names: drive_rcond, error_domain, error_threshold_db, frequency_spacing, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, octave_fmax, octave_fmin, octave_fraction, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, switch_level_db"
+    }
+   }
+  },
+  {
+   "string": "response_trim_gain: -2\nresponse_trim_limit_db: -1.5\nsvd_gap_min: 0.2\nn_irls_passes: -4",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "error": "ValueError: unknown parameter 'svd_gap_min'; valid names: drive_rcond, error_domain, error_threshold_db, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db"
+    },
+    "fast": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "0",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "1.5",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "4",
+     "svd_select": "0",
+     "svd_gap_min": "1.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "error": "ValueError: unknown parameter 'svd_gap_min'; valid names: drive_rcond, error_domain, error_threshold_db, frequency_spacing, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, octave_fmax, octave_fmin, octave_fraction, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, switch_level_db"
+    }
+   }
+  },
+  {
+   "string": "max_solve_ms_per_update: 250\nmax_bins_per_update: 400",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "400",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "250.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "400",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "250.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "4",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "400",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "250.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "None",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "None",
+     "octave_fmax": "None"
+    }
+   }
+  },
+  {
+   "string": "frequency_spacing: 5\nswitch_level_db: -3\noctave_fraction: 3\noctave_fmin: 200\noctave_fmax: 800",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "error": "ValueError: unknown parameter 'frequency_spacing'; valid names: drive_rcond, error_domain, error_threshold_db, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db"
+    },
+    "fast": {
+     "error": "ValueError: unknown parameter 'frequency_spacing'; valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "5.0",
+     "switch_level_db": "-3.0",
+     "octave_fraction": "3",
+     "octave_fmin": "200.0",
+     "octave_fmax": "800.0"
+    }
+   }
+  },
+  {
+   "string": "frequency_spacing: 5\noctave_fmin: 100\noctave_fmax: 1000",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "error": "ValueError: unknown parameter 'frequency_spacing'; valid names: drive_rcond, error_domain, error_threshold_db, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db"
+    },
+    "fast": {
+     "error": "ValueError: unknown parameter 'frequency_spacing'; valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "5.0",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "100.0",
+     "octave_fmax": "1000.0"
+    }
+   }
+  },
+  {
+   "string": "max_bin_per_update: 5",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "error": "ValueError: unknown parameter 'max_bin_per_update' (did you mean 'max_bins_per_update'?); valid names: drive_rcond, error_domain, error_threshold_db, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db"
+    },
+    "fast": {
+     "error": "ValueError: unknown parameter 'max_bin_per_update' (did you mean 'max_bins_per_update'?); valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
+    },
+    "octave": {
+     "error": "ValueError: unknown parameter 'max_bin_per_update' (did you mean 'max_bins_per_update'?); valid names: drive_rcond, error_domain, error_threshold_db, frequency_spacing, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, octave_fmax, octave_fmin, octave_fraction, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, switch_level_db"
+    }
+   }
+  },
+  {
+   "string": "rgu: 1",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "error": "ValueError: unknown parameter 'rgu' (did you mean 'reg'?); valid names: drive_rcond, error_domain, error_threshold_db, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db"
+    },
+    "fast": {
+     "error": "ValueError: unknown parameter 'rgu' (did you mean 'reg'?); valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
+    },
+    "octave": {
+     "error": "ValueError: unknown parameter 'rgu' (did you mean 'reg'?); valid names: drive_rcond, error_domain, error_threshold_db, frequency_spacing, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, octave_fmax, octave_fmin, octave_fraction, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, switch_level_db"
+    }
+   }
+  },
+  {
+   "string": "bm_rank: 3",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "error": "ValueError: unknown parameter 'bm_rank'; valid names: drive_rcond, error_domain, error_threshold_db, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db"
+    },
+    "fast": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "3",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "error": "ValueError: unknown parameter 'bm_rank'; valid names: drive_rcond, error_domain, error_threshold_db, frequency_spacing, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, octave_fmax, octave_fmin, octave_fraction, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, switch_level_db"
+    }
+   }
+  },
+  {
+   "string": "frequency_spacing: 5",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "error": "ValueError: unknown parameter 'frequency_spacing'; valid names: drive_rcond, error_domain, error_threshold_db, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db"
+    },
+    "fast": {
+     "error": "ValueError: unknown parameter 'frequency_spacing'; valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "5.0",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "None",
+     "octave_fmax": "None"
+    }
+   }
+  },
+  {
+   "string": "reg: abc",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "error": "ValueError: optimal_diagonal_control: parameter reg cannot be read from 'abc'"
+    },
+    "fast": {
+     "error": "ValueError: optimal_diagonal_control_fast: parameter reg cannot be read from 'abc'"
+    },
+    "octave": {
+     "error": "ValueError: octave_band_switching_control: parameter reg cannot be read from 'abc'"
+    }
+   }
+  },
+  {
+   "string": "reg: 1\nreg: 2",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "error": "ValueError: parameter 'reg' is given twice"
+    },
+    "fast": {
+     "error": "ValueError: parameter 'reg' is given twice"
+    },
+    "octave": {
+     "error": "ValueError: parameter 'reg' is given twice"
+    }
+   }
+  },
+  {
+   "string": "reg: 1\n20",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "error": "ValueError: parameter line '20' is not of the form 'name: value'"
+    },
+    "fast": {
+     "error": "ValueError: parameter line '20' is not of the form 'name: value'"
+    },
+    "octave": {
+     "error": "ValueError: parameter line '20' is not of the form 'name: value'"
+    }
+   }
+  },
+  {
+   "string": "octave_fmin: 100\noctave_fmax: 50",
+   "tags": [
+    "named"
+   ],
+   "resolved": {
+    "SDP": {
+     "error": "ValueError: unknown parameter 'octave_fmin'; valid names: drive_rcond, error_domain, error_threshold_db, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db"
+    },
+    "fast": {
+     "error": "ValueError: unknown parameter 'octave_fmin'; valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "None",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "100.0",
+     "octave_fmax": "50.0"
     }
    }
   }

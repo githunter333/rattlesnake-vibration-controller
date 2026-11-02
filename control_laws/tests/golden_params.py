@@ -110,7 +110,59 @@ EDGE = [
     ('1e-6,0.5,20,1.0,0.95,5,0,6,100,1000', ()),
     ('1e-6,0.5,20,1.0,0.95,5,-3,3,200,800', ()),
     ('1e-6,0.5,20,1.0,0.95,5,0,6,,1000', ()),
+    # blank fields AHEAD of the octave law's own positions: it counts only the
+    # non-empty fields, the base class counts them all
+    ('1e-6,,20,1.0,0.95,5', ()),
+    ('1e-6,,20,1.0,0.95,5,0,6,100,1000', ()),
+    (',,,,,5,0,6,100,1000', ()),
+    ('1e-6,0.5,20,1.0,0.95,,5,0,6,100,1000', ()),
 ]
+
+
+# The named form's strings.  They cannot be recorded from the old code (it has no
+# named form); they are recorded from the rewritten parser, error messages
+# included, and pin it from then on.
+NAMED = [
+    'reg: 1e-5',
+    'reg: 1e-5\nmax_bins_per_update: 10\nmax_drive_coherence: 0.8',
+    'reg: 1e-5; max_bins_per_update: 10; max_drive_coherence: 0.8',
+    '# a comment\n\n  REG :  2e-6  # trailing\nMax_Bins_Per_Update: 3',
+    'error_domain: db', 'error_domain: linear', 'error_domain: 1',
+    'reg:\nmax_bins_per_update: 7',
+    'svd_select: 1\nsvd_min_keep: -1\nbm_rank: 2',
+    'response_trim_gain: -2\nresponse_trim_limit_db: -1.5\nsvd_gap_min: 0.2\nn_irls_passes: -4',
+    'max_solve_ms_per_update: 250\nmax_bins_per_update: 400',
+    'frequency_spacing: 5\nswitch_level_db: -3\noctave_fraction: 3\noctave_fmin: 200\noctave_fmax: 800',
+    'frequency_spacing: 5\noctave_fmin: 100\noctave_fmax: 1000',
+    # mistakes
+    'max_bin_per_update: 5', 'rgu: 1', 'bm_rank: 3', 'frequency_spacing: 5',
+    'reg: abc', 'reg: 1\nreg: 2', 'reg: 1\n20', 'octave_fmin: 100\noctave_fmax: 50',
+]
+
+# What each position of the legacy comma string means, written out here by hand
+# and NOT read from the laws' tables, so the twin check below can catch a wrong
+# name or position in a table.  (The octave law's five are left out: its legacy
+# reading overlaps the base class's, so it has no clean named equivalent.)
+LEGACY_NAME_OF = {
+    0: 'reg', 1: 'frf_update_threshold', 2: 'max_bins_per_update', 3: 'error_threshold_db',
+    4: 'max_drive_coherence', 5: 'bm_rank', 6: 'startup_test_level_cap_db', 7: 'error_domain',
+    8: 'n_irls_passes', 9: 'drive_rcond', 10: 'response_trim_gain', 11: 'response_trim_limit_db',
+    12: 'response_trim_step_db', 13: 'response_trim_deadband_db', 14: 'response_trim_gate_db',
+    15: 'svd_select', 16: 'svd_gap_min', 17: 'svd_floor', 18: 'svd_weak_max',
+    19: 'svd_min_keep', 20: 'max_solve_ms_per_update', 21: 'cap_baseline',
+    22: 'db_coherence_guard', 23: 'warm_start', 24: 'gate_reference',
+}
+
+
+def to_named(key, legacy):
+    """The named string with the same parameters as this legacy string, for the
+    SDP or fast law."""
+    out = []
+    for i, raw in enumerate(x.strip() for x in legacy.split(',')):
+        name = LEGACY_NAME_OF.get(i)
+        if raw and name in LAW_ATTRS[key]:
+            out.append(f'{name}: {raw}')
+    return '\n'.join(out)
 
 
 def strings():
@@ -122,9 +174,12 @@ def strings():
     for s in ARCHIVED:
         add(s, ('archived',))
     for sc in gopt.SCENARIOS:
-        add(sc['params'], ('scenario',))
+        if ':' not in sc['params']:                # the named twins are added below
+            add(sc['params'], ('scenario',))
     for s, t in EDGE:
         add(s, t)
+    for s in NAMED:
+        add(s, ('named',))
     return out
 
 
@@ -140,6 +195,15 @@ def resolve(cls, spec, warn, abort, params):
 
 
 LAW_ATTRS_FOR = {}
+
+
+def run_pairs(law_dir, pairs):
+    """Resolved parameters for [(law key, string), ...]."""
+    laws = gopt.load_laws(law_dir)
+    for key, cls in laws.items():
+        LAW_ATTRS_FOR[cls] = LAW_ATTRS[key]
+    p = frame_plant('6x8')
+    return [resolve(laws[k], p['spec'], p['warn'], p['abort'], s) for k, s in pairs]
 
 
 def run_all(law_dir):
@@ -196,6 +260,23 @@ def check(law_dir):
                 print(f'  {key:6s} {s!r}')
                 for k, (a, b) in list(diffs.items())[:6]:
                     print(f'           {k}: {a} -> {b}')
+    # the named twin of every legacy string must resolve to the same parameters
+    pairs, legacy_of = [], []
+    for rec in gold['strings']:
+        s, tags = rec['string'], rec['tags']
+        if ':' in s or 'bad_value' in tags:
+            continue
+        for key in ('SDP', 'fast'):
+            pairs.append((key, to_named(key, s)))
+            legacy_of.append((key, s))
+    twins = run_pairs(law_dir, pairs)
+    bad_twins = [(k, s, t, r) for (k, s), (_, t), r in zip(legacy_of, pairs, twins)
+                 if r != res[s][k]]
+    print(f'\nnamed twins: {len(pairs) - len(bad_twins)} of {len(pairs)} legacy strings resolve '
+          'identically when written with names')
+    for k, s, t, r in bad_twins[:10]:
+        print(f'  {k:5s} {s!r} -> {t!r} differs')
+    hard = hard + [(s, k, {}) for k, s, t, r in bad_twins]
     print('\n' + ('FAIL' if hard else 'PASS') + f' ({len(hard)} unexpected, {len(expected)} expected)')
     return 1 if hard else 0
 

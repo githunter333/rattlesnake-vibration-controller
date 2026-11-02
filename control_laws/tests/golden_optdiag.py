@@ -94,17 +94,28 @@ def fields(values):
     return ','.join(out)
 
 
+def named(values):
+    """The named form of extra_parameters: one 'name: value' per line.  The twins
+    below spell the legacy scenarios' parameters with names written out by hand,
+    NOT looked up in the laws' tables, so a wrong name or position in a table
+    shows up as a twin that no longer matches its original."""
+    return '\n'.join(f'{k}: {v}' for k, v in values.items())
+
+
 def scenario(name, plant, law, params='', n_cycles=6, level_db=None, frf_drift=0.0,
-             frf_walk=False, tags=()):
+             frf_walk=False, same_as=None, tags=()):
     """frf_drift: each control cycle hands the law an FRF whose every element is
     multiplied by 1 + frf_drift * (complex unit-variance noise), as if "update
     transfer function during control" were on; 0 = the FRF never changes.
     frf_walk: the noise accumulates from cycle to cycle (a random walk), so the
     movement since the previous call stays small while the movement since a
     line's last solve grows -- the only case where field 24 (gate_reference)
-    can change anything."""
+    can change anything.
+    same_as: the name of a scenario whose legacy string this one spells in the
+    named form; its output must be bit-identical to that scenario's."""
     return dict(name=name, plant=plant, law=law, params=params, n_cycles=n_cycles,
-                level_db=level_db, frf_drift=frf_drift, frf_walk=frf_walk, tags=list(tags))
+                level_db=level_db, frf_drift=frf_drift, frf_walk=frf_walk, same_as=same_as,
+                tags=list(tags))
 
 
 # Field indices (0-based), from the laws' docstrings:
@@ -157,6 +168,42 @@ SCENARIOS = [
     scenario('octave_engaged_legacy_string', '6x8', 'octave',
              '1e-6,0.5,20,1.0,0.95,5,0,6,100,1000', n_cycles=3, level_db=0.0,
              tags=['legacy_collision']),
+    # Named-form twins: same parameters as the scenario named in same_as, written
+    # with names; the output must be bit-identical to it.
+    scenario('sdp_db_irls_cap_named', '6x8', 'SDP',
+             named({'reg': 1e-5, 'max_bins_per_update': 10, 'error_threshold_db': 14.0,
+                    'max_drive_coherence': 0.8, 'startup_test_level_cap_db': -12.0,
+                    'error_domain': 'db', 'n_irls_passes': 3}), same_as='sdp_db_irls_cap'),
+    scenario('sdp_trim_on_named', '6x8', 'SDP',
+             named({'response_trim_gain': 1.0, 'response_trim_limit_db': 0.5,
+                    'response_trim_step_db': 0.4, 'response_trim_deadband_db': 0.3,
+                    'response_trim_gate_db': 0.4}), same_as='sdp_trim_on'),
+    scenario('sdp_time_budget_one_line_named', '6x8', 'SDP',
+             named({'max_bins_per_update': 15, 'max_solve_ms_per_update': 0.001}),
+             same_as='sdp_time_budget_one_line'),
+    scenario('sdp_frf_drift_named', '6x8', 'SDP', named({'frf_update_threshold': 0.02}),
+             frf_drift=0.05, same_as='sdp_frf_drift'),
+    scenario('fast_rank_svd_rcond_named', '6x8', 'fast',
+             named({'reg': 1e-5, 'max_bins_per_update': 10, 'error_threshold_db': 0.5,
+                    'max_drive_coherence': 0.8, 'bm_rank': 3, 'drive_rcond': 0.5,
+                    'svd_select': 1, 'svd_gap_min': 2.0, 'svd_floor': 0.03,
+                    'svd_weak_max': 0.2, 'svd_min_keep': 2}), same_as='fast_rank_svd_rcond'),
+    scenario('fast_db_guard_flags_named', '6x8', 'fast',
+             named({'error_domain': 'db', 'db_coherence_guard': 2}), same_as='fast_db_guard_flags'),
+    scenario('fast_cap_baseline_named', '6x8', 'fast',
+             named({'max_bins_per_update': 2 * 5, 'max_drive_coherence': 0.5, 'cap_baseline': 1}),
+             same_as='fast_cap_baseline'),
+    scenario('fast_warm_start_off_named', '6x8', 'fast', named({'warm_start': 0}),
+             same_as='fast_warm_start_off'),
+    scenario('fast_frf_walk_gate_ref0_named', '6x8', 'fast',
+             named({'frf_update_threshold': 0.05, 'gate_reference': 0}),
+             frf_drift=0.03, frf_walk=True, same_as='fast_frf_walk_gate_ref0'),
+    # The octave law with the five parameters it is meant to read and nothing else.
+    # The legacy scenario above also feeds the same positions to the base class
+    # (error_domain 'db', 100 IRLS passes...); this one does not, so the two differ.
+    scenario('octave_engaged_named', '6x8', 'octave',
+             named({'frequency_spacing': 5, 'switch_level_db': 0, 'octave_fraction': 6,
+                    'octave_fmin': 100, 'octave_fmax': 1000}), n_cycles=2, level_db=0.0),
     scenario('sdp_10x14_default', '10x14', 'SDP'),
     scenario('fast_10x14_default', '10x14', 'fast'),
     scenario('fast_10x14_rankdef', '10x14_rankdef', 'fast', n_cycles=5),
@@ -261,6 +308,10 @@ def record(selected, law_dir=LAW_DIR):
         snaps[sc['name'] + '__first'] = r['first']
         snaps[sc['name'] + '__last'] = r['last']
         print(f"recorded {sc['name']:32s} {r['seconds']:5.1f} s  final err {r['err_rms'][-1]:.3f} dB", flush=True)
+    broken = [sc['name'] for sc in selected if sc['same_as']
+              and manifest['scenarios'][sc['name']]['hashes'] != manifest['scenarios'][sc['same_as']]['hashes']]
+    if broken:
+        sys.exit(f'not recorded: these named twins differ from their legacy originals: {broken}')
     os.makedirs(GOLDEN_DIR, exist_ok=True)
     with open(GOLDEN_JSON, 'w') as fh:
         json.dump(manifest, fh, indent=1)
@@ -308,6 +359,8 @@ def check(selected, strict, rtol, atol_db, law_dir=LAW_DIR):
             rel[key] = float(d/max(np.max(np.abs(ref)), 1e-300))
             if rel[key] > rtol:
                 problems.append(f'{key} drive CPSD differs by {rel[key]:.2e} (relative)')
+        if sc['same_as'] and r['hashes'] != gold['scenarios'][sc['same_as']]['hashes']:
+            problems.append(f"differs from its legacy original, {sc['same_as']}")
         first_bad = next((i for i, (a, b) in enumerate(zip(r['hashes'], g['hashes'])) if a != b), None)
         exact = r['hashes'] == g['hashes']
         if problems:
@@ -349,7 +402,8 @@ def main():
         for s in SCENARIOS:
             print(f"{s['name']:32s} {s['plant']:14s} {s['law']:7s} {s['n_cycles']} cycles  "
                   f"params={s['params']!r}" + (f" level_db={s['level_db']}" if s['level_db'] is not None else '')
-                  + (f" frf_drift={s['frf_drift']}" + (' (walk)' if s['frf_walk'] else '') if s['frf_drift'] else ''))
+                  + (f" frf_drift={s['frf_drift']}" + (' (walk)' if s['frf_walk'] else '') if s['frf_drift'] else '')
+                  + (f"  [= {s['same_as']}]" if s['same_as'] else ''))
         return 0
     selected = SCENARIOS
     if a.only:

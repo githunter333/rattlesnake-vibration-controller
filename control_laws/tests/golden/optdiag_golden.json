@@ -1,5 +1,5 @@
 {
- "recorded": "2026-11-02 13:36:53",
+ "recorded": "2026-11-02 14:42:25",
  "environment": {
   "python": "3.11.14",
   "numpy": "2.4.6",
@@ -9,9 +9,9 @@
   "system": "Darwin"
  },
  "law_sources": {
-  "optimal_diagonal_control.py": "3ce42d253a244b17",
-  "optimal_diagonal_control_fast.py": "4ef8438a4edc9397",
-  "octave_band_switching_control.py": "ab60e134a4f02be0"
+  "optimal_diagonal_control.py": "5bb2efd7a5a31cdf",
+  "optimal_diagonal_control_fast.py": "a5126543fdb965bd",
+  "octave_band_switching_control.py": "a5eb886b3057062c"
  },
  "seed": 1,
  "n_frames": 20,
@@ -26,6 +26,7 @@
     "level_db": null,
     "frf_drift": 0.0,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -73,6 +74,7 @@
     "level_db": null,
     "frf_drift": 0.0,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -120,6 +122,7 @@
     "level_db": null,
     "frf_drift": 0.0,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -167,6 +170,7 @@
     "level_db": null,
     "frf_drift": 0.0,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -214,6 +218,7 @@
     "level_db": null,
     "frf_drift": 0.05,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -261,6 +266,7 @@
     "level_db": null,
     "frf_drift": 0.0,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -310,6 +316,7 @@
     "level_db": null,
     "frf_drift": 0.0,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -359,6 +366,7 @@
     "level_db": null,
     "frf_drift": 0.0,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -408,6 +416,7 @@
     "level_db": null,
     "frf_drift": 0.0,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -457,6 +466,7 @@
     "level_db": null,
     "frf_drift": 0.0,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -506,6 +516,7 @@
     "level_db": null,
     "frf_drift": 0.0,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -555,6 +566,7 @@
     "level_db": null,
     "frf_drift": 0.0,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -604,6 +616,7 @@
     "level_db": null,
     "frf_drift": 0.05,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -653,6 +666,7 @@
     "level_db": null,
     "frf_drift": 0.03,
     "frf_walk": true,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -702,6 +716,7 @@
     "level_db": null,
     "frf_drift": 0.03,
     "frf_walk": true,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -751,6 +766,7 @@
     "level_db": null,
     "frf_drift": 0.0,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -800,6 +816,7 @@
     "level_db": 0.0,
     "frf_drift": 0.0,
     "frf_walk": false,
+    "same_as": null,
     "tags": [
      "legacy_collision"
     ]
@@ -832,6 +849,486 @@
     "refined_lines": 0
    }
   },
+  "sdp_db_irls_cap_named": {
+   "definition": {
+    "name": "sdp_db_irls_cap_named",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": "reg: 1e-05\nmax_bins_per_update: 10\nerror_threshold_db: 14.0\nmax_drive_coherence: 0.8\nstartup_test_level_cap_db: -12.0\nerror_domain: db\nn_irls_passes: 3",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": "sdp_db_irls_cap",
+    "tags": []
+   },
+   "hashes": [
+    "a401f3bb8d741f5e707ec5e3",
+    "389d6344c9135dbb63b2b7b9",
+    "05a711cfbcd6e73af774132a",
+    "e3b93f7e849b8be4b7e9e4aa",
+    "e3b93f7e849b8be4b7e9e4aa",
+    "e3b93f7e849b8be4b7e9e4aa",
+    "e3b93f7e849b8be4b7e9e4aa"
+   ],
+   "err_rms": [
+    14.506672532941868,
+    4.801387885713673,
+    4.7628556808537335,
+    4.753470254755421,
+    4.753470254755421,
+    4.753470254755421,
+    4.753470254755421
+   ],
+   "drive_db": [
+    -6.847584866279429,
+    4.754617736913727,
+    4.760494128948646,
+    4.762621578959478,
+    4.762621578959478,
+    4.762621578959478,
+    4.762621578959478
+   ],
+   "counters": {
+    "n_sdp_refinements": 46,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 46
+   }
+  },
+  "sdp_trim_on_named": {
+   "definition": {
+    "name": "sdp_trim_on_named",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": "response_trim_gain: 1.0\nresponse_trim_limit_db: 0.5\nresponse_trim_step_db: 0.4\nresponse_trim_deadband_db: 0.3\nresponse_trim_gate_db: 0.4",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": "sdp_trim_on",
+    "tags": []
+   },
+   "hashes": [
+    "dbb6e1f934e1b8672494ba71",
+    "bf6d0917307d9b4620a47fa1",
+    "36cdf986cd0162d12adc4c2d",
+    "8b91e0265df2d2a95da14bfe",
+    "43c0c91aed63b6844c0f2808",
+    "98f446e1f224b7fecf53be5a",
+    "7631c4459a3ad0c6be261630"
+   ],
+   "err_rms": [
+    11.81029012633049,
+    5.955308147802865,
+    5.869473867269499,
+    5.812344174569054,
+    5.782292278036142,
+    5.766916853248265,
+    5.7529668104661695
+   ],
+   "drive_db": [
+    -3.84933668125784,
+    4.735816810413153,
+    4.821229430893259,
+    4.210904263033285,
+    2.7958005120191345,
+    2.2911179945463966,
+    -1.0143352074537524
+   ],
+   "counters": {
+    "n_sdp_refinements": 160,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 5,
+    "refined_lines": 160
+   }
+  },
+  "sdp_time_budget_one_line_named": {
+   "definition": {
+    "name": "sdp_time_budget_one_line_named",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": "max_bins_per_update: 15\nmax_solve_ms_per_update: 0.001",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": "sdp_time_budget_one_line",
+    "tags": []
+   },
+   "hashes": [
+    "60408e35c30e019e71b0dabe",
+    "a103e260decdf10a316fe442",
+    "4073dc6d89dc93959421ba73",
+    "1ca1de14bd296cdfbc5bb79c",
+    "39b834762600d4aeca4aa05b",
+    "07539a3599b18c4c48c511a8",
+    "b51eb3047c2f3945d5114ccc"
+   ],
+   "err_rms": [
+    11.757099180128554,
+    5.803358866804274,
+    5.809927608280879,
+    5.816538418854372,
+    5.823188272040477,
+    5.8298728174867716,
+    5.8365844188811495
+   ],
+   "drive_db": [
+    -3.8495087167294857,
+    4.735584068203608,
+    4.735562434558737,
+    4.7355505331093175,
+    4.735547727364596,
+    4.735552211928773,
+    4.735563603495797
+   ],
+   "counters": {
+    "n_sdp_refinements": 8,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 8
+   }
+  },
+  "sdp_frf_drift_named": {
+   "definition": {
+    "name": "sdp_frf_drift_named",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": "frf_update_threshold: 0.02",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.05,
+    "frf_walk": false,
+    "same_as": "sdp_frf_drift",
+    "tags": []
+   },
+   "hashes": [
+    "dbb6e1f934e1b8672494ba71",
+    "15f3c27f34683ce40d6b12b8",
+    "8adb772eb81e639c51f57b53",
+    "7d42d6b585b82f6c50fd61ba",
+    "61bbbfb0cb92db01b43dd5b0",
+    "3d81244d9f2d18f1c1645768",
+    "1c04b42b5bad98d16825ef83"
+   ],
+   "err_rms": [
+    11.81029012633049,
+    5.933980434793373,
+    5.923383023666962,
+    5.913240819070788,
+    5.872546960619803,
+    5.872447870672581,
+    5.868539138095349
+   ],
+   "drive_db": [
+    -3.84933668125784,
+    -0.7754627137331107,
+    -2.7870409865357137,
+    -2.7918937418594596,
+    -5.640946937517529,
+    -5.423631910895153,
+    -7.313427926187913
+   ],
+   "counters": {
+    "n_sdp_refinements": 100,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 60,
+    "n_trim_updates": 0,
+    "refined_lines": 100
+   }
+  },
+  "fast_rank_svd_rcond_named": {
+   "definition": {
+    "name": "fast_rank_svd_rcond_named",
+    "plant": "6x8",
+    "law": "fast",
+    "params": "reg: 1e-05\nmax_bins_per_update: 10\nerror_threshold_db: 0.5\nmax_drive_coherence: 0.8\nbm_rank: 3\ndrive_rcond: 0.5\nsvd_select: 1\nsvd_gap_min: 2.0\nsvd_floor: 0.03\nsvd_weak_max: 0.2\nsvd_min_keep: 2",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": "fast_rank_svd_rcond",
+    "tags": []
+   },
+   "hashes": [
+    "9c8318caa98bae7ac97b8c32",
+    "863cc2af44261d1eae2c0933",
+    "9753188534d8510fdaccac7f",
+    "87fca5ee0996e2e517f1e159",
+    "61030e287d49ed22188f76e4",
+    "fd7500fbcc67fcd66a2dc4d5",
+    "7692a04527e7cd2036150b4e"
+   ],
+   "err_rms": [
+    11.82116952509049,
+    6.01008766518755,
+    6.035035875039262,
+    6.044844971417367,
+    6.04394485556551,
+    6.174669949996554,
+    6.196178476194921
+   ],
+   "drive_db": [
+    -3.8499478194477357,
+    4.7344519592624215,
+    4.734015758874096,
+    4.733337166658728,
+    4.733122723094169,
+    4.732967976425781,
+    4.7328998857150175
+   ],
+   "counters": {
+    "n_sdp_refinements": 80,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 80,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 80
+   }
+  },
+  "fast_db_guard_flags_named": {
+   "definition": {
+    "name": "fast_db_guard_flags_named",
+    "plant": "6x8",
+    "law": "fast",
+    "params": "error_domain: db\ndb_coherence_guard: 2",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": "fast_db_guard_flags",
+    "tags": []
+   },
+   "hashes": [
+    "c3efe46893425462b6bbc62b",
+    "7e300128ce6a892207f849c1",
+    "02a62c62956050c106f47897",
+    "d622d279af5b4de730428844",
+    "c2f6f720057dd762507a9aed",
+    "7c3480f03fe0e942f2b412e6",
+    "2a65c9bf3d423ca7576cd8b5"
+   ],
+   "err_rms": [
+    11.812771997137956,
+    4.635740420287153,
+    4.52821151543213,
+    5.012005740837239,
+    5.677746623915637,
+    5.6910215059858755,
+    6.315623598409246
+   ],
+   "drive_db": [
+    -3.8455096005594287,
+    4.788355614085314,
+    4.7897620245435775,
+    4.623165186604458,
+    3.6770603626555003,
+    3.502278794949036,
+    2.031169617134518
+   ],
+   "counters": {
+    "n_sdp_refinements": 160,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 160,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 160
+   }
+  },
+  "fast_cap_baseline_named": {
+   "definition": {
+    "name": "fast_cap_baseline_named",
+    "plant": "6x8",
+    "law": "fast",
+    "params": "max_bins_per_update: 10\nmax_drive_coherence: 0.5\ncap_baseline: 1",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": "fast_cap_baseline",
+    "tags": []
+   },
+   "hashes": [
+    "08f97da8930155257cc1ce11",
+    "1d7438d99f546de9bb0dddaa",
+    "12acb95c634e459a54685061",
+    "d007432fefcb1d57a4805547",
+    "4642e3cfe28b324a83e28c8c",
+    "1b2be1298a7b1923a25d3526",
+    "45d443af1fa11f38f5c4dd3e"
+   ],
+   "err_rms": [
+    12.778233550159658,
+    8.486624807531056,
+    7.986327867429554,
+    7.465981470657721,
+    7.013843081652358,
+    6.7334874618261775,
+    6.711021215262323
+   ],
+   "drive_db": [
+    -24.241973581344208,
+    -8.515633181677327,
+    -8.966063090167477,
+    -10.19089211993732,
+    -11.544693023388493,
+    -12.412704708084615,
+    -12.357302967048586
+   ],
+   "counters": {
+    "n_sdp_refinements": 80,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 80,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 80
+   }
+  },
+  "fast_warm_start_off_named": {
+   "definition": {
+    "name": "fast_warm_start_off_named",
+    "plant": "6x8",
+    "law": "fast",
+    "params": "warm_start: 0",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": "fast_warm_start_off",
+    "tags": []
+   },
+   "hashes": [
+    "308b1e3da233a06a6ef73fd0",
+    "164da2e2afec236fa90ff444",
+    "fe49e03e63650923c54564c2",
+    "15b7160848fbc9d2c4a98292",
+    "a275627f89f74d619e88cae7",
+    "41b6ffc077aa6af58fe0e172",
+    "b63cd120601e772c599f164c"
+   ],
+   "err_rms": [
+    12.015577732377219,
+    6.277452599700899,
+    6.209339908689715,
+    6.15782351013127,
+    6.133595713069566,
+    6.105352021130484,
+    6.095169538560827
+   ],
+   "drive_db": [
+    -3.8404630173846535,
+    4.745430989622371,
+    4.747297416851064,
+    4.110765774186997,
+    2.3024574039830217,
+    2.0546990416356636,
+    -1.2518740884109636
+   ],
+   "counters": {
+    "n_sdp_refinements": 160,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 160,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 160
+   }
+  },
+  "fast_frf_walk_gate_ref0_named": {
+   "definition": {
+    "name": "fast_frf_walk_gate_ref0_named",
+    "plant": "6x8",
+    "law": "fast",
+    "params": "frf_update_threshold: 0.05\ngate_reference: 0",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.03,
+    "frf_walk": true,
+    "same_as": "fast_frf_walk_gate_ref0",
+    "tags": []
+   },
+   "hashes": [
+    "519d4a86df94ef057bd6ffe6",
+    "2d00d96774093d0c79b906a8",
+    "7be3e49ce006948439e3fad6",
+    "0b50d994c4c33dd097981a1f",
+    "cb9909ac84fe4e4d9ee63926",
+    "39e288e9f8ba9266ca9ac1e6",
+    "55334c7a1a6cd028a8b6e37f"
+   ],
+   "err_rms": [
+    12.000661170269685,
+    6.262912666690443,
+    6.251992274112667,
+    6.218700751427046,
+    6.210352440994919,
+    6.233459780187806,
+    6.221955773629621
+   ],
+   "drive_db": [
+    -3.843135876033596,
+    -0.7921159788759766,
+    -4.320890318260314,
+    -4.376996165174996,
+    -4.230908769003379,
+    -7.324938880331527,
+    -7.5578630358314545
+   ],
+   "counters": {
+    "n_sdp_refinements": 113,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 100,
+    "n_safe_solves": 60,
+    "n_frf_updates": 47,
+    "n_trim_updates": 0,
+    "refined_lines": 113
+   }
+  },
+  "octave_engaged_named": {
+   "definition": {
+    "name": "octave_engaged_named",
+    "plant": "6x8",
+    "law": "octave",
+    "params": "frequency_spacing: 5\nswitch_level_db: 0\noctave_fraction: 6\noctave_fmin: 100\noctave_fmax: 1000",
+    "n_cycles": 2,
+    "level_db": 0.0,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": null,
+    "tags": []
+   },
+   "hashes": [
+    "7f0228e0201a34ae2d6a6fae",
+    "37de514dad0775f613f781ed",
+    "37de514dad0775f613f781ed"
+   ],
+   "err_rms": [
+    12.725797528560468,
+    7.274550990566521,
+    7.274550990566521
+   ],
+   "drive_db": [
+    -17.794481993976156,
+    -8.234189704469712,
+    -8.234189704469712
+   ],
+   "counters": {
+    "n_sdp_refinements": 0,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "n_octave_switches": 1,
+    "n_octave_band_solves": 20,
+    "refined_lines": 0
+   }
+  },
   "sdp_10x14_default": {
    "definition": {
     "name": "sdp_10x14_default",
@@ -842,6 +1339,7 @@
     "level_db": null,
     "frf_drift": 0.0,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -889,6 +1387,7 @@
     "level_db": null,
     "frf_drift": 0.0,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
@@ -938,6 +1437,7 @@
     "level_db": null,
     "frf_drift": 0.0,
     "frf_walk": false,
+    "same_as": null,
     "tags": []
    },
    "hashes": [
