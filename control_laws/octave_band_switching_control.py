@@ -108,6 +108,29 @@ _base_module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_base_module)
 optimal_diagonal_control = _base_module.optimal_diagonal_control
 
+# This law's own five parameters.  The Param class, converters and parser are the
+# base module's.  In the legacy comma string these five have ALWAYS been counted
+# among the NON-EMPTY fields (hence dropblank), and they sit on the same
+# positions the base class reads as bm_rank, startup_test_level_cap_db,
+# error_domain, n_irls_passes and drive_rcond -- so a legacy string with six or
+# more fields sets both.  The named form has no such overlap.
+Param = _base_module.Param
+_as_int = _base_module._as_int
+
+_OCTAVE_PARAMS = [
+    Param('frequency_spacing', None, float, 5,
+          'Hz per FFT line (sample_rate / samples_per_frame); REQUIRED for octave mode to engage',
+          dropblank=True),
+    Param('switch_level_db', 0.0, float, 6,
+          'test level (dB) at or above which octave-band mode engages', dropblank=True),
+    Param('octave_fraction', 6, _as_int, 7,
+          'fractional-octave denominator: 6 = 1/6 octave, 3 = 1/3 octave', dropblank=True),
+    Param('octave_fmin', None, float, 8,
+          'lowest frequency to band, Hz (default: lowest line with a nonzero target)', dropblank=True),
+    Param('octave_fmax', None, float, 9,
+          'highest frequency to band, Hz (default: highest line with a nonzero target)', dropblank=True),
+]
+
 
 # ---------------------------------------------------------------------
 # Vendored fractional-octave band-edge math (pure numpy, no cross-repo
@@ -133,6 +156,8 @@ def _octave_band_frequencies(fmin, fmax, fraction, base=2.0, ref=1000.0):
 
 
 class octave_band_switching_control(optimal_diagonal_control):
+    OWN_PARAMS = _OCTAVE_PARAMS
+
     def __init__(self, *args, **kwargs):
         # These have to exist BEFORE super().__init__() runs: the base
         # class's __init__ calls self._initialize(...) -> self._refine_
@@ -141,11 +166,8 @@ class octave_band_switching_control(optimal_diagonal_control):
         # attributes. Safe defaults here mean that first call (if it
         # happens) behaves as plain narrowband optimal_diagonal_control,
         # which is correct -- extra_parameters hasn't been parsed yet.
-        self.frequency_spacing = None
-        self.switch_level_db = 0.0
-        self.octave_fraction = 6
-        self.octave_fmin = None
-        self.octave_fmax = None
+        for p in octave_band_switching_control.OWN_PARAMS:
+            setattr(self, p.name, p.default)
         self.current_test_level_db = None
         self._band_of_line = None
         self._lines_of_band = None
@@ -163,16 +185,15 @@ class octave_band_switching_control(optimal_diagonal_control):
         super().__init__(*args, **kwargs)
 
         extra_parameters = kwargs.get('extra_parameters', args[3] if len(args) > 3 else '')
-        if extra_parameters:
-            try:
-                parts = [p.strip() for p in str(extra_parameters).split(',') if p.strip() != '']
-                if len(parts) >= 6: self.frequency_spacing = float(parts[5])
-                if len(parts) >= 7: self.switch_level_db = float(parts[6])
-                if len(parts) >= 8: self.octave_fraction = int(float(parts[7]))
-                if len(parts) >= 9: self.octave_fmin = float(parts[8])
-                if len(parts) >= 10: self.octave_fmax = float(parts[9])
-            except ValueError:
-                pass  # keep defaults if the string doesn't parse
+        self._read_parameters(extra_parameters, octave_band_switching_control.OWN_PARAMS)
+        parsed = self._parsed_parameter_string(extra_parameters)
+        if parsed is not None and parsed[0] == 'legacy' and len(parsed[1]['nonblank']) > 5:
+            print("[octave_band_switching_control] WARNING: this comma-separated string sets this "
+                  "law's own parameters (frequency_spacing, switch_level_db, octave_fraction, "
+                  "octave_fmin, octave_fmax) from fields 6-10, and optimal_diagonal_control reads "
+                  "the same positions as bm_rank, startup_test_level_cap_db, error_domain, "
+                  "n_irls_passes and drive_rcond, so both take effect.  Use the named form, one "
+                  "'name: value' per line, which has no such overlap.", flush=True)
 
         if self.frequency_spacing:
             self._build_bands()
