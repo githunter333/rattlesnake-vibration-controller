@@ -1,0 +1,978 @@
+{
+ "recorded": "2026-11-02 13:36:53",
+ "environment": {
+  "python": "3.11.14",
+  "numpy": "2.4.6",
+  "scipy": "1.17.1",
+  "cvxpy": "1.8.2",
+  "machine": "arm64",
+  "system": "Darwin"
+ },
+ "law_sources": {
+  "optimal_diagonal_control.py": "3ce42d253a244b17",
+  "optimal_diagonal_control_fast.py": "4ef8438a4edc9397",
+  "octave_band_switching_control.py": "ab60e134a4f02be0"
+ },
+ "seed": 1,
+ "n_frames": 20,
+ "scenarios": {
+  "sdp_default": {
+   "definition": {
+    "name": "sdp_default",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": "",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "dbb6e1f934e1b8672494ba71",
+    "bf6d0917307d9b4620a47fa1",
+    "c4689a0e42f1c2e0aac34d2a",
+    "a9ccc6807e28950c21b4ce0a",
+    "d47ede5e2a53f14d7ce8136a",
+    "7f551826c7dce4430a84132c",
+    "eea852114178ba58a21c3024"
+   ],
+   "err_rms": [
+    11.81029012633049,
+    5.955308147802865,
+    5.8765422970199985,
+    5.810388260760278,
+    5.777815399424148,
+    5.745818300954323,
+    5.73142283097037
+   ],
+   "drive_db": [
+    -3.84933668125784,
+    4.735816810413153,
+    4.738368727149334,
+    4.1012408039155455,
+    2.2883689246811416,
+    2.0394687344297413,
+    -1.2936232937381633
+   ],
+   "counters": {
+    "n_sdp_refinements": 160,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 160
+   }
+  },
+  "sdp_db_irls_cap": {
+   "definition": {
+    "name": "sdp_db_irls_cap",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": "1e-05,,10,14.0,0.8,,-12.0,1,3",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "a401f3bb8d741f5e707ec5e3",
+    "389d6344c9135dbb63b2b7b9",
+    "05a711cfbcd6e73af774132a",
+    "e3b93f7e849b8be4b7e9e4aa",
+    "e3b93f7e849b8be4b7e9e4aa",
+    "e3b93f7e849b8be4b7e9e4aa",
+    "e3b93f7e849b8be4b7e9e4aa"
+   ],
+   "err_rms": [
+    14.506672532941868,
+    4.801387885713673,
+    4.7628556808537335,
+    4.753470254755421,
+    4.753470254755421,
+    4.753470254755421,
+    4.753470254755421
+   ],
+   "drive_db": [
+    -6.847584866279429,
+    4.754617736913727,
+    4.760494128948646,
+    4.762621578959478,
+    4.762621578959478,
+    4.762621578959478,
+    4.762621578959478
+   ],
+   "counters": {
+    "n_sdp_refinements": 46,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 46
+   }
+  },
+  "sdp_trim_on": {
+   "definition": {
+    "name": "sdp_trim_on",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": ",,,,,,,,,,1.0,0.5,0.4,0.3,0.4",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "dbb6e1f934e1b8672494ba71",
+    "bf6d0917307d9b4620a47fa1",
+    "36cdf986cd0162d12adc4c2d",
+    "8b91e0265df2d2a95da14bfe",
+    "43c0c91aed63b6844c0f2808",
+    "98f446e1f224b7fecf53be5a",
+    "7631c4459a3ad0c6be261630"
+   ],
+   "err_rms": [
+    11.81029012633049,
+    5.955308147802865,
+    5.869473867269499,
+    5.812344174569054,
+    5.782292278036142,
+    5.766916853248265,
+    5.7529668104661695
+   ],
+   "drive_db": [
+    -3.84933668125784,
+    4.735816810413153,
+    4.821229430893259,
+    4.210904263033285,
+    2.7958005120191345,
+    2.2911179945463966,
+    -1.0143352074537524
+   ],
+   "counters": {
+    "n_sdp_refinements": 160,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 5,
+    "refined_lines": 160
+   }
+  },
+  "sdp_time_budget_one_line": {
+   "definition": {
+    "name": "sdp_time_budget_one_line",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": ",,15,,,,,,,,,,,,,,,,,,0.001",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "60408e35c30e019e71b0dabe",
+    "a103e260decdf10a316fe442",
+    "4073dc6d89dc93959421ba73",
+    "1ca1de14bd296cdfbc5bb79c",
+    "39b834762600d4aeca4aa05b",
+    "07539a3599b18c4c48c511a8",
+    "b51eb3047c2f3945d5114ccc"
+   ],
+   "err_rms": [
+    11.757099180128554,
+    5.803358866804274,
+    5.809927608280879,
+    5.816538418854372,
+    5.823188272040477,
+    5.8298728174867716,
+    5.8365844188811495
+   ],
+   "drive_db": [
+    -3.8495087167294857,
+    4.735584068203608,
+    4.735562434558737,
+    4.7355505331093175,
+    4.735547727364596,
+    4.735552211928773,
+    4.735563603495797
+   ],
+   "counters": {
+    "n_sdp_refinements": 8,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 8
+   }
+  },
+  "sdp_frf_drift": {
+   "definition": {
+    "name": "sdp_frf_drift",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": ",0.02",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.05,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "dbb6e1f934e1b8672494ba71",
+    "15f3c27f34683ce40d6b12b8",
+    "8adb772eb81e639c51f57b53",
+    "7d42d6b585b82f6c50fd61ba",
+    "61bbbfb0cb92db01b43dd5b0",
+    "3d81244d9f2d18f1c1645768",
+    "1c04b42b5bad98d16825ef83"
+   ],
+   "err_rms": [
+    11.81029012633049,
+    5.933980434793373,
+    5.923383023666962,
+    5.913240819070788,
+    5.872546960619803,
+    5.872447870672581,
+    5.868539138095349
+   ],
+   "drive_db": [
+    -3.84933668125784,
+    -0.7754627137331107,
+    -2.7870409865357137,
+    -2.7918937418594596,
+    -5.640946937517529,
+    -5.423631910895153,
+    -7.313427926187913
+   ],
+   "counters": {
+    "n_sdp_refinements": 100,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 60,
+    "n_trim_updates": 0,
+    "refined_lines": 100
+   }
+  },
+  "fast_default": {
+   "definition": {
+    "name": "fast_default",
+    "plant": "6x8",
+    "law": "fast",
+    "params": "",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "519d4a86df94ef057bd6ffe6",
+    "d3620f0923607b8f9a721135",
+    "d51ed13711764eb993d05ae5",
+    "70003766317a910aa23425a2",
+    "cc07de085567e1d88b0282c2",
+    "8eb19f9586324f8bbdd43b6a",
+    "472fe86c888ca3525a99d718"
+   ],
+   "err_rms": [
+    12.000661170269685,
+    6.25722105206255,
+    6.191312982649777,
+    6.138831751441963,
+    6.115824631101797,
+    6.089001821896683,
+    6.086118310062849
+   ],
+   "drive_db": [
+    -3.843135876033596,
+    4.740647261730696,
+    4.7419725268679365,
+    4.105634212540941,
+    2.2886997630034664,
+    2.028122944635529,
+    -1.3125107074907891
+   ],
+   "counters": {
+    "n_sdp_refinements": 160,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 160,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 160
+   }
+  },
+  "fast_rank_svd_rcond": {
+   "definition": {
+    "name": "fast_rank_svd_rcond",
+    "plant": "6x8",
+    "law": "fast",
+    "params": "1e-05,,10,0.5,0.8,3,,,,0.5,,,,,,1,2.0,0.03,0.2,2",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "9c8318caa98bae7ac97b8c32",
+    "863cc2af44261d1eae2c0933",
+    "9753188534d8510fdaccac7f",
+    "87fca5ee0996e2e517f1e159",
+    "61030e287d49ed22188f76e4",
+    "fd7500fbcc67fcd66a2dc4d5",
+    "7692a04527e7cd2036150b4e"
+   ],
+   "err_rms": [
+    11.82116952509049,
+    6.01008766518755,
+    6.035035875039262,
+    6.044844971417367,
+    6.04394485556551,
+    6.174669949996554,
+    6.196178476194921
+   ],
+   "drive_db": [
+    -3.8499478194477357,
+    4.7344519592624215,
+    4.734015758874096,
+    4.733337166658728,
+    4.733122723094169,
+    4.732967976425781,
+    4.7328998857150175
+   ],
+   "counters": {
+    "n_sdp_refinements": 80,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 80,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 80
+   }
+  },
+  "fast_db_guard_flags": {
+   "definition": {
+    "name": "fast_db_guard_flags",
+    "plant": "6x8",
+    "law": "fast",
+    "params": ",,,,,,,1,,,,,,,,,,,,,,,2",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "c3efe46893425462b6bbc62b",
+    "7e300128ce6a892207f849c1",
+    "02a62c62956050c106f47897",
+    "d622d279af5b4de730428844",
+    "c2f6f720057dd762507a9aed",
+    "7c3480f03fe0e942f2b412e6",
+    "2a65c9bf3d423ca7576cd8b5"
+   ],
+   "err_rms": [
+    11.812771997137956,
+    4.635740420287153,
+    4.52821151543213,
+    5.012005740837239,
+    5.677746623915637,
+    5.6910215059858755,
+    6.315623598409246
+   ],
+   "drive_db": [
+    -3.8455096005594287,
+    4.788355614085314,
+    4.7897620245435775,
+    4.623165186604458,
+    3.6770603626555003,
+    3.502278794949036,
+    2.031169617134518
+   ],
+   "counters": {
+    "n_sdp_refinements": 160,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 160,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 160
+   }
+  },
+  "fast_cap_baseline": {
+   "definition": {
+    "name": "fast_cap_baseline",
+    "plant": "6x8",
+    "law": "fast",
+    "params": ",,10,,0.5,,,,,,,,,,,,,,,,,1",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "08f97da8930155257cc1ce11",
+    "1d7438d99f546de9bb0dddaa",
+    "12acb95c634e459a54685061",
+    "d007432fefcb1d57a4805547",
+    "4642e3cfe28b324a83e28c8c",
+    "1b2be1298a7b1923a25d3526",
+    "45d443af1fa11f38f5c4dd3e"
+   ],
+   "err_rms": [
+    12.778233550159658,
+    8.486624807531056,
+    7.986327867429554,
+    7.465981470657721,
+    7.013843081652358,
+    6.7334874618261775,
+    6.711021215262323
+   ],
+   "drive_db": [
+    -24.241973581344208,
+    -8.515633181677327,
+    -8.966063090167477,
+    -10.19089211993732,
+    -11.544693023388493,
+    -12.412704708084615,
+    -12.357302967048586
+   ],
+   "counters": {
+    "n_sdp_refinements": 80,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 80,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 80
+   }
+  },
+  "fast_warm_start_off": {
+   "definition": {
+    "name": "fast_warm_start_off",
+    "plant": "6x8",
+    "law": "fast",
+    "params": ",,,,,,,,,,,,,,,,,,,,,,,0",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "308b1e3da233a06a6ef73fd0",
+    "164da2e2afec236fa90ff444",
+    "fe49e03e63650923c54564c2",
+    "15b7160848fbc9d2c4a98292",
+    "a275627f89f74d619e88cae7",
+    "41b6ffc077aa6af58fe0e172",
+    "b63cd120601e772c599f164c"
+   ],
+   "err_rms": [
+    12.015577732377219,
+    6.277452599700899,
+    6.209339908689715,
+    6.15782351013127,
+    6.133595713069566,
+    6.105352021130484,
+    6.095169538560827
+   ],
+   "drive_db": [
+    -3.8404630173846535,
+    4.745430989622371,
+    4.747297416851064,
+    4.110765774186997,
+    2.3024574039830217,
+    2.0546990416356636,
+    -1.2518740884109636
+   ],
+   "counters": {
+    "n_sdp_refinements": 160,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 160,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 160
+   }
+  },
+  "fast_trim_on": {
+   "definition": {
+    "name": "fast_trim_on",
+    "plant": "6x8",
+    "law": "fast",
+    "params": ",,,,,,,,,,1.0,0.5,0.4,0.3,0.4",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "519d4a86df94ef057bd6ffe6",
+    "d3620f0923607b8f9a721135",
+    "e7b4169c5f93fcf83b0e11d9",
+    "83645e1127af5737ea2b454b",
+    "ad17c0616736e50db7b8d3c9",
+    "6995b2de6d3149f3aef1b108",
+    "393b1507cd84e3d57a23a88f"
+   ],
+   "err_rms": [
+    12.000661170269685,
+    6.25722105206255,
+    6.1846990999782205,
+    6.143627821208895,
+    6.120058342557049,
+    6.09596626852845,
+    6.085467239998529
+   ],
+   "drive_db": [
+    -3.843135876033596,
+    4.740647261730696,
+    4.824754093268478,
+    4.215196069241732,
+    2.7964187313941133,
+    2.2784157277076584,
+    -1.041788147051575
+   ],
+   "counters": {
+    "n_sdp_refinements": 160,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 160,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 5,
+    "refined_lines": 160
+   }
+  },
+  "fast_time_budget_one_line": {
+   "definition": {
+    "name": "fast_time_budget_one_line",
+    "plant": "6x8",
+    "law": "fast",
+    "params": ",,,,,,,,,,,,,,,,,,,,0.001",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "749c6abe4e6a1e327f39487c",
+    "b27026be1f230d5f44cb3aaa",
+    "e02704f458da7812ef6a9ca3",
+    "1e245348aa522c108a9137ec",
+    "47903b915ad89529a1bf57c3",
+    "18d58ba336a82ed2d85245f9",
+    "9a5f8aaee420d3ea5c0a264a"
+   ],
+   "err_rms": [
+    11.779818838072341,
+    5.85903365534508,
+    5.8838577261054485,
+    5.9087795528684,
+    5.933515814045226,
+    5.958108045591032,
+    5.982536527615511
+   ],
+   "drive_db": [
+    -3.848316369031389,
+    4.736805733715989,
+    4.737144286528219,
+    4.737466777710796,
+    4.737773909875515,
+    4.738065875723968,
+    4.738342921357741
+   ],
+   "counters": {
+    "n_sdp_refinements": 8,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 8,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 8
+   }
+  },
+  "fast_frf_drift": {
+   "definition": {
+    "name": "fast_frf_drift",
+    "plant": "6x8",
+    "law": "fast",
+    "params": ",0.02",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.05,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "519d4a86df94ef057bd6ffe6",
+    "769da6c5adcca4b5e7b22f8d",
+    "d51a014951e00d93efe0b7b8",
+    "63e490f04cae47410e49d1ec",
+    "c69a8353359d40b7ce370f37",
+    "885410daf3ed7fceae531648",
+    "d6b70c4c1f557c1a296e1010"
+   ],
+   "err_rms": [
+    12.000661170269685,
+    6.226168593181089,
+    6.216070012338539,
+    6.206408279179337,
+    6.167646693947595,
+    6.167554353598549,
+    6.163832092494584
+   ],
+   "drive_db": [
+    -3.843135876033596,
+    -0.7623725760062898,
+    -2.7662650064293475,
+    -2.7710736544540735,
+    -5.600941086990186,
+    -5.385543446785111,
+    -7.254725916600471
+   ],
+   "counters": {
+    "n_sdp_refinements": 100,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 40,
+    "n_safe_solves": 120,
+    "n_frf_updates": 60,
+    "n_trim_updates": 0,
+    "refined_lines": 100
+   }
+  },
+  "fast_frf_walk": {
+   "definition": {
+    "name": "fast_frf_walk",
+    "plant": "6x8",
+    "law": "fast",
+    "params": ",0.05",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.03,
+    "frf_walk": true,
+    "tags": []
+   },
+   "hashes": [
+    "519d4a86df94ef057bd6ffe6",
+    "2d00d96774093d0c79b906a8",
+    "7be3e49ce006948439e3fad6",
+    "0b50d994c4c33dd097981a1f",
+    "ed4a7fe63fe5a7ddbb512cf1",
+    "70c5a53bcc0ddbbaeced0d99",
+    "daf3f4aee9b9b34cecd8f980"
+   ],
+   "err_rms": [
+    12.000661170269685,
+    6.262912666690443,
+    6.251992274112667,
+    6.218700751427046,
+    6.202587090391698,
+    6.202031333882665,
+    6.196733079877247
+   ],
+   "drive_db": [
+    -3.843135876033596,
+    -0.7921159788759766,
+    -4.320890318260314,
+    -4.376996165174996,
+    -4.4111087839562995,
+    -8.111375485783643,
+    -8.848960056226861
+   ],
+   "counters": {
+    "n_sdp_refinements": 113,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 160,
+    "n_safe_solves": 0,
+    "n_frf_updates": 47,
+    "n_trim_updates": 0,
+    "refined_lines": 113
+   }
+  },
+  "fast_frf_walk_gate_ref0": {
+   "definition": {
+    "name": "fast_frf_walk_gate_ref0",
+    "plant": "6x8",
+    "law": "fast",
+    "params": ",0.05,,,,,,,,,,,,,,,,,,,,,,,0",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.03,
+    "frf_walk": true,
+    "tags": []
+   },
+   "hashes": [
+    "519d4a86df94ef057bd6ffe6",
+    "2d00d96774093d0c79b906a8",
+    "7be3e49ce006948439e3fad6",
+    "0b50d994c4c33dd097981a1f",
+    "cb9909ac84fe4e4d9ee63926",
+    "39e288e9f8ba9266ca9ac1e6",
+    "55334c7a1a6cd028a8b6e37f"
+   ],
+   "err_rms": [
+    12.000661170269685,
+    6.262912666690443,
+    6.251992274112667,
+    6.218700751427046,
+    6.210352440994919,
+    6.233459780187806,
+    6.221955773629621
+   ],
+   "drive_db": [
+    -3.843135876033596,
+    -0.7921159788759766,
+    -4.320890318260314,
+    -4.376996165174996,
+    -4.230908769003379,
+    -7.324938880331527,
+    -7.5578630358314545
+   ],
+   "counters": {
+    "n_sdp_refinements": 113,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 100,
+    "n_safe_solves": 60,
+    "n_frf_updates": 47,
+    "n_trim_updates": 0,
+    "refined_lines": 113
+   }
+  },
+  "octave_no_spacing": {
+   "definition": {
+    "name": "octave_no_spacing",
+    "plant": "6x8",
+    "law": "octave",
+    "params": "",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "dbb6e1f934e1b8672494ba71",
+    "bf6d0917307d9b4620a47fa1",
+    "c4689a0e42f1c2e0aac34d2a",
+    "a9ccc6807e28950c21b4ce0a",
+    "d47ede5e2a53f14d7ce8136a",
+    "7f551826c7dce4430a84132c",
+    "eea852114178ba58a21c3024"
+   ],
+   "err_rms": [
+    11.81029012633049,
+    5.955308147802865,
+    5.8765422970199985,
+    5.810388260760278,
+    5.777815399424148,
+    5.745818300954323,
+    5.73142283097037
+   ],
+   "drive_db": [
+    -3.84933668125784,
+    4.735816810413153,
+    4.738368727149334,
+    4.1012408039155455,
+    2.2883689246811416,
+    2.0394687344297413,
+    -1.2936232937381633
+   ],
+   "counters": {
+    "n_sdp_refinements": 160,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "n_octave_switches": 0,
+    "n_octave_band_solves": 0,
+    "refined_lines": 160
+   }
+  },
+  "octave_engaged_legacy_string": {
+   "definition": {
+    "name": "octave_engaged_legacy_string",
+    "plant": "6x8",
+    "law": "octave",
+    "params": "1e-6,0.5,20,1.0,0.95,5,0,6,100,1000",
+    "n_cycles": 3,
+    "level_db": 0.0,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "tags": [
+     "legacy_collision"
+    ]
+   },
+   "hashes": [
+    "8e11197da6ec63c766ca7e41",
+    "0751e416e249c6eb332fb30c",
+    "0751e416e249c6eb332fb30c",
+    "0751e416e249c6eb332fb30c"
+   ],
+   "err_rms": [
+    5.938630671831764,
+    6.384566226006225,
+    6.384566226006225,
+    6.384566226006225
+   ],
+   "drive_db": [
+    -9.502223023069753,
+    -5.727992251716431,
+    -5.727992251716431,
+    -5.727992251716431
+   ],
+   "counters": {
+    "n_sdp_refinements": 0,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "n_octave_switches": 1,
+    "n_octave_band_solves": 20,
+    "refined_lines": 0
+   }
+  },
+  "sdp_10x14_default": {
+   "definition": {
+    "name": "sdp_10x14_default",
+    "plant": "10x14",
+    "law": "SDP",
+    "params": "",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "6de3a05256d1ee3bd260221b",
+    "7152baebf4fb69be937cae8c",
+    "b213377d72349038a5579302",
+    "c6eed51eece2fa241f472297",
+    "68fb4515444227f1eb1d18f4",
+    "a4d1026c1817bb4d8885afa6",
+    "1a1e86f248c9972d5c0209a5"
+   ],
+   "err_rms": [
+    10.145339386589676,
+    3.4227036323972655,
+    3.372300308493433,
+    3.329628410545297,
+    3.304349679837612,
+    3.284357085042723,
+    3.2697050728186516
+   ],
+   "drive_db": [
+    -12.421535789159076,
+    -3.6879091213299926,
+    -4.075976762074511,
+    -4.729423721199363,
+    -5.420408329256688,
+    -6.62058902968772,
+    -7.809763855296237
+   ],
+   "counters": {
+    "n_sdp_refinements": 160,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 160
+   }
+  },
+  "fast_10x14_default": {
+   "definition": {
+    "name": "fast_10x14_default",
+    "plant": "10x14",
+    "law": "fast",
+    "params": "",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "34c17def035f1430e40ad330",
+    "80b94603b6c79dd2ee8c5e6f",
+    "ffbe66f58d0000074fcadf60",
+    "855bf8e5fad8d3f0fa10b414",
+    "0357773346a8f4a820d35b1e",
+    "97fc45ff9b3d9311dae41985",
+    "da02084860d46f59b1a97835"
+   ],
+   "err_rms": [
+    10.154910986983923,
+    3.4439037990426375,
+    3.3970858668703716,
+    3.355955208174679,
+    3.3311993764291734,
+    3.3118587359301954,
+    3.29761864387772
+   ],
+   "drive_db": [
+    -12.447802307198284,
+    -3.7199255152872506,
+    -4.011412826717581,
+    -4.5475583403315705,
+    -5.1458305775264925,
+    -6.23026216926191,
+    -7.282328761511367
+   ],
+   "counters": {
+    "n_sdp_refinements": 160,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 160,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 160
+   }
+  },
+  "fast_10x14_rankdef": {
+   "definition": {
+    "name": "fast_10x14_rankdef",
+    "plant": "10x14_rankdef",
+    "law": "fast",
+    "params": "",
+    "n_cycles": 5,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "tags": []
+   },
+   "hashes": [
+    "2f3d7f675ff736a3648fed55",
+    "c7149f5d1563499cdbdeb823",
+    "1489e5fe2d78f4aded49b5b5",
+    "7fdcb353823ac2816f3cc7a9",
+    "605b250d73505c7cdb7548ff",
+    "56357081c963bff3eb5c79ab"
+   ],
+   "err_rms": [
+    10.204206589224452,
+    3.4869328109174034,
+    3.437603318123354,
+    3.389674237472039,
+    3.3556231066100555,
+    3.3203648079576102
+   ],
+   "drive_db": [
+    -12.44128854058599,
+    -3.8467265523225613,
+    -4.663281392079894,
+    -6.086428808386277,
+    -6.752856385962801,
+    -9.360606696694227
+   ],
+   "counters": {
+    "n_sdp_refinements": 140,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 140,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 140
+   }
+  }
+ }
+}
