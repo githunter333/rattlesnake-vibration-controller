@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git rev-list *)",
+      "Bash(conda env list)",
+      "Bash(git ls-tree *)",
+      "Bash(git merge-base *)",
+      "Bash(git check-ignore *)"
+    ]
+  }
+}
