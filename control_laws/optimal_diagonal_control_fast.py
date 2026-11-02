@@ -226,6 +226,37 @@ _helpers = importlib.util.module_from_spec(_helpers_spec)
 _helpers_spec.loader.exec_module(_helpers)
 _cap_drive_coherence = _helpers._cap_drive_coherence
 
+# This law's own parameters.  The Param class, the converters and the parser
+# (optimal_diagonal_control._read_parameters) are the base module's, so one
+# string -- legacy or named -- serves both laws; the base law's parameters are
+# read by the base class, these here.
+Param = _base_module.Param
+_as_int, _magnitude = _base_module._as_int, _base_module._magnitude
+
+_FAST_PARAMS = [
+    Param('bm_rank', 4, _as_int, 5,
+          "factorization rank of the fast solve; the SDP's constrained solutions rarely need rank above 3-4"),
+    Param('svd_select', 0, _as_int, 15,
+          '0 = one singular-value cut for the whole band, 1 = each line picks its own'),
+    Param('svd_gap_min', 3.0, lambda s: max(1.0, float(s)), 16,
+          "per-line selection: smallest ratio between adjacent sigmas that marks a line's structural floor"),
+    Param('svd_floor', 1e-6, _magnitude, 17,
+          'sigma/sigma_1 below this is never kept and never counted as a gap'),
+    Param('svd_weak_max', 0.05, _magnitude, 18,
+          'a gap counts as a structural floor only if the direction below it has sigma/sigma_1 at or under this'),
+    Param('svd_min_keep', 0, _as_int, 19,
+          'fewest directions any line keeps (0 = auto: structural rank - 1; -1 = N - 1; 1 = pre-2026-10-24 behaviour)'),
+    Param('cap_baseline', 0, _as_int, 21,
+          '1 = apply max_drive_coherence to the buzz baseline that unsolved lines sit on'),
+    Param('db_coherence_guard', 1, _as_int, 22,
+          'with the dB objective, a fast solution that breaks the coherence cap: 1 = re-solve with the SDP, 2 = shrink its cross terms, 0 = off'),
+    Param('warm_start', 1, _as_int, 23,
+          "1 = start each fast solve from the line's current drive when that scores better than the buzz seed"),
+    Param('gate_reference', 1, _as_int, 24,
+          "what the fast/SDP movement gate compares the FRF with: 1 = the previous call's, 0 = each line's at its last solve"),
+]
+
+
 
 # 10/ln(10), squared: converts a natural-log ratio to dB and back.
 _C_DB = 10.0/np.log(10.0)
@@ -238,6 +269,8 @@ _FALLBACK_SPREAD = 0.0152
 
 
 class optimal_diagonal_control_fast(optimal_diagonal_control):
+    OWN_PARAMS = _FAST_PARAMS
+
     def __init__(self, *args, **kwargs):
         # This subclass's own state is set up BEFORE super().__init__(),
         # not after.  The base constructor calls _initialize() whenever it
@@ -252,49 +285,9 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         # transfer_function=None, so the crash never fired in the app -- it
         # was latent, and would have fired the moment a law was constructed
         # with an FRF already available.
-        self.bm_rank = 4
-        self.svd_select = 0
-        self.svd_gap_min = 3.0
-        self.svd_floor = 1e-6
-        self.svd_weak_max = 0.05
-        self.svd_min_keep = 0          # 0 = auto (structural rank - 1)
-        self.cap_baseline = 0          # field 22
-        self.db_coherence_guard = 1    # field 23
-        self.warm_start = 1            # field 24
-        self.gate_reference = 1        # field 25: 1 = previous call's FRF, 0 = per-line
         self._H_prev_call = None
         extra_parameters = kwargs.get('extra_parameters', args[3] if len(args) > 3 else '')
-        if extra_parameters:
-            try:
-                # EMPTY FIELDS KEEP THEIR POSITION (2026-10-25): an empty field means
-                # "use the default".  The parser used to DROP empty fields, so
-                # ',,200' set reg = 200 instead of max_bins_per_update.  Strings
-                # with no empty fields parse exactly as before.
-                parts = [p.strip() for p in str(extra_parameters).split(',')]
-                has = lambda i: len(parts) > i and parts[i] != ''
-                if has(5):
-                    self.bm_rank = int(float(parts[5]))
-                if has(15):
-                    self.svd_select = int(float(parts[15]))
-                if has(16):
-                    self.svd_gap_min = max(1.0, float(parts[16]))
-                if has(17):
-                    self.svd_floor = abs(float(parts[17]))
-                if has(18):
-                    self.svd_weak_max = abs(float(parts[18]))
-                if has(19):
-                    self.svd_min_keep = int(float(parts[19]))
-                # field 21 (max_solve_ms_per_update) is the base class's
-                if has(21):
-                    self.cap_baseline = int(float(parts[21]))
-                if has(22):
-                    self.db_coherence_guard = int(float(parts[22]))
-                if has(23):
-                    self.warm_start = int(float(parts[23]))
-                if has(24):
-                    self.gate_reference = int(float(parts[24]))
-            except ValueError:
-                pass
+        self._read_parameters(extra_parameters, optimal_diagonal_control_fast.OWN_PARAMS)
         # per-call record of how many directions each fast solve kept
         self._k_counts = {}
 
