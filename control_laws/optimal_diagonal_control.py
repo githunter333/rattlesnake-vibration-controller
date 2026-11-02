@@ -103,8 +103,7 @@ Notes on the parameters (comma-separated form, 1-based):
     "reg,frf_update_threshold,max_bins_per_update,error_threshold_db,max_drive_coherence"
     reg                   - Tikhonov-style weight on ||X||_F (default 1e-6)
     frf_update_threshold  - relative Frobenius-norm change (0-1) that triggers
-                             re-solving an already-refined bin (default 0.5 since
-                             2026-09-19, earlier 0.05)
+                             re-solving an already-refined bin (default 0.5)
     max_bins_per_update   - hard cap on SDP solves per call, split between
                              drifted-refined bins (priority) and worst-error
                              not-yet-refined bins (default 20)
@@ -121,9 +120,9 @@ Notes on the parameters (comma-separated form, 1-based):
     startup_test_level_cap_db
                           - ceiling on the VERY FIRST control command, in dB
                              relative to the specification's own trace
-                             (default -9.0; 0 dB = full spec-match). Added
-                             2026-09-17 to match every law in
-                             control_laws.py. The clamp is on the predicted
+                             (default -9.0; 0 dB = full spec-match), as in
+                             every law in control_laws.py. The clamp is on the
+                             predicted
                              response, trace(H X H^H), not on the drive, and
                              it is applied to the RETURNED command only --
                              the stored solution self.output_cpsd is left
@@ -150,7 +149,7 @@ response_trim_gate_db - how close the solver must have come to its own target
               than as the solver's own business (field 15, default 0.5).
               Deliberately NOT error_threshold_db, which is the scheduler's
               "worth refining" bar and answers a different question -- see
-              the comment in __init__ and what run 35 measured.
+              the comment in __init__ and notes/optimal_diagonal_history.md.
 max_solve_ms_per_update - field 21 (fields 16-20 are optimal_diagonal_control_fast's
               own and are ignored here).  Milliseconds of line solving per
               call; 0 (default) = off, max_bins_per_update alone decides.  > 0:
@@ -161,18 +160,16 @@ max_solve_ms_per_update - field 21 (fields 16-20 are optimal_diagonal_control_fa
               half.  Only line solving counts; the per-call bookkeeping
               (error triage across the band, logging) is a fixed cost on
               top, reported in the log as "other".  Set max_bins_per_update high (e.g. 400) to let time
-              decide.  Empty fields keep their position and mean "default"
-              (since 2026-10-25), so a 500 ms budget with 400 lines and every
-              other field at its default is
+              decide.  Empty fields keep their position and mean "default",
+              so a 500 ms budget with 400 lines and every other field at its
+              default is
               ,,400,,,,,,,,,,,,,,,,,,500
 A bare single value (no comma) is accepted too, read as `reg`.
 
 WHAT KIND OF LOOP THIS IS
 -------------------------
-Two different things can be called "closed loop" here and this law has
-historically been mislabelled on both counts.  Reports before 2026-09-17
-called it a feedback law; the correction made then over-shot and called it
-open loop, which understates it just as badly.  Precisely:
+Two different things can be called "closed loop" here; this law is closed on one
+and open on the other.  Precisely:
 
   CLOSED on the identified plant model.  control() and system_id_update()
   both hand the LIVE transfer function to _refine_batch every cycle.  Bins
@@ -181,9 +178,8 @@ open loop, which understates it just as badly.  Precisely:
   against the CURRENT H are re-solved worst-first (step 3) even when their H
   moved less than the gate.  Step 3 is the one that matters for a plant that
   softens with level: the drift can sit under the gate and still be caught,
-  because the error is always recomputed with the new H.  This is what runs
-  29/31/32 demonstrated -- 17.03 / 18.44 / 16.22 V^2 with the FRF update on,
-  against 153 / 485 / 245 V^2 with it off.
+  because the error is always recomputed with the new H.  (Evidence:
+  notes/optimal_diagonal_history.md#loop-kind.)
 
   OPEN on the response error, unless response_trim_gain is set.  The solve
   minimizes the PREDICTED response diag(H X H^H) against the target.  With
@@ -205,83 +201,40 @@ import time
 import numpy as np
 
 # ---------------------------------------------------------------------------
-# LIVE-FRF SAFETY LIMITS.  Added 2026-09-19 after run 30, where the live H1
-# estimate walked 22,000x away from the system identification (reported by
-# this class's own since_initial diagnostic as median 39834, max 500217) and
-# the law solved against it, commanding 1.8e5 V.  A healthy run sits well
-# under 1: run 28 logged since_initial median 0.1752, max 0.8920 over its
-# whole length.  10.0 therefore has an order of magnitude of headroom over
-# anything ever measured on a working run and still catches run 30 at its
-# 55th call.
+# LIVE-FRF SAFETY LIMIT.  A bin whose live H1 estimate has moved further than this
+# (relative Frobenius norm) from the system identification is rejected and held at
+# its system-ID value; see _reject_diverged_frf.  10 is an order of magnitude above
+# anything a healthy run shows.  History: notes/optimal_diagonal_history.md#frf-safety
 _FRF_DIVERGENCE_LIMIT = 10.0
 
-# DEADLOCK ESCAPE.  Run 30's end state: corrupted H -> near-zero commanded
-# drive (0.0015 V) -> no excitation -> the live FRF stops moving -> nothing
-# exceeds frf_update_threshold -> no bins scheduled -> the law holds a dead
-# solution forever.  70+ consecutive calls with every scheduler field zero
-# and a bit-identical self-prediction.  It cannot recover on its own, because
-# recovering requires excitation the law is no longer commanding.  These
-# thresholds only fire in that absorbing state: 20 dB below the target trace
-# is far outside anything a working run reaches (runs 19-29 all land within
-# +/-3 dB), and 10 consecutive calls rules out a transient.
+# DEADLOCK ESCAPE (see _escape_deadlock_if_starved).  Fires only in the zero-drive
+# absorbing state: the predicted response this many dB below the target trace, with
+# nothing scheduled, for this many consecutive calls -- far outside anything a working
+# run reaches.  History: notes/optimal_diagonal_history.md#deadlock
 _DEADLOCK_ESCAPE_DB = 20.0
 _DEADLOCK_ESCAPE_CALLS = 10
 
-# RESPONSE-ERROR TRIM FREEZE.  components/data_collector.py divides every
-# acquired frame by the CURRENT test level, so everything this law sees --
-# FRF, last_response_cpsd, last_drive_cpsd -- is referred to FULL level and
-# the trim ratio is level-consistent in steady state.  It is NOT consistent
-# across a level change: a frame that spans the ramp is normalized by the
-# wrong number.  Rattlesnake calls set_test_level_db on every change, so the
-# trim sits out this many control cycles afterwards.
-#
-# RAISED FROM 3 TO 25, 2026-09-25, after run 52.  Three was sized for a single
-# level change.  A level RAMP is many changes -- run 52 logged 17 of them
-# getting from 0 dB to -18 dB -- and the freeze expires between steps, so the
-# trim spent the whole ramp acting on transient error.  25 matches the ~25
-# control-cycle time constant of the CPSD exponential average (coefficient
-# 0.04), which is how long a measured frame takes to stop carrying the old
-# level.  Each change re-arms the counter, so a ramp is ONE long freeze and
-# the trim resumes only once the level has actually been still that long.
+# RESPONSE-ERROR TRIM FREEZE.  Everything this law sees is referred to full level
+# (components/data_collector.py divides every frame by the CURRENT test level): level-
+# consistent in steady state, but a frame that spans a level change is normalized by the
+# wrong number.  So the trim sits out this many control cycles after every
+# set_test_level_db.  25 matches the ~25-cycle time constant of the CPSD exponential
+# average (coefficient 0.04), and each change re-arms the counter, so a ramp is ONE long
+# freeze.  History: notes/optimal_diagonal_history.md#trim-freeze
 _TRIM_FREEZE_CALLS = 25
 
-# RESPONSE-ERROR TRIM LEAK.  Per cycle, in-band bins that do NOT act -- gated
-# out by the solver-agreement test, or inside the deadband -- decay toward
-# zero by this much instead of holding.
-#
-# WHY, and this is the defect run 52 exposed.  The gate is evaluated BEFORE
-# the error term, and gated bins previously got step_db = 0, i.e. they kept
-# whatever correction they already carried, permanently.  That blocks harmful
-# accumulation and corrective UNWINDING equally: a bin that picks up a
-# spurious trim while the loop is still converging, and whose solver residual
-# then exceeds the gate, is frozen at that value for the rest of the run.
-# Run 52 ended with the trim spread across the full +/-3 dB clamp, median
-# -1.51 dB, after 261 updates, on a plant whose true model gap at that level
-# is 0.012 dB -- and it cost 30% more drive (11.47 V rms vs 8.84 V) to
-# deliver the same response as trim-off.  Integrator windup behind a
-# conditional gate.
-#
-# A REAL model error re-drives itself every cycle at up to
-# response_trim_step_db, so a leak an order of magnitude smaller is invisible
-# to it in steady state.  A spurious one bleeds off in ~limit/leak cycles
-# (3.0/0.05 = 60).  This makes the trim self-healing rather than dependent on
-# never having made a mistake.
+# RESPONSE-ERROR TRIM LEAK.  Per cycle, in-band bins that do NOT act -- gated out by the
+# solver-agreement test -- decay toward zero by this much instead of holding, so a
+# spurious correction picked up while the loop was converging bleeds off in about
+# limit/leak cycles (3.0/0.05 = 60) instead of being frozen for the rest of the run.  A
+# real model error re-drives itself every cycle at up to response_trim_step_db, so a leak
+# an order of magnitude smaller is invisible to it.  History: notes/optimal_diagonal_history.md#trim-leak
 _TRIM_LEAK_DB = 0.05
 
-# ...but ONLY after this many CONSECUTIVE gate failures on the same bin.
-#
-# Second correction, same session.  Leaking on a single gate failure was also
-# wrong: max_bins_per_update is 20 against 901 in-band bins, so after the trim
-# moves a target it takes ~45 cycles before that bin is re-solved, and until
-# then its cached prediction is stale and the gate fails for a reason that has
-# nothing to do with reachability.  Leaking immediately therefore bled away
-# corrections that were merely WAITING THEIR TURN -- verify_response_trim.py
-# TEST 2 settled at -1.05 dB against a real -2.00 dB bias.
-#
-# 50 cycles is comfortably longer than one full 901/20 = 45-cycle refinement
-# sweep, so a bin that has failed the gate this many times in a row has had at
-# least one chance to be re-solved and still cannot reach its target.  That is
-# the population that wound up in run 52.
+# ...but only after this many CONSECUTIVE gate failures on the same bin: longer than one
+# full refinement sweep (901 in-band lines / 20 per call = 45 cycles), so the bin has had
+# a chance to be re-solved and still cannot reach its target.  Leaking sooner bleeds away
+# corrections that are merely waiting their turn.  History: notes/optimal_diagonal_history.md#trim-leak
 _TRIM_LEAK_AFTER = 50
 
 # Rattlesnake loads a control-law file with importlib.spec_from_file_location,
@@ -388,19 +341,9 @@ def _parse_named(text, valid):
 
 _BASE_PARAMS = [
     Param('reg', 1e-6, float, 0, 'Tikhonov-style weight on ||X||_F'),
-    # 0.5, raised from 0.05 on 2026-09-19 once runs 29 and 31 measured
-    # what this gate actually sees.  0.05 was set against the broken
-    # _h_moved metric, which included out-of-band bins and read median
-    # 4.37; corrected and in-band the per-cycle movement is median 0.196,
-    # 90th 0.232, with a thin tail to 3.5.  At 0.05 essentially every
-    # call demoted the fast law to the SDP (99% on run 28) AND every
-    # previously-refined bin counted as drifted, so half the refinement
-    # budget went to re-solving old bins forever (cum_frf_updates 10 per
-    # call, 5570 and climbing).  0.5 sits at about the 95th percentile of
-    # the measured distribution: 5% demotion, budget freed.
-    #
-    # Changing this default does not alter any archived run: every
-    # profile_01..26 sets field 2 explicitly (verified cell by cell).
+    # 0.5 sits at about the 95th percentile of the measured per-cycle FRF movement: ~5% of
+    # calls demote the fast law to the SDP, and the refinement budget is not spent
+    # re-solving old lines.  Why: notes/optimal_diagonal_history.md#frf-update-threshold
     Param('frf_update_threshold', 0.5, float, 1,
           'relative FRF movement (0-1) that triggers re-solving an already-refined line'),
     Param('max_bins_per_update', 20, _as_int, 2, 'hard cap on line solves per call'),
@@ -411,62 +354,37 @@ _BASE_PARAMS = [
     # (legacy position 5 is bm_rank, read by optimal_diagonal_control_fast)
     Param('startup_test_level_cap_db', -9.0, float, 6,
           'ceiling on the very first command, dB relative to the spec trace (0 = full match)'),
-    # 'linear' is the DEFAULT and reproduces runs 03-06 exactly.  'db' is
-    # the 2026-09-17 objective change -- better pooled rms, but it spreads
-    # error across every channel instead of sacrificing the two the plant
-    # cannot reach, which is not what this rig wants (see the 8th
-    # extra_parameters field).  Opt in with an 8th value of 1.
+    # 'linear' (default) gives up the channels the plant cannot reach; 'db' spreads the
+    # error across every channel instead, which is not what this rig wants.  notes/optimal_diagonal_history.md#defaults
     Param('error_domain', 'linear', _as_error_domain, 7,
           "'linear' (0) or 'db' (1) objective; legacy strings give 0 or 1, the named form also 'linear'/'db'"),
     Param('n_irls_passes', 2, lambda s: max(0, _as_int(s)), 8,
           'reweighting passes of the dB objective'),
     # Drive-subspace restriction for the FACTORED path only -- see
-    # optimal_diagonal_control_fast._solve_one_bin.  Parsed here so one
-    # parameter string serves both classes.
-    #
-    # NOW A MULTIPLE of the plant's own singular-value spread, not an
-    # absolute ratio -- see optimal_diagonal_control_fast.
-    # _effective_drive_rcond.  Runs 22-25 swept the absolute value on the
-    # rig at 0 / 1e-2 / 3e-2 / 5e-2 and 3e-2 was a genuine minimum; this
-    # frame's smallest structural direction is sigma_5/sigma_1 = 0.0152,
-    # so 3e-2 is 2.0x that.  Expressed as a multiple it tracks a
-    # differently conditioned article without re-tuning.  Negative means
-    # an absolute ratio, |value|.
+    # optimal_diagonal_control_fast._solve_one_bin.  Parsed here so one parameter string
+    # serves both classes.  A MULTIPLE of the plant's own singular-value spread, not an
+    # absolute ratio (see optimal_diagonal_control_fast._effective_drive_rcond), so it
+    # tracks a differently conditioned article without re-tuning.  Negative means an
+    # absolute ratio, |value|.  notes/optimal_diagonal_history.md#defaults
     Param('drive_rcond', 2.0, float, 9,
           "fast law: drive directions below this multiple of the plant's singular-value spread are dropped (negative = absolute ratio)"),
-    # RESPONSE-ERROR TRIM -- fields 11-14, OFF by default.  Every
-    # behaviour change in this file ships defaulted off (commit
-    # 45d417a3); this one is no exception, so an archived profile that
-    # names ten fields or fewer reproduces exactly.
+    # RESPONSE-ERROR TRIM -- fields 11-15, OFF by default like every behaviour change in
+    # this file, so a profile that names ten fields or fewer reproduces earlier runs exactly.
     Param('response_trim_gain', 0.0, _non_negative, 10,
           'fraction of the measured response error folded into the target each cycle (0 = trim off)'),
     Param('response_trim_limit_db', 3.0, _magnitude, 11, 'total authority of the trim, +/- dB'),
     Param('response_trim_step_db', 0.5, _magnitude, 12, 'most the trim may move in one cycle, dB'),
     Param('response_trim_deadband_db', 0.5, _magnitude, 13,
           'measured errors smaller than this are left alone, dB'),
-    # The solver-agreement gate has its OWN threshold, and the separation
-    # is not cosmetic.  It first reused error_threshold_db, on the
-    # reasoning that the scheduler's "worth refining" bar and "the solver
-    # reached what it aimed at" were the same question.  Run 35 says they
-    # are not.  Reconstructing this law's own per-bin prediction from
-    # that run's saved FRF and drive and comparing it with the measured
-    # response: model mismatch is 0.060 dB rms across all 7208 in-band
-    # channel-bins, median +0.008 -- the FRF-update loop leaves
-    # essentially nothing for an error trim to correct on this plant.
-    # Yet at a 1.0 dB gate, 43.6% of gated channel-bins sat outside the
-    # 0.5 dB deadband, with error-vs-spec 0.541 dB rms against a model
-    # mismatch of 0.041 dB rms.  Thirteen to one: the trim would have
-    # spent the entire run integrating the SOLVER's own sub-threshold
-    # shortfall -- second-guessing the optimizer that is already trading
-    # these channels against each other -- and calling it model error.
-    # At 0.5 dB only 1.6% of gated channel-bins clear the deadband, so on
-    # a healthy rig the trim stays quiet.  A real bias still wakes it:
-    # the shortfall is predicted-vs-target, computed entirely from H and
-    # X, so a plant that does not match H cannot change it.  The gate
-    # stays open exactly as wide while the error grows.
+    # The solver-agreement gate has its OWN threshold, not error_threshold_db: that one is
+    # the scheduler's "worth refining" bar, which is a different question.  A gate loose
+    # enough to serve as that bar lets the solver's own sub-threshold shortfall through, and
+    # that can be many times larger than the model error the trim exists to correct.  At
+    # 0.5 dB the trim stays quiet on a healthy rig and a real bias still wakes it.
+    # Why: notes/optimal_diagonal_history.md#trim-gate
     Param('response_trim_gate_db', 0.5, _magnitude, 14,
           'how close the solver must have come to its own target before the leftover error counts as model error, dB'),
-    # TIME BUDGET PER CALL (added 2026-10-25), in milliseconds of line
+    # TIME BUDGET PER CALL, in milliseconds of line
     # solving.  0 (default) = off: max_bins_per_update alone sets the
     # work per call, exactly as before.  > 0: the scheduler keeps solving
     # lines, in its usual priority order, until this much solve time has
@@ -602,16 +520,13 @@ class optimal_diagonal_control:
         self._test_level_db = None
         self._H_last_used = None
         self.n_trim_updates = 0
-        # Console throttling -- see _should_log.  Once every bin is solved and
-        # the FRF is frozen, _refine_batch does no work but still ran two print
-        # statements per control cycle, which on run 14 buried the terminal in
-        # hundreds of identical lines and read as a hung process.  (It was not
-        # hung: newly_refined=0, n_deferred=0, cum_sdp_refinements frozen.)
+        # Console throttling -- see _should_log.  Once every bin is solved and the FRF is
+        # frozen, _refine_batch does no work, so repeated identical log lines are suppressed
+        # (two print statements per cycle read as a hung process).
         self._idle_repeats = 0
-        # Live-FRF guard state.  Set here as well as in _initialize so a
-        # harness that reaches _refine_batch without going through
-        # _initialize cannot raise AttributeError -- the same latent bug
-        # the fast subclass hit on 2026-09-17 with n_fast_solves.
+        # Live-FRF guard state.  Set here as well as in _initialize so a harness that
+        # reaches _refine_batch without going through _initialize cannot raise
+        # AttributeError.
         self._frf_rejected = 0
         self._last_frf_rejected = 0
         self._starved_calls = 0
@@ -716,8 +631,7 @@ class optimal_diagonal_control:
         # diagY[m] equal w_m * yhat_m, and y_target_param <- w * y then gives
         # sum_m w_m^2 (yhat_m - y_m)^2 exactly.  A separate weight Parameter
         # multiplying this expression is parameter-times-parameter and cvxpy
-        # rejects it as non-DPP (tried 2026-09-17, "SDP problem is not
-        # DPP-compliant").
+        # rejects it as non-DPP ("SDP problem is not DPP-compliant").
         objective = cp.Minimize(
             cp.sum_squares(diagY - y_target_param) + self.reg * cp.sum_squares(cp.abs(X))
         )
@@ -827,8 +741,8 @@ class optimal_diagonal_control:
               f"H any-nan-in-input={bool(np.any(~np.isfinite(transfer_function)))}", flush=True)
         self.output_cpsd = self._buzz_solve_all(H_clean, sysid_response_cpsd)
         self.H_cache = H_clean.copy()
-        self.H_initial = H_clean.copy()  # diagnostic AND, since 2026-09-19, the
-                                         # fallback the divergence guard reverts to
+        self.H_initial = H_clean.copy()  # diagnostic AND the fallback the divergence
+                                         # guard reverts to
         self._sysid_response_cpsd = (None if sysid_response_cpsd is None
                                      else np.asarray(sysid_response_cpsd).copy())
         self._frf_rejected = 0            # bins currently held at H_initial
@@ -847,11 +761,8 @@ class optimal_diagonal_control:
         Rattlesnake re-publishes an incrementally-averaged FRF every cycle
         when "Update Transfer Function During Control" is on.  That estimate
         is formed from the drive the control law itself commands, so a bad
-        solve feeds a bad estimate which feeds a worse solve.  Run 30 closed
-        that loop: since_initial reached median 39834 and max 500217 -- the
-        live H was four to five orders of magnitude away from the system
-        identification -- and the law dutifully solved against it and asked
-        for 1.8e5 V.
+        solve feeds a bad estimate which feeds a worse solve, and the live H can end
+        up orders of magnitude from the system identification.
 
         Per BIN, not globally, so one wild line cannot condemn the whole
         array and the law keeps controlling on the bins that are still sane.
@@ -874,19 +785,10 @@ class optimal_diagonal_control:
         den = np.linalg.norm(H_init.reshape(n, -1), axis=1)
         live = den > 0
 
-        # IN-BAND ONLY, and this was got wrong the first time.  Run 31 fired
-        # this guard on 986-1161 bins of 2049 on essentially every call while
-        # controlling perfectly well (converged 2.13 V, 17.70 V^2, and the
-        # refined-bin drift never left median 0.07).  2049 - 901 in-band =
-        # 1148 out-of-band bins: no drive energy there, so the live estimate
-        # is noise and its relative change is unbounded.  The guard was
-        # reporting noise.  Harmless -- those bins are not controlled -- but
-        # it buried the log and made the threshold untestable.
-        #
-        # THIRD TIME this same mistake has been made in this file and its
-        # subclass: the singular-value spread in _effective_drive_rcond, the
-        # movement metric in _h_moved, and now this.  Any statistic taken
-        # over the FRF array on this rig must be masked to in-band bins.
+        # In-band only: out of band there is no drive energy, so the live estimate is noise
+        # and its relative change is unbounded.  Any statistic taken over the FRF array must
+        # be masked to in-band bins (as in _effective_drive_rcond and _h_moved).
+        # History: notes/optimal_diagonal_history.md#in-band
         in_band = self.y_diag_target.max(axis=1) > 0
         if in_band.shape[0] == n and in_band.any():
             live &= in_band
@@ -920,12 +822,12 @@ class optimal_diagonal_control:
     def _escape_deadlock_if_starved(self, H_clean, worked):
         """GUARD 2 -- break out of the zero-drive absorbing state.
 
-        The failure this exists for (run 30, calls 109-182): the commanded
+        The failure this exists for: the commanded
         drive collapses to near zero, so the plant is barely excited, so the
         live FRF stops moving, so no bin trips frf_update_threshold, so the
         scheduler has nothing to do, so the law keeps commanding the same
         dead solution.  Every scheduler field zero and a bit-identical
-        self-prediction for seventy consecutive calls.  Nothing in the loop
+        self-prediction for many consecutive calls.  Nothing in the loop
         can restart it, because restarting requires excitation the law is no
         longer asking for.
 
@@ -1295,9 +1197,7 @@ class optimal_diagonal_control:
           does -- shrinking the target shrinks prediction and measurement
           together.  It is a model-mismatch READOUT, not an error: it never
           goes to zero, so an integrator driven by it just runs to its clamp
-          and stops there.  Worked through on paper 2026-09-21 before any of
-          this was written; the clamp happening to sit at the right value is
-          a coincidence, not a design.
+          and stops there.
 
           measured vs SPECIFICATION, 10log10(z/S).  This is the thing the
           test is actually judged on, it is what Rattlesnake's own Response
@@ -1317,13 +1217,11 @@ class optimal_diagonal_control:
         this loop's business; only the part the solver thought it had and
         did not get is model error.
 
-        THE GATE HAS ITS OWN THRESHOLD, not error_threshold_db, and run 35 is
-        why -- see the comment on response_trim_gate_db in __init__.  Briefly:
-        a gate loose enough to serve as the scheduler's "worth refining" bar
-        is loose enough to let the solver's own sub-threshold shortfall
-        through, and on a rig whose model mismatch measures 0.06 dB rms that
-        shortfall is thirteen times larger than the thing this loop exists to
-        correct.
+        THE GATE HAS ITS OWN THRESHOLD, not error_threshold_db -- see the comment on
+        response_trim_gate_db in __init__.  A gate loose enough to serve as the
+        scheduler's "worth refining" bar lets the solver's own sub-threshold shortfall
+        through, and that can be many times larger than the model error this loop
+        exists to correct.
 
         SPEED.  The per-channel correction is realized by the ordinary
         scheduler: a changed target shows up in _err_db against the current
@@ -1339,8 +1237,7 @@ class optimal_diagonal_control:
         cannot walk around max_drive_coherence or drive_rcond.
 
         IN-BAND ONLY.  Out of band there is no drive energy, the measured
-        diagonal is noise, and the ratio is unbounded.  This is the fourth
-        statistic in this file that has had to learn that lesson.
+        diagonal is noise, and the ratio is unbounded.
         """
         if self.response_trim_gain <= 0 or last_response_cpsd is None:
             return
@@ -1397,24 +1294,13 @@ class optimal_diagonal_control:
                           -self.response_trim_step_db, self.response_trim_step_db)
         step_db[~ok] = 0.0
 
-        # LEAK (see _TRIM_LEAK_DB).  ONLY bins that failed the SOLVER-AGREEMENT
-        # GATE decay toward zero.  NOT bins that passed the gate and merely sat
-        # inside the deadband.
-        #
-        # That distinction is the whole fix, and the first version of it was
-        # wrong: leaking deadband bins too made the steady state sit at the
-        # deadband EDGE rather than at zero, because the trim unwound until the
-        # error grew back past 0.5 dB and then re-corrected -- a limit cycle.
-        # verify_response_trim.py TEST 2 caught it: a real -2.00 dB bias
-        # settled at -0.83 dB with 0.83 dB of residual error.
-        #
-        # The justification is simply what each mask means.  A bin inside the
-        # deadband has a TRUSTWORTHY measurement saying the correction is
-        # right, so it holds.  A bin that failed the gate has NO trustworthy
-        # measurement at all -- the solver did not reach its own target, so the
-        # residual cannot be attributed to the model -- and a correction held
-        # there is unjustified by construction.  Those are the bins that wound
-        # up in run 52, and those are the ones that bleed off.
+        # LEAK (see _TRIM_LEAK_DB).  ONLY bins that failed the SOLVER-AGREEMENT GATE decay
+        # toward zero, NOT bins that passed it and merely sat inside the deadband.  A bin
+        # inside the deadband has a TRUSTWORTHY measurement saying its correction is right,
+        # so it holds; a bin that failed the gate has NO trustworthy measurement (the solver
+        # did not reach its own target, so the residual cannot be attributed to the model),
+        # so a correction held there is unjustified.  Leaking the deadband bins too makes
+        # the steady state sit at the deadband edge, a limit cycle.  notes/optimal_diagonal_history.md#trim-leak
         in_band_full = np.broadcast_to(in_band[:, None], spec.shape)
         if self._trim_gate_fail is None or self._trim_gate_fail.shape != spec.shape:
             self._trim_gate_fail = np.zeros(spec.shape, dtype=np.int32)
