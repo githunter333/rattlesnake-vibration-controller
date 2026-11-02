@@ -286,7 +286,236 @@ except ImportError as e:
     ) from e
 
 
+# ---------------------------------------------------------------------------
+# PARAMETERS
+#
+# Every tunable parameter of the law is one Param below: its name (the attribute
+# on the law AND the name in the named syntax), default, how to read it, and its
+# 0-based position in the legacy comma-separated string.  Defaults live here and
+# nowhere else.  Subclasses add their own in OWN_PARAMS; see _read_parameters.
+#
+# Two spellings of the same parameters are accepted, told apart by a colon:
+#   legacy   "1e-6,0.5,20,1.0,0.95"             positional, empty = default
+#   named    "reg: 1e-6\nmax_bins_per_update: 10"  one name: value per line (or
+#                                                  separated by ;), # comments
+# ---------------------------------------------------------------------------
+import difflib
+
+
+def _as_int(s):
+    return int(float(s))
+
+
+def _non_negative(s):
+    return max(0.0, float(s))
+
+
+def _magnitude(s):
+    return abs(float(s))
+
+
+def _as_error_domain(s):
+    word = s.strip().lower()
+    if word in ('linear', 'db'):
+        return word
+    return 'linear' if float(s) == 0 else 'db'
+
+
+class Param:
+    """One tunable parameter: see the PARAMETERS note above.
+
+    legacy     0-based position in the legacy comma string
+    dropblank  legacy only: the position counts NON-EMPTY fields only (the way
+               octave_band_switching_control has always read its own five)
+    """
+    __slots__ = ('name', 'default', 'convert', 'legacy', 'doc', 'dropblank')
+
+    def __init__(self, name, default, convert, legacy, doc, dropblank=False):
+        self.name, self.default, self.convert = name, default, convert
+        self.legacy, self.doc, self.dropblank = legacy, doc, dropblank
+
+
+def _parse_named(text, valid):
+    """{name: raw value string} from the named syntax; ValueError names the line."""
+    items = {}
+    for raw in text.replace(';', '\n').splitlines():
+        line = raw.split('#', 1)[0].strip()
+        if not line:
+            continue
+        if ':' not in line:
+            raise ValueError(f"parameter line {raw.strip()!r} is not of the form 'name: value'")
+        name, value = line.split(':', 1)
+        name, value = name.strip().lower(), value.strip()
+        if name not in valid:
+            hint = difflib.get_close_matches(name, sorted(valid), n=1)
+            raise ValueError(
+                f"unknown parameter {name!r}" + (f" (did you mean {hint[0]!r}?)" if hint else "")
+                + f"; valid names: {', '.join(sorted(valid))}")
+        if name in items:
+            raise ValueError(f"parameter {name!r} is given twice")
+        items[name] = value
+    return items
+
+
+_BASE_PARAMS = [
+    Param('reg', 1e-6, float, 0, 'Tikhonov-style weight on ||X||_F'),
+    # 0.5, raised from 0.05 on 2026-09-19 once runs 29 and 31 measured
+    # what this gate actually sees.  0.05 was set against the broken
+    # _h_moved metric, which included out-of-band bins and read median
+    # 4.37; corrected and in-band the per-cycle movement is median 0.196,
+    # 90th 0.232, with a thin tail to 3.5.  At 0.05 essentially every
+    # call demoted the fast law to the SDP (99% on run 28) AND every
+    # previously-refined bin counted as drifted, so half the refinement
+    # budget went to re-solving old bins forever (cum_frf_updates 10 per
+    # call, 5570 and climbing).  0.5 sits at about the 95th percentile of
+    # the measured distribution: 5% demotion, budget freed.
+    #
+    # Changing this default does not alter any archived run: every
+    # profile_01..26 sets field 2 explicitly (verified cell by cell).
+    Param('frf_update_threshold', 0.5, float, 1,
+          'relative FRF movement (0-1) that triggers re-solving an already-refined line'),
+    Param('max_bins_per_update', 20, _as_int, 2, 'hard cap on line solves per call'),
+    Param('error_threshold_db', 1.0, float, 3,
+          'do not refine a line whose buzz solution is already within this many dB of target'),
+    Param('max_drive_coherence', 0.95, float, 4,
+          'cap (0-1) on pairwise coherence between SDP-solved drives; 1.0 disables it'),
+    # (legacy position 5 is bm_rank, read by optimal_diagonal_control_fast)
+    Param('startup_test_level_cap_db', -9.0, float, 6,
+          'ceiling on the very first command, dB relative to the spec trace (0 = full match)'),
+    # 'linear' is the DEFAULT and reproduces runs 03-06 exactly.  'db' is
+    # the 2026-09-17 objective change -- better pooled rms, but it spreads
+    # error across every channel instead of sacrificing the two the plant
+    # cannot reach, which is not what this rig wants (see the 8th
+    # extra_parameters field).  Opt in with an 8th value of 1.
+    Param('error_domain', 'linear', _as_error_domain, 7,
+          "'linear' (0) or 'db' (1) objective; legacy strings give 0 or 1, the named form also 'linear'/'db'"),
+    Param('n_irls_passes', 2, lambda s: max(0, _as_int(s)), 8,
+          'reweighting passes of the dB objective'),
+    # Drive-subspace restriction for the FACTORED path only -- see
+    # optimal_diagonal_control_fast._solve_one_bin.  Parsed here so one
+    # parameter string serves both classes.
+    #
+    # NOW A MULTIPLE of the plant's own singular-value spread, not an
+    # absolute ratio -- see optimal_diagonal_control_fast.
+    # _effective_drive_rcond.  Runs 22-25 swept the absolute value on the
+    # rig at 0 / 1e-2 / 3e-2 / 5e-2 and 3e-2 was a genuine minimum; this
+    # frame's smallest structural direction is sigma_5/sigma_1 = 0.0152,
+    # so 3e-2 is 2.0x that.  Expressed as a multiple it tracks a
+    # differently conditioned article without re-tuning.  Negative means
+    # an absolute ratio, |value|.
+    Param('drive_rcond', 2.0, float, 9,
+          "fast law: drive directions below this multiple of the plant's singular-value spread are dropped (negative = absolute ratio)"),
+    # RESPONSE-ERROR TRIM -- fields 11-14, OFF by default.  Every
+    # behaviour change in this file ships defaulted off (commit
+    # 45d417a3); this one is no exception, so an archived profile that
+    # names ten fields or fewer reproduces exactly.
+    Param('response_trim_gain', 0.0, _non_negative, 10,
+          'fraction of the measured response error folded into the target each cycle (0 = trim off)'),
+    Param('response_trim_limit_db', 3.0, _magnitude, 11, 'total authority of the trim, +/- dB'),
+    Param('response_trim_step_db', 0.5, _magnitude, 12, 'most the trim may move in one cycle, dB'),
+    Param('response_trim_deadband_db', 0.5, _magnitude, 13,
+          'measured errors smaller than this are left alone, dB'),
+    # The solver-agreement gate has its OWN threshold, and the separation
+    # is not cosmetic.  It first reused error_threshold_db, on the
+    # reasoning that the scheduler's "worth refining" bar and "the solver
+    # reached what it aimed at" were the same question.  Run 35 says they
+    # are not.  Reconstructing this law's own per-bin prediction from
+    # that run's saved FRF and drive and comparing it with the measured
+    # response: model mismatch is 0.060 dB rms across all 7208 in-band
+    # channel-bins, median +0.008 -- the FRF-update loop leaves
+    # essentially nothing for an error trim to correct on this plant.
+    # Yet at a 1.0 dB gate, 43.6% of gated channel-bins sat outside the
+    # 0.5 dB deadband, with error-vs-spec 0.541 dB rms against a model
+    # mismatch of 0.041 dB rms.  Thirteen to one: the trim would have
+    # spent the entire run integrating the SOLVER's own sub-threshold
+    # shortfall -- second-guessing the optimizer that is already trading
+    # these channels against each other -- and calling it model error.
+    # At 0.5 dB only 1.6% of gated channel-bins clear the deadband, so on
+    # a healthy rig the trim stays quiet.  A real bias still wakes it:
+    # the shortfall is predicted-vs-target, computed entirely from H and
+    # X, so a plant that does not match H cannot change it.  The gate
+    # stays open exactly as wide while the error grows.
+    Param('response_trim_gate_db', 0.5, _magnitude, 14,
+          'how close the solver must have come to its own target before the leftover error counts as model error, dB'),
+    # TIME BUDGET PER CALL (added 2026-10-25), in milliseconds of line
+    # solving.  0 (default) = off: max_bins_per_update alone sets the
+    # work per call, exactly as before.  > 0: the scheduler keeps solving
+    # lines, in its usual priority order, until this much solve time has
+    # been spent, still never more than max_bins_per_update lines.  A count
+    # runs very differently depending on which lines come up (worst lines
+    # take longer), on the machine, and -- for the fast subclass -- on
+    # whether this call fell back to the SDP (~9x slower per line on the
+    # rig's FRF).  A time limit holds the cycle either way.  To let time
+    # alone decide, set max_bins_per_update high (e.g. 400).
+    Param('max_solve_ms_per_update', 0.0, _non_negative, 20,
+          'time budget per call in ms of line solving (0 = off; the line cap alone applies)'),
+]
+
+
 class optimal_diagonal_control:
+    OWN_PARAMS = _BASE_PARAMS
+
+    @classmethod
+    def parameter_table(cls):
+        """Every Param this law reads, base class first."""
+        table = []
+        for klass in reversed(cls.__mro__):
+            table.extend(klass.__dict__.get('OWN_PARAMS', ()))
+        return table
+
+    def _parsed_parameter_string(self, extra_parameters):
+        """('legacy', parts) or ('named', {name: raw}) for the string, or None if
+        it is empty.  Done once per law however many classes read from it."""
+        if not extra_parameters:
+            return None
+        text = str(extra_parameters)
+        cached = self.__dict__.get('_param_cache')
+        if cached is not None and cached[0] == text:
+            return cached[1]
+        if ':' in text:
+            valid = {p.name for p in type(self).parameter_table()}
+            parsed = ('named', _parse_named(text, valid))
+        else:
+            parts = [x.strip() for x in text.split(',')]
+            parsed = ('legacy', {'all': parts, 'nonblank': [x for x in parts if x != '']})
+        self._param_cache = (text, parsed)
+        return parsed
+
+    def _read_parameters(self, extra_parameters, own):
+        """Set self.<name> for each Param in `own`: its default, then whatever
+        the string gives.  Each class in the chain calls this for its own
+        OWN_PARAMS at the point in its __init__ where it always parsed them, so
+        what each class sees, and when, is unchanged.
+
+        Named syntax: an unknown name, or a value that cannot be read, raises
+        ValueError (Rattlesnake shows it in an error dialog and the test does not
+        start).  Legacy syntax: a field that cannot be read keeps its default,
+        with a warning, and the fields after it are still read -- the old parser
+        dropped every later field without a word."""
+        for p in own:
+            setattr(self, p.name, p.default)
+        parsed = self._parsed_parameter_string(extra_parameters)
+        if parsed is None:
+            return
+        kind, data = parsed
+        for p in own:
+            if kind == 'named':
+                raw = data.get(p.name, '')
+            else:
+                parts = data['nonblank'] if p.dropblank else data['all']
+                raw = parts[p.legacy] if len(parts) > p.legacy else ''
+            if raw == '':
+                continue
+            try:
+                setattr(self, p.name, p.convert(raw))
+            except ValueError:
+                if kind == 'named':
+                    raise ValueError(
+                        f"{type(self).__name__}: parameter {p.name} cannot be read from {raw!r}"
+                    ) from None
+                print(f"[{type(self).__name__}] WARNING: parameter {p.name} (field {p.legacy}) "
+                      f"cannot be read from {raw!r}; keeping its default {p.default!r}", flush=True)
+
     def __init__(self,
                  specification: np.ndarray,       # Specifications
                  warning_levels: np.ndarray,       # Warning levels
@@ -317,113 +546,9 @@ class optimal_diagonal_control:
         self.y_diag_target = np.nan_to_num(y_diag_target, nan=0.0, posinf=0.0, neginf=0.0)
         self.F, self.M = self.y_diag_target.shape
 
-        self.reg = 1e-6
-        # 0.5, raised from 0.05 on 2026-09-19 once runs 29 and 31 measured
-        # what this gate actually sees.  0.05 was set against the broken
-        # _h_moved metric, which included out-of-band bins and read median
-        # 4.37; corrected and in-band the per-cycle movement is median 0.196,
-        # 90th 0.232, with a thin tail to 3.5.  At 0.05 essentially every
-        # call demoted the fast law to the SDP (99% on run 28) AND every
-        # previously-refined bin counted as drifted, so half the refinement
-        # budget went to re-solving old bins forever (cum_frf_updates 10 per
-        # call, 5570 and climbing).  0.5 sits at about the 95th percentile of
-        # the measured distribution: 5% demotion, budget freed.
-        #
-        # Changing this default does not alter any archived run: every
-        # profile_01..26 sets field 2 explicitly (verified cell by cell).
-        self.frf_update_threshold = 0.5
-        self.max_bins_per_update = 20
-        self.error_threshold_db = 1.0
-        self.max_drive_coherence = 0.95
-        self.startup_test_level_cap_db = -9.0
-        # 'linear' is the DEFAULT and reproduces runs 03-06 exactly.  'db' is
-        # the 2026-09-17 objective change -- better pooled rms, but it spreads
-        # error across every channel instead of sacrificing the two the plant
-        # cannot reach, which is not what this rig wants (see the 8th
-        # extra_parameters field).  Opt in with an 8th value of 1.
-        self.error_domain = 'linear'
-        self.n_irls_passes = 2
-        # Drive-subspace restriction for the FACTORED path only -- see
-        # optimal_diagonal_control_fast._solve_one_bin.  Parsed here so one
-        # parameter string serves both classes.
-        #
-        # NOW A MULTIPLE of the plant's own singular-value spread, not an
-        # absolute ratio -- see optimal_diagonal_control_fast.
-        # _effective_drive_rcond.  Runs 22-25 swept the absolute value on the
-        # rig at 0 / 1e-2 / 3e-2 / 5e-2 and 3e-2 was a genuine minimum; this
-        # frame's smallest structural direction is sigma_5/sigma_1 = 0.0152,
-        # so 3e-2 is 2.0x that.  Expressed as a multiple it tracks a
-        # differently conditioned article without re-tuning.  Negative means
-        # an absolute ratio, |value|.
-        self.drive_rcond = 2.0
-        # TIME BUDGET PER CALL (field 21, added 2026-10-25), in milliseconds of
-        # line solving.  0 (default) = off: max_bins_per_update alone sets the
-        # work per call, exactly as before.  > 0: the scheduler keeps solving
-        # lines, in its usual priority order, until this much solve time has
-        # been spent, still never more than max_bins_per_update lines.  A count
-        # runs very differently depending on which lines come up (worst lines
-        # take longer), on the machine, and -- for the fast subclass -- on
-        # whether this call fell back to the SDP (~9x slower per line on the
-        # rig's FRF).  A time limit holds the cycle either way.  To let time
-        # alone decide, set max_bins_per_update high (e.g. 400).
-        self.max_solve_ms_per_update = 0.0
-        # RESPONSE-ERROR TRIM -- fields 11-14, OFF by default.  Every
-        # behaviour change in this file ships defaulted off (commit
-        # 45d417a3); this one is no exception, so an archived profile that
-        # names ten fields or fewer reproduces exactly.
-        self.response_trim_gain = 0.0
-        self.response_trim_limit_db = 3.0
-        self.response_trim_step_db = 0.5
-        self.response_trim_deadband_db = 0.5
-        # The solver-agreement gate has its OWN threshold, and the separation
-        # is not cosmetic.  It first reused error_threshold_db, on the
-        # reasoning that the scheduler's "worth refining" bar and "the solver
-        # reached what it aimed at" were the same question.  Run 35 says they
-        # are not.  Reconstructing this law's own per-bin prediction from
-        # that run's saved FRF and drive and comparing it with the measured
-        # response: model mismatch is 0.060 dB rms across all 7208 in-band
-        # channel-bins, median +0.008 -- the FRF-update loop leaves
-        # essentially nothing for an error trim to correct on this plant.
-        # Yet at a 1.0 dB gate, 43.6% of gated channel-bins sat outside the
-        # 0.5 dB deadband, with error-vs-spec 0.541 dB rms against a model
-        # mismatch of 0.041 dB rms.  Thirteen to one: the trim would have
-        # spent the entire run integrating the SOLVER's own sub-threshold
-        # shortfall -- second-guessing the optimizer that is already trading
-        # these channels against each other -- and calling it model error.
-        # At 0.5 dB only 1.6% of gated channel-bins clear the deadband, so on
-        # a healthy rig the trim stays quiet.  A real bias still wakes it:
-        # the shortfall is predicted-vs-target, computed entirely from H and
-        # X, so a plant that does not match H cannot change it.  The gate
-        # stays open exactly as wide while the error grows.
-        self.response_trim_gate_db = 0.5
-        if extra_parameters:
-            try:
-                # EMPTY FIELDS KEEP THEIR POSITION (2026-10-25): an empty field means
-                # "use the default".  The parser used to DROP empty fields, so
-                # ',,200' set reg = 200 instead of max_bins_per_update.  Strings
-                # with no empty fields parse exactly as before.
-                parts = [p.strip() for p in str(extra_parameters).split(',')]
-                has = lambda i: len(parts) > i and parts[i] != ''
-                if has(0): self.reg = float(parts[0])
-                if has(1): self.frf_update_threshold = float(parts[1])
-                if has(2): self.max_bins_per_update = int(float(parts[2]))
-                if has(3): self.error_threshold_db = float(parts[3])
-                if has(4): self.max_drive_coherence = float(parts[4])
-                # parts[5] is bm_rank, read by optimal_diagonal_control_fast
-                if has(6): self.startup_test_level_cap_db = float(parts[6])
-                if has(7): self.error_domain = (
-                    'linear' if float(parts[7]) == 0 else 'db')
-                if has(8): self.n_irls_passes = max(0, int(float(parts[8])))
-                if has(9): self.drive_rcond = float(parts[9])
-                if has(10): self.response_trim_gain = max(0.0, float(parts[10]))
-                if has(11): self.response_trim_limit_db = abs(float(parts[11]))
-                if has(12): self.response_trim_step_db = abs(float(parts[12]))
-                if has(13): self.response_trim_deadband_db = abs(float(parts[13]))
-                if has(14): self.response_trim_gate_db = abs(float(parts[14]))
-                # fields 16-20 belong to optimal_diagonal_control_fast
-                if has(20): self.max_solve_ms_per_update = max(0.0, float(parts[20]))
-            except ValueError:
-                pass  # keep defaults if the string doesn't parse
+        # Every tunable parameter -- default, type, legacy position, named-form name --
+        # is in _BASE_PARAMS above.
+        self._read_parameters(extra_parameters, optimal_diagonal_control.OWN_PARAMS)
 
         self.output_cpsd = None    # (F, N, N) current best drive CPSD per bin
         # Response-error trim state.  y_trim stays None while the trim is
