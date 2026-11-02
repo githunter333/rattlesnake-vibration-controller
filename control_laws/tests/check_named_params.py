@@ -174,6 +174,24 @@ def _():
     assert law.frequency_spacing == 5.0
 
 
+@check('the examples in the docstrings and the reference parse')
+def _():
+    law, _ = build('SDP', 'max_bins_per_update: 10\nmax_drive_coherence: 0.8\nresponse_trim_gain: 1.0      # trim on')
+    assert (law.max_bins_per_update, law.max_drive_coherence, law.response_trim_gain) == (10, 0.8, 1.0)
+    law, _ = build('octave', 'frequency_spacing: 5           # Hz per FFT line\nswitch_level_db: 0\n'
+                             'octave_fraction: 6\noctave_fmin: 100\noctave_fmax: 1000')
+    assert (law.frequency_spacing, law.octave_fmin, law.octave_fmax) == (5.0, 100.0, 1000.0)
+    law, _ = build('SDP', '1e-6,0.5,20,1.0,0.95,6,-9.0,1,2,1e-2')                  # the legacy example
+    assert law.error_domain == 'db' and law.drive_rcond == 1e-2
+
+
+@check('optimal_diagonal_parameters.md is generated from the tables and up to date')
+def _():
+    import make_parameter_reference as ref
+    assert os.path.exists(ref.OUT), 'file missing; run make_parameter_reference.py'
+    assert open(ref.OUT).read() == ref.generate(), 'out of date; run make_parameter_reference.py'
+
+
 @check('the tables: unique names, unique legacy positions, every name is an attribute')
 def _():
     for key, n in (('SDP', 15), ('fast', 25), ('octave', 20)):

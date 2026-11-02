@@ -71,11 +71,40 @@ optimization. H can be any M x N shape.
 Interface: class-style control law (matches buzz_control_class in
 control_laws.py).
 
-extra_parameters (string): comma-separated
+PARAMETERS (extra_parameters), in two forms
+-------------------------------------------
+NAMED (use this).  One "name: value" per line, or separated by ";".  Names are
+case-insensitive, "#" starts a comment, an empty value means "the default":
+
+    max_bins_per_update: 10
+    max_drive_coherence: 0.8
+    response_trim_gain: 1.0      # trim on
+
+A name this law does not have, or a value it cannot read, stops the test from
+starting, with a message that says which line and the nearest valid name
+(Rattlesnake shows it in an error dialog).  The named form is the same for
+optimal_diagonal_control_fast and octave_band_switching_control, each of which
+adds its own names.
+
+COMMA-SEPARATED (the original form, still accepted, and what every archived
+profile uses).  Positional; an empty field means "the default"; a field that
+cannot be read keeps its default with a warning, and the later fields are still
+read.  Field numbers in this file and in the other two laws' docstrings are
+1-based positions in this form.
+
+THE COMPLETE LIST -- name, field number, default, meaning -- is generated from
+the laws' own tables, so it cannot drift from the code:
+    control_laws/optimal_diagonal_parameters.md
+    optimal_diagonal_control.parameter_reference()   (also on the fast and octave classes)
+The notes below add what a table cannot: why a default is what it is, and the
+caveats.  Where they disagree with the table, the table is right.
+
+Notes on the parameters (comma-separated form, 1-based):
     "reg,frf_update_threshold,max_bins_per_update,error_threshold_db,max_drive_coherence"
     reg                   - Tikhonov-style weight on ||X||_F (default 1e-6)
     frf_update_threshold  - relative Frobenius-norm change (0-1) that triggers
-                             re-solving an already-refined bin (default 0.05)
+                             re-solving an already-refined bin (default 0.5 since
+                             2026-09-19, earlier 0.05)
     max_bins_per_update   - hard cap on SDP solves per call, split between
                              drifted-refined bins (priority) and worst-error
                              not-yet-refined bins (default 20)
@@ -462,6 +491,17 @@ class optimal_diagonal_control:
         for klass in reversed(cls.__mro__):
             table.extend(klass.__dict__.get('OWN_PARAMS', ()))
         return table
+
+    @classmethod
+    def parameter_reference(cls, own_only=False):
+        """The parameters of this law as a markdown table: name, field number in
+        the comma-separated form (1-based), default, meaning.  own_only: just the
+        ones this class adds to its parent's."""
+        lines = ['| name | field | default | meaning |', '| --- | --- | --- | --- |']
+        for p in (cls.OWN_PARAMS if own_only else cls.parameter_table()):
+            field = f'{p.legacy + 1}' + ('*' if p.dropblank else '')
+            lines.append(f'| `{p.name}` | {field} | `{p.default!r}` | {p.doc} |')
+        return '\n'.join(lines)
 
     def _parsed_parameter_string(self, extra_parameters):
         """('legacy', parts) or ('named', {name: raw}) for the string, or None if

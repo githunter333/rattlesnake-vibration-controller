@@ -59,19 +59,16 @@ switch_test_level_db can also be exercised manually/for testing by calling
 set_test_level_db() directly, e.g. from a wrapping script, notebook, or a
 different control law variant that IS given a level source.
 
-extra_parameters (string): comma-separated, the same 5 values as
-optimal_diagonal_control, PLUS 5 more, ALL required if any of the extra
-5 are used (matches optimal_diagonal_control_fast's convention -- and
-inherits the base class's parsing, which drops blank comma fields rather
-than preserving their position, so no positions can be skipped):
+PARAMETERS.  Use the NAMED form (one "name: value" per line, or separated by
+";"; see optimal_diagonal_control).  Every parameter of optimal_diagonal_control
+is accepted, plus this law's own five:
 
-    "reg,frf_update_threshold,max_bins_per_update,error_threshold_db,
-     max_drive_coherence,frequency_spacing,switch_level_db,
-     octave_fraction,fmin,fmax"
+    frequency_spacing: 5           # Hz per FFT line
+    switch_level_db: 0
+    octave_fraction: 6
+    octave_fmin: 100
+    octave_fmax: 1000
 
-    reg, frf_update_threshold, max_bins_per_update, error_threshold_db,
-    max_drive_coherence  - identical to optimal_diagonal_control (see that
-                            file's docstring for defaults/meaning)
     frequency_spacing    - Hz per FFT line (sample_rate / samples_per_frame
                             for this environment). REQUIRED for octave mode
                             to ever engage -- the control law is not given
@@ -85,9 +82,23 @@ than preserving their position, so no positions can be skipped):
                              mode engages. Default 0.0.
     octave_fraction       - fractional-octave denominator, e.g. 6 for
                              1/6 octave, 3 for 1/3 octave. Default 6.
-    fmin, fmax            - Hz range to band. Default: auto, spanning the
+    octave_fmin, octave_fmax
+                          - Hz range to band. Default: auto, spanning the
                              lowest through highest frequency line with a
                              nonzero diagonal specification target.
+
+COMMA-SEPARATED form: still accepted, but do not use it for this law.  Its five
+parameters were always read from fields 6-10 counting only the NON-EMPTY fields,
+and those are the same positions optimal_diagonal_control reads as bm_rank,
+startup_test_level_cap_db, error_domain, n_irls_passes and drive_rcond, so a
+string with six or more fields set BOTH.  "...,5,0,6,100,1000" meant
+frequency_spacing 5, switch_level_db 0, octave_fraction 6, fmin 100, fmax 1000
+AND error_domain 'db' with 100 reweighting passes and drive_rcond 1000 (the dB
+objective with 100 passes made the law about sixty times slower on the 6x8 test
+plant).  It still behaves that way, so that
+archived strings give the results they always did, and prints a warning.  The
+named form has no such overlap.  The complete list of names, field numbers and
+defaults: control_laws/optimal_diagonal_parameters.md.
 """
 
 import os

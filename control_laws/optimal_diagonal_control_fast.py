@@ -85,6 +85,13 @@ fast in the configuration it was least needed in, and any comparison of
 itself. A relative-change threshold fixes that; frf_update_threshold = 0
 restores the old any-change behaviour.
 
+PARAMETERS: the named form ("name: value" per line, see optimal_diagonal_control)
+takes every parameter of both laws, this one's included (bm_rank, the svd_*
+group, cap_baseline, db_coherence_guard, warm_start, gate_reference).  The
+complete list, with field numbers and defaults, is generated from the tables:
+control_laws/optimal_diagonal_parameters.md.  The notes below are for the
+comma-separated form (1-based field numbers):
+
 extra_parameters: same values as optimal_diagonal_control -- the 6th is
 this subclass's own, the 7th is parsed by the base class, so ONE string
 works for both laws:
