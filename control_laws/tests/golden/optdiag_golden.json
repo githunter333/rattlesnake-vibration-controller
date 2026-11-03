@@ -1,5 +1,5 @@
 {
- "recorded": "2026-11-02 14:42:25",
+ "recorded": "2026-11-02 18:56:03",
  "environment": {
   "python": "3.11.14",
   "numpy": "2.4.6",
@@ -9,9 +9,9 @@
   "system": "Darwin"
  },
  "law_sources": {
-  "optimal_diagonal_control.py": "5bb2efd7a5a31cdf",
-  "optimal_diagonal_control_fast.py": "a5126543fdb965bd",
-  "octave_band_switching_control.py": "a5eb886b3057062c"
+  "optimal_diagonal_control.py": "721f22dd517f9907",
+  "optimal_diagonal_control_fast.py": "73f7389e6250e34f",
+  "octave_band_switching_control.py": "48d3e402374e1e4f"
  },
  "seed": 1,
  "n_frames": 20,
@@ -27,6 +27,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -75,6 +80,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -123,6 +133,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -171,6 +186,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -219,6 +239,11 @@
     "frf_drift": 0.05,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -267,6 +292,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -317,6 +347,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -367,6 +402,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -417,6 +457,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -467,6 +512,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -517,6 +567,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -567,6 +622,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -617,6 +677,11 @@
     "frf_drift": 0.05,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -667,6 +732,11 @@
     "frf_drift": 0.03,
     "frf_walk": true,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -717,6 +787,11 @@
     "frf_drift": 0.03,
     "frf_walk": true,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -767,6 +842,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -817,6 +897,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": [
      "legacy_collision"
     ]
@@ -860,6 +945,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": "sdp_db_irls_cap",
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -908,6 +998,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": "sdp_trim_on",
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -956,6 +1051,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": "sdp_time_budget_one_line",
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -1004,6 +1104,11 @@
     "frf_drift": 0.05,
     "frf_walk": false,
     "same_as": "sdp_frf_drift",
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -1052,6 +1157,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": "fast_rank_svd_rcond",
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -1102,6 +1212,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": "fast_db_guard_flags",
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -1152,6 +1267,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": "fast_cap_baseline",
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -1202,6 +1322,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": "fast_warm_start_off",
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -1252,6 +1377,11 @@
     "frf_drift": 0.03,
     "frf_walk": true,
     "same_as": "fast_frf_walk_gate_ref0",
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -1302,6 +1432,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -1329,6 +1464,920 @@
     "refined_lines": 0
    }
   },
+  "sdp_stale_retriage": {
+   "definition": {
+    "name": "sdp_stale_retriage",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": ",,400",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.03,
+    "frf_walk": true,
+    "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
+    "tags": []
+   },
+   "hashes": [
+    "827ba2af5a26a04b9ba5ec93",
+    "9bd2f09f83b32479c77998a1",
+    "be6033050cc11d3cb5dc8a40",
+    "2fc1aaf7f06c765ff11095f1",
+    "4ac659ae532b419518568f25",
+    "7ef930bb2a50a531cbd76714",
+    "f76c43c8722c0ddcd605cff2"
+   ],
+   "err_rms": [
+    11.504537815750504,
+    5.726425855279651,
+    5.752216412604514,
+    5.7697032566568565,
+    5.787478923306573,
+    5.8421316710508995,
+    5.831627264670037
+   ],
+   "drive_db": [
+    -21.213152425108493,
+    -12.312414853768889,
+    -11.857847257119925,
+    -11.581394511746833,
+    -11.561357992304478,
+    -11.158934643204653,
+    -11.133979217119492
+   ],
+   "counters": {
+    "n_sdp_refinements": 181,
+    "n_stale_refinements": 143,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 181
+   }
+  },
+  "sdp_drift_time_limited": {
+   "definition": {
+    "name": "sdp_drift_time_limited",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": ",0.02,15,,,,,,,,,,,,,,,,,,0.001",
+    "n_cycles": 8,
+    "level_db": null,
+    "frf_drift": 0.05,
+    "frf_walk": false,
+    "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
+    "tags": []
+   },
+   "hashes": [
+    "60408e35c30e019e71b0dabe",
+    "1e8fcee094b96e84b344fd66",
+    "ab9e75436ed2c9b37f47ac19",
+    "c415cce59cbea2b578bbd87f",
+    "2f150bb45dafb91ac6a3a91d",
+    "1e46280fe4b0a930c9a61c5d",
+    "55382bf074e6b142f61954e5",
+    "4fa164b473db555215aca129",
+    "96b7ea6d3e41276d40ae4b6e"
+   ],
+   "err_rms": [
+    11.757099180128554,
+    5.802482050016916,
+    5.806651718941986,
+    5.797374975842434,
+    5.802942969062051,
+    5.798673644989106,
+    5.799956957858135,
+    5.806898079451203,
+    5.809632689164328
+   ],
+   "drive_db": [
+    -3.8495087167294857,
+    4.735981873848952,
+    4.735902219002566,
+    4.735879034545559,
+    4.735949359429305,
+    4.736043993805079,
+    4.73580844806562,
+    4.735896537952977,
+    4.735902437107961
+   ],
+   "counters": {
+    "n_sdp_refinements": 2,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 8,
+    "n_trim_updates": 0,
+    "refined_lines": 2
+   }
+  },
+  "sdp_idle_after_full_coverage": {
+   "definition": {
+    "name": "sdp_idle_after_full_coverage",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": ",,400",
+    "n_cycles": 8,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
+    "tags": []
+   },
+   "hashes": [
+    "827ba2af5a26a04b9ba5ec93",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26"
+   ],
+   "err_rms": [
+    11.504537815750504,
+    5.719729976796903,
+    5.719729976796903,
+    5.719729976796903,
+    5.719729976796903,
+    5.719729976796903,
+    5.719729976796903,
+    5.719729976796903,
+    5.719729976796903
+   ],
+   "drive_db": [
+    -21.213152425108493,
+    -12.711025860682685,
+    -12.711025860682685,
+    -12.711025860682685,
+    -12.711025860682685,
+    -12.711025860682685,
+    -12.711025860682685,
+    -12.711025860682685,
+    -12.711025860682685
+   ],
+   "counters": {
+    "n_sdp_refinements": 181,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 181
+   }
+  },
+  "sdp_frf_runaway_and_recovery": {
+   "definition": {
+    "name": "sdp_frf_runaway_and_recovery",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": ",,400",
+    "n_cycles": 9,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": null,
+    "level_changes": {},
+    "frf_jump": [
+     3,
+     6,
+     100.0
+    ],
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
+    "tags": []
+   },
+   "hashes": [
+    "827ba2af5a26a04b9ba5ec93",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26"
+   ],
+   "err_rms": [
+    11.504537815750504,
+    5.719729976796903,
+    5.719729976796903,
+    5.719729976796903,
+    5.719729976796903,
+    5.719729976796903,
+    5.719729976796903,
+    5.719729976796903,
+    5.719729976796903,
+    5.719729976796903
+   ],
+   "drive_db": [
+    -21.213152425108493,
+    -12.711025860682685,
+    -12.711025860682685,
+    -12.711025860682685,
+    -12.711025860682685,
+    -12.711025860682685,
+    -12.711025860682685,
+    -12.711025860682685,
+    -12.711025860682685,
+    -12.711025860682685
+   ],
+   "counters": {
+    "n_sdp_refinements": 181,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 181
+   }
+  },
+  "sdp_deadlock_escape": {
+   "definition": {
+    "name": "sdp_deadlock_escape",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": ",,400",
+    "n_cycles": 16,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {
+     "3": "starve"
+    },
+    "sysid_calls": 1,
+    "frf_at_construction": false,
+    "tags": []
+   },
+   "hashes": [
+    "827ba2af5a26a04b9ba5ec93",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26",
+    "0dece46159fd384e06e61f26",
+    "5269f54272f6cef308e5afdb",
+    "5269f54272f6cef308e5afdb",
+    "5269f54272f6cef308e5afdb",
+    "5269f54272f6cef308e5afdb",
+    "5269f54272f6cef308e5afdb",
+    "5269f54272f6cef308e5afdb",
+    "5269f54272f6cef308e5afdb",
+    "5269f54272f6cef308e5afdb",
+    "5269f54272f6cef308e5afdb",
+    "8a9b464934edf3d6db8e27f8",
+    "526b86dbbc93b2997a5bfc14",
+    "526b86dbbc93b2997a5bfc14",
+    "526b86dbbc93b2997a5bfc14"
+   ],
+   "err_rms": [
+    11.504537815750504,
+    5.719729976796903,
+    5.719729976796903,
+    5.719729976796903,
+    42.26844075175595,
+    42.26844075175595,
+    42.26844075175595,
+    42.26844075175595,
+    42.26844075175595,
+    42.26844075175595,
+    42.26844075175595,
+    42.26844075175595,
+    42.26844075175595,
+    5.783957313870939,
+    5.719729976796914,
+    5.719729976796914,
+    5.719729976796914
+   ],
+   "drive_db": [
+    -21.213152425108493,
+    -12.711025860682685,
+    -12.711025860682685,
+    -12.711025860682685,
+    -52.71102586068268,
+    -52.71102586068268,
+    -52.71102586068268,
+    -52.71102586068268,
+    -52.71102586068268,
+    -52.71102586068268,
+    -52.71102586068268,
+    -52.71102586068268,
+    -52.71102586068268,
+    4.7356945766438105,
+    -12.711025860681326,
+    -12.711025860681326,
+    -12.711025860681326
+   ],
+   "counters": {
+    "n_sdp_refinements": 362,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 181
+   }
+  },
+  "sdp_trim_level_changes": {
+   "definition": {
+    "name": "sdp_trim_level_changes",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": ",,,,,,,,,,1.0,0.5,0.4,0.3,0.4",
+    "n_cycles": 10,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": null,
+    "level_changes": {
+     "2": -3.0,
+     "3": -6.0,
+     "7": 0.0
+    },
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
+    "tags": []
+   },
+   "hashes": [
+    "dbb6e1f934e1b8672494ba71",
+    "bf6d0917307d9b4620a47fa1",
+    "36cdf986cd0162d12adc4c2d",
+    "8b91e0265df2d2a95da14bfe",
+    "4dd9a63dd7654c2da86b6fbf",
+    "beab245c02588ebad0fb48d5",
+    "795f9b57cc89d5717b313ecc",
+    "d42c06c91e36fe6d50629ee1",
+    "f3a7600e92c3f8175011bbed",
+    "f3a7600e92c3f8175011bbed",
+    "f3a7600e92c3f8175011bbed"
+   ],
+   "err_rms": [
+    11.81029012633049,
+    5.955308147802865,
+    5.869473867269499,
+    5.812344174569054,
+    5.778192183109118,
+    5.748782503815602,
+    5.73410554301927,
+    5.7200941187229,
+    5.719924362675928,
+    5.719924362675928,
+    5.719924362675928
+   ],
+   "drive_db": [
+    -3.84933668125784,
+    4.735816810413153,
+    4.821229430893259,
+    4.210904263033285,
+    3.582299957356288,
+    2.209253606533605,
+    -1.944069450602825,
+    -11.810770473308743,
+    -12.664563329796202,
+    -12.664563329796202,
+    -12.664563329796202
+   ],
+   "counters": {
+    "n_sdp_refinements": 181,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 2,
+    "refined_lines": 181
+   }
+  },
+  "fast_trim_long_run": {
+   "definition": {
+    "name": "fast_trim_long_run",
+    "plant": "6x8",
+    "law": "fast",
+    "params": ",,,,,,,,,,1.0,0.5,0.4,0.3,0.4",
+    "n_cycles": 60,
+    "level_db": null,
+    "frf_drift": 0.03,
+    "frf_walk": true,
+    "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
+    "tags": []
+   },
+   "hashes": [
+    "519d4a86df94ef057bd6ffe6",
+    "2d00d96774093d0c79b906a8",
+    "65ecaa7d7def151c80fe6233",
+    "0d876537f3abc7e9f56dd09d",
+    "a90f48fd820dc02bb7644da4",
+    "1943815dc96af29145e221a5",
+    "4b1ffd67c8a16e36985db0c3",
+    "7889e74d7117ad34e254cd50",
+    "e0094121ceb8c616d78fe44f",
+    "11161f96403d2ca02381fe64",
+    "3daf4815d629df99ff95e750",
+    "23bed585a91878417c121a4d",
+    "5edf9a59b4c4908eee7a187f",
+    "2fd3d9fcbc3cc9b87bacd8de",
+    "f0242ef7b7edf9e0661abb86",
+    "2b4430680f5ba124a0cd8991",
+    "4d8d23f9490fc29acc692fdc",
+    "da3a198ea92a58bb34c16e94",
+    "92e137820b00c9704e49acac",
+    "644c60c20c897383101cfcaf",
+    "2bb998e3695d500df2111eaa",
+    "27620cca43d2bc18d613a5b8",
+    "05e48dc1205b176e54c64175",
+    "2bfbdae9f2942326ef9203c8",
+    "e3f2252bd499efbd310d2ae0",
+    "c3c4b812ca046b88aa0e9703",
+    "c967f4143edf08c65e4dd143",
+    "621c39ce3a59baeea501f88f",
+    "8de923ec1223281b9b348dc5",
+    "b4623a20eed9b871f492f606",
+    "3c8427756d6914c39079e12a",
+    "513b683e62bc8d17207b38dc",
+    "b4d6b1f78cf233a9c65af923",
+    "f34de5e985c74e73688e2a89",
+    "f87bf08d15c26db67a31119b",
+    "2ea10f88ca04dffbed86eff5",
+    "4dd3c79918fb85f95a5af204",
+    "aba643697071f8abddb53184",
+    "22436848d03754c7b350354f",
+    "9e8b46a71029749ecb1b79ea",
+    "141a3a9291f5f317a3db5c45",
+    "181c788cebe282fb17ae3796",
+    "be92ea6da3db04cbe59389f0",
+    "725ab90b157cc56d39c612ff",
+    "bec293197af8280cfa60cf13",
+    "de720cfaa3c1c14301cebcd5",
+    "e36293b0b7dd2cc2e4cd6a28",
+    "a3ee98d3f429fbb9c723ecbe",
+    "9b43fe24e1908aeb0303adce",
+    "fa0f1ba37d798d88abdd993b",
+    "a448dd97f9e011af5f88af51",
+    "7fce79dbae0252d3a512bfb8",
+    "8f3997be552cf659330d629c",
+    "75734fb48dae1d69400e623d",
+    "2f29b9751c7aeed97256fcbd",
+    "1cf1c45c6bc070644bf1cea9",
+    "1ce2df0886c0bf18e1afc12f",
+    "ab0923e9cb54e00623fa93b6",
+    "afc6f3c45b05a4c419c98bec",
+    "eb84e62e9a8c8312b0f8b9d4",
+    "3c94fecb55e2d48c55416737"
+   ],
+   "err_rms": [
+    12.000661170269685,
+    6.262912666690443,
+    6.211952088564827,
+    6.189311759501849,
+    6.18084091792915,
+    6.153575579455276,
+    6.168480140288089,
+    6.161831703232536,
+    6.167811584438611,
+    6.178538181502638,
+    6.164072062137686,
+    6.166116893685391,
+    6.166054484337655,
+    6.188113719067833,
+    6.172171034918857,
+    6.19341131182417,
+    6.190529174063056,
+    6.216672523153092,
+    6.240365746838653,
+    6.232508080559872,
+    6.235615254115349,
+    6.245516365939971,
+    6.268566282340277,
+    6.265536068973304,
+    6.30987149964627,
+    6.313016609172047,
+    6.299962612916074,
+    6.289801807670197,
+    6.278528827131295,
+    6.287113122434136,
+    6.3120182591406575,
+    6.326856479998617,
+    6.329374746906741,
+    6.323180772465319,
+    6.322443703962272,
+    6.368399167351781,
+    6.350296786234036,
+    6.367856558998376,
+    6.331216016504727,
+    6.3288557303013375,
+    6.337720132557222,
+    6.3473467210206165,
+    6.342410862072136,
+    6.353829407471469,
+    6.350456324713328,
+    6.336911253170253,
+    6.336784126156498,
+    6.346166484845344,
+    6.36421877220926,
+    6.363434120880893,
+    6.373483722137937,
+    6.368486942898605,
+    6.360341242493393,
+    6.363562548415186,
+    6.386031841034382,
+    6.395933832031567,
+    6.395309322903267,
+    6.39758696114436,
+    6.409040351337676,
+    6.41029291143581,
+    6.42065754484107
+   ],
+   "drive_db": [
+    -3.843135876033596,
+    -0.7921159788759766,
+    -4.2570061992533645,
+    -4.2604593768993535,
+    -6.877339364221714,
+    -10.990782972428807,
+    -12.064087630255605,
+    -12.46883925161556,
+    -13.187956192795188,
+    -13.298896338182054,
+    -13.430960881365774,
+    -13.451142685008914,
+    -13.52432508470269,
+    -13.519866181650569,
+    -13.563176369342544,
+    -13.606584729065844,
+    -13.572659214556113,
+    -13.789308754381238,
+    -14.053638829752721,
+    -14.150152774296707,
+    -14.175355952919686,
+    -14.204905004654227,
+    -14.280210433414531,
+    -14.335457601518726,
+    -14.514978090778609,
+    -14.704012922403551,
+    -14.697607280639113,
+    -14.677947553311947,
+    -14.709626099735726,
+    -14.72699802270402,
+    -14.784741075143495,
+    -14.834125871815525,
+    -14.84386543130086,
+    -14.908164994324956,
+    -15.038978087297558,
+    -15.076173890800302,
+    -15.074464117053347,
+    -14.955352959616143,
+    -14.95304996032598,
+    -14.979255216957824,
+    -15.093233394759508,
+    -15.102498802144579,
+    -15.131445632302212,
+    -15.139080142467643,
+    -15.254912960854623,
+    -15.182141146078651,
+    -14.97695117523913,
+    -14.997442073088223,
+    -15.011408096027825,
+    -14.984296891794973,
+    -14.996432139838728,
+    -15.019073986247422,
+    -14.995462308348,
+    -14.950885416191698,
+    -14.998408534644108,
+    -15.07153270978463,
+    -15.060037957534822,
+    -15.110922109765108,
+    -15.11862644049934,
+    -15.174544581179594,
+    -15.166717076048247
+   ],
+   "counters": {
+    "n_sdp_refinements": 181,
+    "n_stale_refinements": 542,
+    "n_fast_solves": 723,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 59,
+    "refined_lines": 181
+   }
+  },
+  "sdp_control_before_sysid": {
+   "definition": {
+    "name": "sdp_control_before_sysid",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": "",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 0,
+    "frf_at_construction": false,
+    "tags": []
+   },
+   "hashes": [
+    "a026e3c633510fc0f96b1ed6",
+    "5ce32eb20ce01181c5d5db14",
+    "617002294d7d751b108bf064",
+    "b9bff2cd6fbea47438eaced9",
+    "39497a13fac39b060d06a7a4",
+    "7f861b34def95c6bbc7abd7b",
+    "e4f34610be221c8e3550157b"
+   ],
+   "err_rms": [
+    12.333121158860129,
+    6.7787808507431695,
+    6.517517989344238,
+    6.277861781855672,
+    6.097799030794783,
+    5.937020883889294,
+    5.8223429812289185
+   ],
+   "drive_db": [
+    10.357075107325542,
+    17.315375134288008,
+    17.315104069499093,
+    17.315012378381667,
+    17.31486906595339,
+    17.314400136246807,
+    17.023977749267857
+   ],
+   "counters": {
+    "n_sdp_refinements": 140,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 140
+   }
+  },
+  "sdp_sysid_twice": {
+   "definition": {
+    "name": "sdp_sysid_twice",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": "",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 2,
+    "frf_at_construction": false,
+    "tags": []
+   },
+   "hashes": [
+    "e44fce039f5dd7e7c2200172",
+    "c4689a0e42f1c2e0aac34d2a",
+    "a9ccc6807e28950c21b4ce0a",
+    "d47ede5e2a53f14d7ce8136a",
+    "7f551826c7dce4430a84132c",
+    "eea852114178ba58a21c3024",
+    "f869e3755db27cc4edfc0a5c"
+   ],
+   "err_rms": [
+    11.793714924633118,
+    5.8765422970199985,
+    5.810388260760278,
+    5.777815399424148,
+    5.745818300954323,
+    5.73142283097037,
+    5.719746614482313
+   ],
+   "drive_db": [
+    -3.848914934155273,
+    4.738368727149334,
+    4.1012408039155455,
+    2.2883689246811416,
+    2.0394687344297413,
+    -1.2936232937381633,
+    -11.964149475082916
+   ],
+   "counters": {
+    "n_sdp_refinements": 180,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 180
+   }
+  },
+  "sdp_frf_at_construction": {
+   "definition": {
+    "name": "sdp_frf_at_construction",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": "",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": true,
+    "tags": []
+   },
+   "hashes": [
+    "e44fce039f5dd7e7c2200172",
+    "c4689a0e42f1c2e0aac34d2a",
+    "a9ccc6807e28950c21b4ce0a",
+    "d47ede5e2a53f14d7ce8136a",
+    "7f551826c7dce4430a84132c",
+    "eea852114178ba58a21c3024",
+    "f869e3755db27cc4edfc0a5c"
+   ],
+   "err_rms": [
+    11.793714924633118,
+    5.8765422970199985,
+    5.810388260760278,
+    5.777815399424148,
+    5.745818300954323,
+    5.73142283097037,
+    5.719746614482313
+   ],
+   "drive_db": [
+    -3.848914934155273,
+    4.738368727149334,
+    4.1012408039155455,
+    2.2883689246811416,
+    2.0394687344297413,
+    -1.2936232937381633,
+    -11.964149475082916
+   ],
+   "counters": {
+    "n_sdp_refinements": 180,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 180
+   }
+  },
+  "fast_frf_at_construction": {
+   "definition": {
+    "name": "fast_frf_at_construction",
+    "plant": "6x8",
+    "law": "fast",
+    "params": "",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": true,
+    "tags": []
+   },
+   "hashes": [
+    "ed73b54b2fed05ad6549d3af",
+    "d51ed13711764eb993d05ae5",
+    "70003766317a910aa23425a2",
+    "cc07de085567e1d88b0282c2",
+    "8eb19f9586324f8bbdd43b6a",
+    "472fe86c888ca3525a99d718",
+    "3cf2aa391bf495e2828ddba7"
+   ],
+   "err_rms": [
+    11.992636487574233,
+    6.191312982649777,
+    6.138831751441963,
+    6.115824631101797,
+    6.089001821896683,
+    6.086118310062849,
+    6.076548451304238
+   ],
+   "drive_db": [
+    -3.842522979621936,
+    4.7419725268679365,
+    4.105634212540941,
+    2.2886997630034664,
+    2.028122944635529,
+    -1.3125107074907891,
+    -12.300743430741166
+   ],
+   "counters": {
+    "n_sdp_refinements": 180,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 180,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 180
+   }
+  },
+  "sdp_solver_raises": {
+   "definition": {
+    "name": "sdp_solver_raises",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": ",,10",
+    "n_cycles": 3,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {
+     "1": "solver_raises"
+    },
+    "sysid_calls": 1,
+    "frf_at_construction": false,
+    "tags": []
+   },
+   "hashes": [
+    "786b22db59bb51547e25b0c3",
+    "b9ab8b2371063063dc1e5c5b",
+    "2aff19c9a5bacd2a4db255ea",
+    "cd7bbf44d306b81679e77f71"
+   ],
+   "err_rms": [
+    11.796168300575056,
+    5.945008021719891,
+    6.117410296920212,
+    6.2576982077060475
+   ],
+   "drive_db": [
+    -3.848872107797934,
+    4.735555814827327,
+    4.739074427427202,
+    4.743081238852985
+   ],
+   "counters": {
+    "n_sdp_refinements": 50,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 50
+   }
+  },
+  "sdp_solver_no_value": {
+   "definition": {
+    "name": "sdp_solver_no_value",
+    "plant": "6x8",
+    "law": "SDP",
+    "params": ",,10",
+    "n_cycles": 3,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {
+     "1": "solver_no_value"
+    },
+    "sysid_calls": 1,
+    "frf_at_construction": false,
+    "tags": []
+   },
+   "hashes": [
+    "786b22db59bb51547e25b0c3",
+    "b9ab8b2371063063dc1e5c5b",
+    "2aff19c9a5bacd2a4db255ea",
+    "cd7bbf44d306b81679e77f71"
+   ],
+   "err_rms": [
+    11.796168300575056,
+    5.945008021719891,
+    6.117410296920212,
+    6.2576982077060475
+   ],
+   "drive_db": [
+    -3.848872107797934,
+    4.735555814827327,
+    4.739074427427202,
+    4.743081238852985
+   ],
+   "counters": {
+    "n_sdp_refinements": 50,
+    "n_stale_refinements": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 50
+   }
+  },
   "sdp_10x14_default": {
    "definition": {
     "name": "sdp_10x14_default",
@@ -1340,6 +2389,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -1388,6 +2442,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [
@@ -1438,6 +2497,11 @@
     "frf_drift": 0.0,
     "frf_walk": false,
     "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
     "tags": []
    },
    "hashes": [

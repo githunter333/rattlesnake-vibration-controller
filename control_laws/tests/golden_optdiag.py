@@ -103,7 +103,8 @@ def named(values):
 
 
 def scenario(name, plant, law, params='', n_cycles=6, level_db=None, frf_drift=0.0,
-             frf_walk=False, same_as=None, tags=()):
+             frf_walk=False, same_as=None, level_changes=None, frf_jump=None, pokes=None,
+             sysid_calls=1, frf_at_construction=False, tags=()):
     """frf_drift: each control cycle hands the law an FRF whose every element is
     multiplied by 1 + frf_drift * (complex unit-variance noise), as if "update
     transfer function during control" were on; 0 = the FRF never changes.
@@ -112,10 +113,23 @@ def scenario(name, plant, law, params='', n_cycles=6, level_db=None, frf_drift=0
     line's last solve grows -- the only case where field 24 (gate_reference)
     can change anything.
     same_as: the name of a scenario whose legacy string this one spells in the
-    named form; its output must be bit-identical to that scenario's."""
+    named form; its output must be bit-identical to that scenario's.
+    level_changes: {cycle: dB} -- law.set_test_level_db(dB) just before that cycle's
+    control call (what Rattlesnake does on every level change; arms the trim's freeze).
+    frf_jump: (first, stop, factor) -- cycles first..stop-1 hand the law an FRF scaled by
+    `factor`, as a live estimate that has run away; the cycles after it are back to normal.
+    pokes: {cycle: name} -- before that cycle, put the law in a state a closed loop cannot
+    reach from outside (see poke(): 'starve' = the deadlock escape's state, 'solver_raises'
+    and 'solver_no_value' = an SDP solver that fails).  White-box: they name the law's own
+    attributes.
+    sysid_calls: how many times system_id_update is called first; 0 = none, so the first
+    thing the law sees is control().
+    frf_at_construction: hand the FRF to the constructor, not only to system_id_update (the
+    base constructor then initializes at once; Rattlesnake itself constructs with None)."""
     return dict(name=name, plant=plant, law=law, params=params, n_cycles=n_cycles,
                 level_db=level_db, frf_drift=frf_drift, frf_walk=frf_walk, same_as=same_as,
-                tags=list(tags))
+                level_changes=level_changes or {}, frf_jump=frf_jump, pokes=pokes or {},
+                sysid_calls=sysid_calls, frf_at_construction=frf_at_construction, tags=list(tags))
 
 
 # Field indices (0-based), from the laws' docstrings:
@@ -204,6 +218,37 @@ SCENARIOS = [
     scenario('octave_engaged_named', '6x8', 'octave',
              named({'frequency_spacing': 5, 'switch_level_db': 0, 'octave_fraction': 6,
                     'octave_fmin': 100, 'octave_fmax': 1000}), n_cycles=2, level_db=0.0),
+    # ---- paths the scenarios above never reach (found by line coverage, 2026-11-02) ----
+    # Scheduler step 3: every line solved on the first call, then an FRF that creeps (below
+    # the movement threshold) until the predicted error of already-solved lines worsens.
+    scenario('sdp_stale_retriage', '6x8', 'SDP', fields({2: 400}), frf_drift=0.03, frf_walk=True),
+    # Step 1 (drifted lines) cut short by the time budget.
+    scenario('sdp_drift_time_limited', '6x8', 'SDP', fields({1: 0.02, 2: 15, 20: 0.001}),
+             n_cycles=8, frf_drift=0.05),
+    # Everything solved and the FRF still: the scheduler idles and throttles its log.
+    scenario('sdp_idle_after_full_coverage', '6x8', 'SDP', fields({2: 400}), n_cycles=8),
+    # A live FRF that runs away for three cycles and comes back: the divergence guard.
+    scenario('sdp_frf_runaway_and_recovery', '6x8', 'SDP', fields({2: 400}), n_cycles=9,
+             frf_jump=(3, 6, 100.0)),
+    # The zero-drive absorbing state, then the escape from it.
+    scenario('sdp_deadlock_escape', '6x8', 'SDP', fields({2: 400}), n_cycles=16, pokes={3: 'starve'}),
+    # The trim across level changes (it freezes after each), then a long run.
+    scenario('sdp_trim_level_changes', '6x8', 'SDP',
+             fields({10: 1.0, 11: 0.5, 12: 0.4, 13: 0.3, 14: 0.4}), n_cycles=10,
+             level_changes={2: -3.0, 3: -6.0, 7: 0.0}),
+    scenario('fast_trim_long_run', '6x8', 'fast',
+             fields({10: 1.0, 11: 0.5, 12: 0.4, 13: 0.3, 14: 0.4}), n_cycles=60,
+             frf_drift=0.03, frf_walk=True),
+    # control() before any system_id_update, and a second system_id_update after init.
+    scenario('sdp_control_before_sysid', '6x8', 'SDP', sysid_calls=0),
+    scenario('sdp_sysid_twice', '6x8', 'SDP', sysid_calls=2),
+    # Constructed with the FRF in hand: the base constructor initializes at once, which is why
+    # the fast law sets its own state before calling it.
+    scenario('sdp_frf_at_construction', '6x8', 'SDP', frf_at_construction=True),
+    scenario('fast_frf_at_construction', '6x8', 'fast', frf_at_construction=True),
+    # A solver that cannot return a solution: the pseudo-inverse fallback, both ways in.
+    scenario('sdp_solver_raises', '6x8', 'SDP', fields({2: 10}), n_cycles=3, pokes={1: 'solver_raises'}),
+    scenario('sdp_solver_no_value', '6x8', 'SDP', fields({2: 10}), n_cycles=3, pokes={1: 'solver_no_value'}),
     scenario('sdp_10x14_default', '10x14', 'SDP'),
     scenario('fast_10x14_default', '10x14', 'fast'),
     scenario('fast_10x14_rankdef', '10x14_rankdef', 'fast', n_cycles=5),
@@ -220,6 +265,22 @@ def load_laws(law_dir=LAW_DIR):
 
 def sha(a):
     return hashlib.sha256(np.ascontiguousarray(a).tobytes()).hexdigest()[:24]
+
+
+def poke(law, what):
+    """White-box states a closed loop cannot be steered into from outside.  Each names
+    attributes of the law itself, so it ties the scenario to them."""
+    if what == 'starve':            # the zero-drive absorbing state the deadlock escape is for
+        law.output_cpsd = law.output_cpsd*1e-4
+        law.err_db_cache[:] = np.inf
+    elif what == 'solver_raises':   # the SDP solver throws
+        def boom(*a, **k):
+            raise RuntimeError('solver exploded')
+        law._sdp_prob.solve = boom
+    elif what == 'solver_no_value': # the SDP solver returns without a solution
+        law._sdp_prob.solve = lambda *a, **k: setattr(law._sdp_X, 'value', None)
+    else:
+        raise ValueError(what)
 
 
 def run_scenario(sc, laws, plants):
@@ -250,16 +311,18 @@ def run_scenario(sc, laws, plants):
 
     t0 = time.perf_counter()
     with contextlib.redirect_stdout(io.StringIO()):
-        law = laws[sc['law']](p['spec'], p['warn'], p['abort'], sc['params'], None,
+        law = laws[sc['law']](p['spec'], p['warn'], p['abort'], sc['params'],
+                              H if sc['frf_at_construction'] else None,
                               *args, None, 0, nf, None, None)
         if sc['level_db'] is not None:
             law.set_test_level_db(sc['level_db'])
-        law.system_id_update(H, *args, p['coh'], nf, nf)
+        for _ in range(sc['sysid_calls']):
+            law.system_id_update(H, *args, p['coh'], nf, nf)
         X = law.control(H, p['coh'], nf, nf, None, None)
         first = np.array(X[sel], dtype=np.complex64)
         record(X)
         walk = np.zeros(H.shape, complex)
-        for _ in range(sc['n_cycles']):
+        for cycle in range(sc['n_cycles']):
             Gyy, Gxx, coh = cs.measure(H, X, noise_diag, N_FRAMES, rng)
             H_law = H
             if sc['frf_drift']:
@@ -269,6 +332,12 @@ def run_scenario(sc, laws, plants):
                     H_law = H*(1 + walk)
                 else:
                     H_law = H*(1 + sc['frf_drift']*z)
+            if sc['frf_jump'] and sc['frf_jump'][0] <= cycle < sc['frf_jump'][1]:
+                H_law = H_law*sc['frf_jump'][2]
+            if cycle in sc['level_changes']:
+                law.set_test_level_db(sc['level_changes'][cycle])
+            if cycle in sc['pokes']:
+                poke(law, sc['pokes'][cycle])
             X = law.control(H_law, coh, nf, nf, Gyy, Gxx)
             record(X)
     last = np.array(X[sel], dtype=np.complex64)
@@ -403,7 +472,12 @@ def main():
             print(f"{s['name']:32s} {s['plant']:14s} {s['law']:7s} {s['n_cycles']} cycles  "
                   f"params={s['params']!r}" + (f" level_db={s['level_db']}" if s['level_db'] is not None else '')
                   + (f" frf_drift={s['frf_drift']}" + (' (walk)' if s['frf_walk'] else '') if s['frf_drift'] else '')
-                  + (f"  [= {s['same_as']}]" if s['same_as'] else ''))
+                  + (f"  [= {s['same_as']}]" if s['same_as'] else '')
+                  + (f" level_changes={s['level_changes']}" if s['level_changes'] else '')
+                  + (f" frf_jump={s['frf_jump']}" if s['frf_jump'] else '')
+                  + (f" pokes={s['pokes']}" if s['pokes'] else '')
+                  + (f" sysid_calls={s['sysid_calls']}" if s['sysid_calls'] != 1 else '')
+                  + (' frf_at_construction' if s['frf_at_construction'] else ''))
         return 0
     selected = SCENARIOS
     if a.only:
