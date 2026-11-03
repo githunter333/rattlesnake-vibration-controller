@@ -105,15 +105,10 @@ import os
 import importlib.util
 import numpy as np
 
-# Rattlesnake loads "Control Python Script" files standalone via
-# importlib.util.spec_from_file_location (see components/utilities.py),
-# not as part of the control_laws package -- a `from .optimal_diagonal_
-# control import ...` relative import fails there with "attempted
-# relative import with no known parent package". Load the sibling file
-# the same way Rattlesnake itself loads control scripts instead (same
-# pattern as optimal_diagonal_control_fast.py).
-_this_dir = os.path.dirname(os.path.abspath(__file__))
-_base_path = os.path.join(_this_dir, "optimal_diagonal_control.py")
+# Rattlesnake loads this file standalone, by path (see load_sibling in the base file), so
+# the base law is loaded by path too -- the one load that cannot use load_sibling, since
+# the base file is what provides it.
+_base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "optimal_diagonal_control.py")
 _spec = importlib.util.spec_from_file_location("optimal_diagonal_control_base", _base_path)
 _base_module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_base_module)

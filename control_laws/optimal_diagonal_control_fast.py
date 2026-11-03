@@ -170,26 +170,18 @@ import scipy.optimize as _scipy_optimize  # module import, not `from ... import 
                                             # Rattlesnake's loose function-detection heuristic
                                             # (>=12 parameters, which minimize's signature has)
 
-# Rattlesnake loads "Control Python Script" files standalone via
-# importlib.util.spec_from_file_location (see components/utilities.py),
-# not as part of the control_laws package -- a `from .optimal_diagonal_
-# control import ...` relative import fails there with "attempted
-# relative import with no known parent package". Load the sibling file
-# the same way Rattlesnake itself loads control scripts instead.
-_this_dir = os.path.dirname(os.path.abspath(__file__))
-_base_path = os.path.join(_this_dir, "optimal_diagonal_control.py")
+# Rattlesnake loads this file standalone, by path (see load_sibling in the base file), so
+# the base law is loaded by path too -- the one load that cannot use load_sibling, since
+# the base file is what provides it.
+_base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "optimal_diagonal_control.py")
 _spec = importlib.util.spec_from_file_location("optimal_diagonal_control_base", _base_path)
 _base_module = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_base_module)
 optimal_diagonal_control = _base_module.optimal_diagonal_control
-# The drive-coherence cap used by the closed-form laws (shrink the offending
-# cross terms, re-project onto the PSD cone).  Loaded by path for the same
-# reason as the base class.
-_helpers_spec = importlib.util.spec_from_file_location(
-    "_rattlesnake_control_laws_helpers_fast", os.path.join(_this_dir, "control_laws.py"))
-_helpers = importlib.util.module_from_spec(_helpers_spec)
-_helpers_spec.loader.exec_module(_helpers)
-_cap_drive_coherence = _helpers._cap_drive_coherence
+# The drive-coherence cap used by the closed-form laws (shrink the offending cross terms,
+# re-project onto the PSD cone).
+_cap_drive_coherence = _base_module.load_sibling(
+    'control_laws.py', '_rattlesnake_control_laws_helpers_fast')._cap_drive_coherence
 
 # This law's own parameters.  The Param class, the converters and the parser
 # (optimal_diagonal_control._read_parameters) are the base module's, so one

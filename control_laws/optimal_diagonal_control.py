@@ -196,6 +196,8 @@ The honest one-line description is an indirect adaptive (self-tuning)
 regulator: fast model update, optional slow error trim.
 """
 
+import importlib.util
+import os
 import time
 
 import numpy as np
@@ -237,24 +239,27 @@ _TRIM_LEAK_DB = 0.05
 # corrections that are merely waiting their turn.  History: notes/optimal_diagonal_history.md#trim-leak
 _TRIM_LEAK_AFTER = 50
 
-# Rattlesnake loads a control-law file with importlib.spec_from_file_location,
-# i.e. as a standalone module with NO package context, so a relative import
-# raises ImportError and the law cannot be loaded at all.  (Same applies when
-# optimal_diagonal_control_fast.py loads THIS file that way.)  Fall back to an
-# explicit path import without touching sys.path -- putting control_laws/ on
-# the path would shadow the package of the same name for everything else.
+def load_sibling(filename, module_name):
+    """Load the file `filename` that sits next to this one, by path, and return the module.
+
+    Rattlesnake loads a control-law file with importlib.spec_from_file_location, i.e. as a
+    standalone module with NO package context, so a relative import raises ImportError and
+    the law cannot be loaded at all.  Loading by path does not touch sys.path (putting
+    control_laws/ on it would shadow the package of the same name for everything else).
+    The other two laws load this file the same way -- the one load that cannot use this
+    function, since it is what provides it -- and then use it for their own helpers."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 try:
     from .control_laws import _apply_startup_level_cap_from_trace
 except ImportError:
-    import importlib.util as _ilu
-    import os as _os
-    _sib = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                         'control_laws.py')
-    _hspec = _ilu.spec_from_file_location('_rattlesnake_control_laws_helpers',
-                                          _sib)
-    _hmod = _ilu.module_from_spec(_hspec)
-    _hspec.loader.exec_module(_hmod)
-    _apply_startup_level_cap_from_trace = _hmod._apply_startup_level_cap_from_trace
+    _apply_startup_level_cap_from_trace = load_sibling(
+        'control_laws.py', '_rattlesnake_control_laws_helpers')._apply_startup_level_cap_from_trace
 
 try:
     import cvxpy as cp
