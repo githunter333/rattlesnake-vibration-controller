@@ -283,9 +283,15 @@ OPEN ITEMS
       octave (shipped)   3.22 / 4.78      2.21 / 3.20
       octave, exact C    2.66 / 5.43      0.32 / 2.50
       band_average       3.27 / 5.12      3.08 / 4.23     (3.36 / 4.57 in its own definition)
-      best achievable        - / 2.40     1.14 / 2.01
-    "Best achievable" = achievable_response.achievable_diagonal: the best rms dB over ALL 14
-    channels, so it is not a floor for the 11 the SDP/fast laws reach.
+      best achievable    0.00 / 2.99      0.00 / 2.38     (reachable channels held on target)
+      joint compromise   1.40 / 2.40      1.14 / 2.01
+    The plotted "best achievable" (plot_law_spectra.reference_spectra) holds the 11 channels the
+    SDP/fast laws reach ON TARGET (weighted 100:1, within 0.01 dB) and lets the other three
+    (7x, 13x, 14x) get as close as they then can, in rms dB.  The SDP law is within 0.27 dB of it
+    on all 14 channels (3.26 vs 2.99, per line).  The JOINT compromise, achievable_diagonal (best
+    rms dB over all 14 at once), is quoted in each plot's key: it trades the 11 reachable
+    channels off against the others (1.40 dB on them), so it is not a floor for them and in the
+    first set of plots made some channels look beaten by the control.
     FINDINGS.  (1) The octave law's error is its mean-of-H band average: with the exact band
     cross-power C = mean(h_m h_m^H) the band error falls from 2.21 to 0.32 dB.  C needs only
     the per-line H the law already gets, so its docstring "known limitation" does not apply.

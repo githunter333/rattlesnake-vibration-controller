@@ -7,14 +7,17 @@ the target spec, the best achievable spec, and what the law produced.
 
 One PNG per law, one panel per control channel (file names: see SLUGS and plot_path):
   target spec      dashed, the specification autospectrum
-  best achievable  achievable_response.achievable_diagonal: per line, the diagonal that
-                   minimizes the rms dB error over ALL channels at once (the spec the rig
-                   runs are pointed at).  It trades error between channels, so on the
-                   channels a law can reach it may sit off the target where the law does not
+  best achievable the best a law could do, per line, with the channels the SDP and fast laws
+                   reach (11 of 14 on 10x14) HELD ON TARGET and the rest (7x, 13x, 14x on 10x14)
+                   as close as they can then get, in rms dB.  reference_spectra() solves it with
+                   achievable_response's dB residuals, weighted 100:1 toward the reachable channels.
+                   The key also quotes the JOINT optimum, achievable_response.achievable_diagonal:
+                   the best rms dB over all channels at once, which trades the reachable channels
+                   off against the others and so is not a floor for them
   control          the TRUE response autospectrum diag(H X H^H) after the last cycle
 
-Each law runs its defaults (band_average: df 5, octave order 6, drive RMS limit off), closed loop, as in compare_optdiag_frame.py (the FRF is held
-fixed, responses are 'measured' from n_frames Gaussian frames).  The octave law is switched
+Each law runs its defaults (band_average: df 5, octave order 6, drive RMS limit off), closed loop, as in
+compare_optdiag_frame.py (the FRF is held fixed, responses are 'measured' from n_frames Gaussian frames).  The octave law is switched
 into octave mode with set_test_level_db(0), since nothing in Rattlesnake does that yet.
 
 Run in the 'rattlesnake' conda env with PYTHONPATH=src.
@@ -35,7 +38,9 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 import compare_optdiag_frame as cf                     # noqa: E402
 from frame_plant import frame_plant                    # noqa: E402
+import achievable_response as ar                       # noqa: E402
 from achievable_response import achievable_diagonal    # noqa: E402
+from scipy.optimize import least_squares               # noqa: E402
 from rattlesnake.utilities import load_control_module  # noqa: E402
 
 INK, INK2, GRID, SURFACE = '#0b0b0b', '#52514e', '#e1e0d9', '#fcfcfb'
@@ -77,6 +82,38 @@ def plot_path(outdir, plant, slug, view):
     return os.path.join(outdir, f'spectra_{plant}_{slug}_{view}.png')
 
 
+def _held_line(Hb, y, reach, weight, max_nfev=300):
+    """One line: diag(H X H^H) in rms dB, the `reach` channels weighted `weight` to 1."""
+    from_L = lambda v: ar._unpack(v, Hb.shape[1], Hb.shape[1])
+    N = Hb.shape[1]
+    y_log = np.log(np.maximum(y, 1e-300))
+    w = np.where(reach, weight, 1.0)
+    fun = lambda v: w*ar._resid(v, Hb, y_log, N, N)
+    jac = lambda v: w[:, None]*ar._jac(v, Hb, y_log, N, N)
+    best = None
+    for L0 in (ar._init_pinv(Hb[reach], y[reach], 1e-8), ar._init_pinv(Hb, y, 1e-8)):
+        sol = least_squares(fun, ar._pack(L0), jac=jac, method='trf', max_nfev=max_nfev)
+        if best is None or sol.cost < best.cost:
+            best = sol
+    return ar._diag_response(Hb, from_L(best.x))[0]
+
+
+def reference_spectra(p, lost, weight=100.0):
+    """(held, joint), each (F, M), NaN off the specified band.
+
+    held   best achievable with the reachable channels (~lost) held on target (weighted `weight`:1,
+           which keeps them within 0.01 dB) and the others as close as they can then get
+    joint  achievable_response.achievable_diagonal: best rms dB over all channels at once"""
+    H, sel = p['H'], p['band']
+    spec = np.real(np.einsum('fii->fi', p['spec']))
+    idx = np.flatnonzero(sel)
+    held = np.full(spec.shape, np.nan)
+    for i in idx:
+        held[i] = _held_line(H[i], spec[i], ~lost, weight)
+    joint = achievable_diagonal(H, spec, line_indices=idx, compute_minimax=False)['achieved']
+    return held, joint
+
+
 def response(H, X):
     return np.real(np.einsum('fmn,fnk,fmk->fm', H, X, H.conj()))
 
@@ -106,7 +143,7 @@ def panel(ax, f, target, best, got, label, given_up, err_db, steps=False):
     ax.set_title(f'{err_db:.2f} dB rms', loc='right', fontsize=8, color=INK2, pad=3)
 
 
-def figure(name, p, X, best, lost, names, plant, outpath, bands=None):
+def figure(name, p, X, best, lost, names, plant, outpath, bands=None, joint=None):
     """bands = (masks, centers): plot the 1/6-octave band AVERAGES (power mean over each band's lines)
     instead of every line."""
     f, sel = p['f'], p['band']
@@ -117,6 +154,7 @@ def figure(name, p, X, best, lost, names, plant, outpath, bands=None):
         masks, fb = bands
         grid = lambda a: np.array([a[m].mean(axis=0) for m in masks])
     spec, got, bst = grid(spec_full), grid(response(p['H'], X)), grid(best)
+    jnt = None if joint is None else grid(joint)
     err = np.sqrt(np.mean((10*np.log10(got/spec))**2, axis=0))
     M = spec.shape[1]
     ncol = 3
@@ -135,15 +173,16 @@ def figure(name, p, X, best, lost, names, plant, outpath, bands=None):
     handles = [plt.Line2D([], [], color=INK, lw=1.1, ls=(0, (4, 3))),
                plt.Line2D([], [], color=C_ACHIEVABLE, lw=2.6),
                plt.Line2D([], [], color=C_CONTROL, lw=1.1)]
-    key.legend(handles, ['target spec', 'best achievable', 'control (this law)'], loc='upper left',
+    key.legend(handles, ['target spec', 'best achievable (reachable channels on target)', 'control (this law)'], loc='upper left',
                frameon=False, fontsize=9, labelcolor=INK)
     reach = ~lost
     rms_db = lambda y, cols: np.sqrt(np.mean((10*np.log10(y[:, cols]/spec[:, cols]))**2))
     everyone = np.ones(M, dtype=bool)
+    joint_txt = '' if jnt is None else f'\n  (joint 14-channel compromise: {rms_db(jnt, everyone):.2f} all, {rms_db(jnt, reach):.2f} reachable)'
     key.text(0.0, 0.46,
              'rms error vs the spec (dB)\n'
              f'  all {M} channels:   this law {rms_db(got, everyone):.2f},  best achievable {rms_db(bst, everyone):.2f}\n'
-             f'  {int(reach.sum())} reachable:      this law {rms_db(got, reach):.2f},  best achievable {rms_db(bst, reach):.2f}',
+             f'  {int(reach.sum())} reachable:      this law {rms_db(got, reach):.2f},  best achievable {rms_db(bst, reach):.2f}' + joint_txt,
              transform=key.transAxes, fontsize=8.5, color=INK2, va='top', linespacing=1.5)
     fig.supylabel('response autospectrum (units$^2$/Hz)', fontsize=9, color=INK2, x=0.005)
     view = f"every {p['df']:g} Hz line" if bands is None else '1/6-octave band averages'
@@ -154,7 +193,7 @@ def figure(name, p, X, best, lost, names, plant, outpath, bands=None):
     plt.close(fig)
 
 
-def score_table(p, runs, lost, spec_d):
+def score_table(p, runs, lost, spec_d, refs=()):
     """Printed table: rms dB error per law, per line and per 1/6-octave band (100-1000 Hz)."""
     f, H, sel = p['f'], p['H'], p['band']
     with contextlib.redirect_stdout(io.StringIO()):
@@ -170,6 +209,10 @@ def score_table(p, runs, lost, spec_d):
         line = 10*np.log10(y[sel]/spec_d[sel])
         band = np.array([10*np.log10(y[m].mean(0)/spec_d[m].mean(0)) for m in masks])
         print(f'{label:72s} {rms(line, reach):14.2f} {rms(line, everyone):13.2f} {rms(band, reach):15.2f} {rms(band, everyone):13.2f}')
+    for label, y in refs:                                 # reference spectra scored the same way
+        line = 10*np.log10(y[sel]/spec_d[sel])
+        band = np.array([10*np.log10(y[m].mean(0)/spec_d[m].mean(0)) for m in masks])
+        print(f'{label:72s} {rms(line, reach):14.2f} {rms(line, everyone):13.2f} {rms(band, reach):15.2f} {rms(band, everyone):13.2f}')
 
 
 def main():
@@ -182,8 +225,6 @@ def main():
     p = frame_plant(plant)
     names = [f"{n}{'xy'[d-1]}" for n, d in p['controls']]
     spec_d = np.real(np.einsum('fii->fi', p['spec']))
-    print('best achievable (per line, rms dB over all channels) ...', flush=True)
-    best = achievable_diagonal(p['H'], spec_d, line_indices=np.flatnonzero(p['band']))['achieved']
     runs = []
     for label, cls, params in laws():
         print('running', label, flush=True)
@@ -191,10 +232,13 @@ def main():
     sel = p['band']
     final = np.array([np.sqrt(np.mean((10*np.log10(response(p['H'], X)[sel]/spec_d[sel]))**2, axis=0)) for _, X in runs])
     lost = np.all(final[:2] > 3.0, axis=0)               # channels the SDP and fast laws both give up
-    score_table(p, runs, lost, spec_d)
+    print('best achievable references ...', flush=True)
+    best, joint = reference_spectra(p, lost)
+    score_table(p, runs, lost, spec_d, refs=[('best achievable (reachable held on target)', best),
+                                               ('joint 14-channel compromise', joint)])
     for (label, X), short in zip(runs, SLUGS):
         path = plot_path(outdir, plant, short, 'lines')
-        figure(label, p, X, best, lost, names, plant, path)
+        figure(label, p, X, best, lost, names, plant, path, joint=joint)
         print('wrote', path)
 
 

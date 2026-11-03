@@ -25,11 +25,10 @@ p = frame_plant('10x14'); H, f, sel = p['H'], p['f'], p['band']
 spec_d = np.real(np.einsum('fii->fi', p['spec']))
 names = [f"{n}{'xy'[d-1]}" for n, d in p['controls']]
 out = os.path.join(os.path.dirname(os.path.dirname(HERE)), 'examples', 'tendrive14resp', 'results', 'plots')
-best = achievable_diagonal(H, spec_d, line_indices=np.flatnonzero(sel))['achieved']
 laws = pl.laws()
 runs = [(lab, cf.run(p, cls, par, 15, 20)['X']) for lab, cls, par in laws]
 fin = np.array([np.sqrt(np.mean((10*np.log10(pl.response(H, X)[sel]/spec_d[sel]))**2, axis=0)) for _, X in runs[:2]])
-lost = np.all(fin > 3.0, axis=0); reach = ~lost; everyone = np.ones(lost.size, bool)
+lost = np.all(fin > 3.0, axis=0); best, joint = pl.reference_spectra(p, lost); reach = ~lost; everyone = np.ones(lost.size, bool)
 
 # the band-average law's own band machinery
 with contextlib.redirect_stdout(io.StringIO()):
@@ -58,9 +57,10 @@ for lab, X in runs:
     y = pl.response(H, X)
     e2, e10, eo = band_err(y, masks2), band_err(y, masks10), own_err(y)
     print(f"{lab:72s} {rms(e2, reach):8.2f} {rms(e2, everyone):7.2f} {rms(e10, reach):13.2f} {rms(e10, everyone):12.2f} {rms(eo, reach):14.2f} {rms(eo, everyone):12.2f}")
-b2, b10 = band_err(best, masks2), band_err(best, masks10)
-print(f"{'best achievable':72s} {rms(b2, reach):8.2f} {rms(b2, everyone):7.2f} {rms(b10, reach):13.2f} {rms(b10, everyone):12.2f}")
+for lab, ref in (('best achievable (reachable held on target)', best), ('joint 14-channel compromise', joint)):
+    b2, b10 = band_err(ref, masks2), band_err(ref, masks10)
+    print(f"{lab:72s} {rms(b2, reach):8.2f} {rms(b2, everyone):7.2f} {rms(b10, reach):13.2f} {rms(b10, everyone):12.2f}")
 
 for (lab, X), slug in ((runs[3], pl.SLUGS[3]), (runs[4], pl.SLUGS[4])):
     path = pl.plot_path(out, '10x14', slug, 'bands')
-    pl.figure(lab, p, X, best, lost, names, '10x14', path, bands=(masks10, cent10)); print('wrote', path)
+    pl.figure(lab, p, X, best, lost, names, '10x14', path, bands=(masks10, cent10), joint=joint); print('wrote', path)
