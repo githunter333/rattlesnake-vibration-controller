@@ -53,6 +53,41 @@ archived profile uses this form, and it keeps working.
 
 Field numbers are 1-based.  The two forms must not be mixed in one string.
 
+## Choosing the time budget
+
+`max_solve_ms_per_update` defaults to 0 (off): only `max_bins_per_update` limits the work
+per call.  Every behaviour change in these laws ships off by default, so archived profiles
+reproduce exactly.  But the line count alone does not bound a call.  At 10 drives x 14
+controls the SDP law's default 20 lines per call took 1.1 to 1.5 s on its worst call, longer
+than a 1 s control cycle.
+
+Starting points, measured on the 10x14 frame plant (`tests/compare_optdiag_frame.py`, 15 cycles,
+FRF held fixed, 20-frame CPSD estimates), on the Mac that runs the rig software, 2026-11-02:
+
+| law | setting | final error | lines solved | ms per call, median / worst |
+| --- | --- | --- | --- | --- |
+| SDP | defaults (20 lines per call) | 0.12 dB | all 180, by cycle 7 | 16 / 1508 |
+| SDP | `max_bins_per_update: 400`, `max_solve_ms_per_update: 500` | 0.63 dB | 109 after 15 cycles, still converging | 490 / 512 |
+| fast | defaults (20 lines per call) | 0.23 dB | all 180, by cycle 7 | 20 / 105 |
+| fast | `max_bins_per_update: 400`, `max_solve_ms_per_update: 500` | 0.23 dB | all 180, during system ID | 18 / 20 |
+
+The errors and the fast law's line counts reproduce the 2026-10-30/31 measurements.  The times,
+and the budgeted SDP row (0.34 dB and 148 lines then), depend on the machine, because a
+time budget buys fewer lines on a slower one.
+
+For the fast law at 10 drives, set `max_bins_per_update: 400` and `max_solve_ms_per_update: 500`.
+For the SDP law, pick a budget that fits the control cycle (about 500 ms) and expect 15 to 20
+cycles to converge; starting with the fast law and finishing with the SDP law is an option.
+Fully converged, the SDP law is the more accurate (0.12 against 0.23 dB at the same drive
+level).
+
+## Drive coherence
+
+In every one of these laws, and in the test and comparison scripts, "drive coherence" is the
+magnitude |X_ij| / sqrt(X_ii X_jj) of a pair of drives: 0 for independent drives, 1 for fully
+dependent ones.  That is what `max_drive_coherence` caps.  The squared measure is always
+called coherence squared (gamma^2); a cap of 0.95 is gamma^2 = 0.9025.
+
 ## optimal_diagonal_control (and, through it, the other two)
 
 {base}

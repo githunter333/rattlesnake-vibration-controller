@@ -192,6 +192,34 @@ def _():
     assert open(ref.OUT).read() == ref.generate(), 'out of date; run make_parameter_reference.py'
 
 
+@check('the defaults quoted in the laws\' docstrings match the tables')
+def _():
+    import ast
+    import re
+    table = {}
+    for key in ('SDP', 'fast', 'octave'):
+        table.update({p.name: p for p in LAWS[key].parameter_table()})
+    entry = re.compile(r"^\s{0,4}(" + "|".join(sorted(table, key=len, reverse=True)) + r")\b\s*(?:-|field|,)", re.M)
+    compared, wrong = 0, []
+    for fname in ('optimal_diagonal_control.py', 'optimal_diagonal_control_fast.py',
+                  'octave_band_switching_control.py'):
+        doc = ast.get_docstring(ast.parse(open(os.path.join(LAW_DIR, fname)).read()), clean=False)
+        ms = list(entry.finditer(doc))
+        for i, m in enumerate(ms):
+            text = doc[m.start(): ms[i + 1].start() if i + 1 < len(ms) else m.start() + 900]
+            for d in re.finditer(r"default\s+(-?[0-9.]+(?:e-?[0-9]+)?|None|auto)", text):
+                tok, want = d.group(1), table[m.group(1)].default
+                try:
+                    same = float(tok) == float(want)
+                except (TypeError, ValueError):
+                    same = str(want) == tok or (want is None and tok in ('None', 'auto'))
+                compared += 1
+                if not same:
+                    wrong.append(f"{fname}: {m.group(1)} says default {tok}, the table says {want!r}")
+    assert compared >= 15, f'only {compared} quoted defaults found; the pattern has stopped matching'
+    assert not wrong, '; '.join(wrong)
+
+
 @check('the tables: unique names, unique legacy positions, every name is an attribute')
 def _():
     for key, n in (('SDP', 15), ('fast', 25), ('octave', 20)):

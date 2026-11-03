@@ -24,7 +24,9 @@ Reported per law and scenario:
            at the end of the run
   cyc<1dB  first cycle at which the error is within 1 dB of its final value
   drive    mean drive trace, dB (relative units)
-  coh      median / max pairwise drive coherence over in-band lines
+  coh      median / max pairwise drive coherence over in-band lines: the MAGNITUDE
+           |X_ij|/sqrt(X_ii X_jj), the measure max_drive_coherence caps (square it
+           for gamma^2)
   s/call   mean wall time per control() call (the first call, which also
            does the initial solves, is reported separately as 'init s')
 
@@ -62,7 +64,7 @@ def drive_coherence(X, band):
     Xb = X[band]
     d = np.real(np.einsum('fii->fi', Xb))
     den = d[:, :, None]*d[:, None, :]
-    coh = np.abs(Xb)**2/np.where(den > 0, den, 1.0)
+    coh = np.abs(Xb)/np.sqrt(np.where(den > 0, den, 1.0))
     iu = np.triu_indices(X.shape[1], 1)
     c = coh[:, iu[0], iu[1]].ravel()
     return float(np.median(c)), float(np.max(c))
@@ -125,7 +127,7 @@ def main():
     print(f'{n_cycles} cycles, ' + (f'{n_frames}-frame CPSD estimates' if n_frames else
                                     'exact CPSDs') + f', max_bins_per_update {bins}')
     print('err = rms dB error 100-380 Hz at the end; cyc<1dB = cycles until it stays within '
-          '1 dB of that; coh = median/max drive coherence\n')
+          '1 dB of that; coh = median/max drive coherence magnitude (the cap\'s measure)\n')
     hdr = (f"{'case':15s} {'law':5s} {'err':>6s} {'cyc<1dB':>8s} {'drive':>7s} {'coh med/max':>12s} "
            f"{'init s':>7s} {'s/call':>7s}  solves")
     for cname, dom, rc in configs:

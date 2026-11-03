@@ -28,7 +28,8 @@ def trace(cpsd):
 
 def _cap_drive_coherence(cpsd, max_drive_coherence):
     """Post-process a drive/output CPSD (shape F x N x N) to cap pairwise
-    drive-to-drive coherence at max_drive_coherence (0-1): for every bin and
+    drive-to-drive coherence -- the magnitude |X_ij|/sqrt(X_ii X_jj), as in
+    optimal_diagonal_control -- at max_drive_coherence (0-1): for every bin and
     every drive pair whose coherence exceeds the cap, shrink that cross
     term's magnitude down to the cap (preserving phase and every
     diagonal/auto-spectrum value), then re-project onto the PSD cone (clip

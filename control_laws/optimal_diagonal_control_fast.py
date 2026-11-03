@@ -655,7 +655,7 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         class leaves it uncapped on purpose: it takes its cross terms from the
         system-ID response, which had independent drives.  But after the
         pseudoinverse those lines can still carry drive coherence near 1 --
-        a comparison read a MAXIMUM of 0.98-1.00 for the SDP law
+        a comparison read a MAXIMUM gamma^2 of 0.98-1.00 for the SDP law
         itself, from exactly these lines.  cap_baseline = 1 applies
         max_drive_coherence to the baseline too.  Also applies to the
         deadlock escape, which rebuilds the baseline."""
@@ -710,7 +710,7 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
                     Xk = self._bm_solve(H @ Vk, y_target, X_warm=Xw)
                     X = Vk @ Xk @ Vk.conj().T
                 # dB-OBJECTIVE COHERENCE GUARD (field 23).  With the dB objective the unconstrained
-                # factored solve drives the median pairwise drive coherence (gamma^2) to 0.99-1.00 at
+                # factored solve drives the median pairwise drive coherence SQUARED (gamma^2) to 0.99-1.00 at
                 # 6 drives -- fully dependent drives, the failure this file's top docstring warns
                 # about; the linear objective does not.
                 #   1 (default): if this line's solution breaks max_drive_coherence, re-solve THIS

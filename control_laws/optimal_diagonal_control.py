@@ -68,6 +68,13 @@ no dependent-drive problem to begin with. Both constraints are convex (the
 coherence one is |affine| <= concave, i.e. convex <= concave), no manifold
 optimization. H can be any M x N shape.
 
+DRIVE COHERENCE, in this file and in the two laws built on it, always means the
+MAGNITUDE |X_ij| / sqrt(X_ii X_jj) of a pair of drives: 0 for independent drives, 1 for
+fully dependent ones.  That is the quantity max_drive_coherence caps.  The squared
+measure, which is what a coherence function usually means, is always called coherence
+squared (gamma^2); a cap of 0.95 is gamma^2 = 0.9025.  The test and comparison scripts
+report the magnitude, so their numbers can be read against the cap directly.
+
 Interface: class-style control law (matches buzz_control_class in
 control_laws.py).
 
@@ -110,10 +117,11 @@ Notes on the parameters (comma-separated form, 1-based):
     error_threshold_db    - don't bother SDP-refining a bin whose buzz
                              solution is already within this much of target
                              (default 1.0 dB)
-    max_drive_coherence   - hard cap (0-1) on pairwise coherence between any
-                             two SDP-solved drive channels, so the optimizer
-                             can't converge on totally dependent drives
-                             (default 0.95; 1.0 disables the cap)
+    max_drive_coherence   - hard cap (0-1) on the magnitude of the pairwise
+                             drive coherence between any two SDP-solved drive
+                             channels, so the optimizer can't converge on
+                             totally dependent drives (default 0.95, i.e.
+                             gamma^2 0.9025; 1.0 disables the cap)
     bm_rank               - read only by optimal_diagonal_control_fast; this
                              class parses past it so a single parameter
                              string works for both (default 4 there)
@@ -355,7 +363,7 @@ _BASE_PARAMS = [
     Param('error_threshold_db', 1.0, float, 3,
           'do not refine a line whose buzz solution is already within this many dB of target'),
     Param('max_drive_coherence', 0.95, float, 4,
-          'cap (0-1) on pairwise coherence between SDP-solved drives; 1.0 disables it'),
+          'cap (0-1) on the magnitude of pairwise drive coherence, |X_ij|/sqrt(X_ii X_jj) (so 0.95 is gamma^2 0.9025), between SDP-solved drives; 1.0 disables it'),
     # (legacy position 5 is bm_rank, read by optimal_diagonal_control_fast)
     Param('startup_test_level_cap_db', -9.0, float, 6,
           'ceiling on the very first command, dB relative to the spec trace (0 = full match)'),

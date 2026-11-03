@@ -21,6 +21,8 @@ Reported per law and configuration:
             otherwise dominate the rms and hide convergence
   solved    lines solved so far (system_id_update's first batch included)
   ms/call   wall time of each control() call
+  drive |coh|  median pairwise drive coherence MAGNITUDE |X_ij|/sqrt(X_ii X_jj) over the
+            specified lines: the measure max_drive_coherence caps (square it for gamma^2)
 
 Usage: python control_laws/tests/compare_optdiag_frame.py [plant] [n_cycles] [n_frames]
        defaults: 10x14 15 20
@@ -88,7 +90,7 @@ def run(p, cls, params, n_cycles, n_frames, seed=1):
             solved.append(int(np.sum(law.sdp_refined[sel])))
     drive = 10*np.log10(np.mean(np.real(np.einsum('fii->f', X))[sel]))
     d = np.real(np.einsum('fii->fi', X))[sel]
-    c = np.abs(X[sel])**2/np.maximum(d[:, :, None]*d[:, None, :], 1e-300)
+    c = np.abs(X[sel])/np.sqrt(np.maximum(d[:, :, None]*d[:, None, :], 1e-300))
     iu = np.triu_indices(X.shape[1], 1)
     coh_med = float(np.median(c[:, iu[0], iu[1]]))
     refined = int(np.sum(law.sdp_refined[sel]))
@@ -114,7 +116,7 @@ def main():
     names = [f"{n}{'xy'[d-1]}" for n, d in p['controls']]
     print('channels given up (final rms > 3 dB for every law):', [nm for nm, l in zip(names, lost) if l] or 'none')
     rms = lambda e, m: float(np.sqrt(np.mean(e[:, m]**2))) if m.any() else float('nan')
-    print(f"\n{'':36s} {'err':>6s} {'given up':>9s}  {'all solved':>11s}  {'compute to':>11s}  {'ms/call':>14s}  {'lines/call':>10s}  drive  drive coh^2")
+    print(f"\n{'':36s} {'err':>6s} {'given up':>9s}  {'all solved':>11s}  {'compute to':>11s}  {'ms/call':>14s}  {'lines/call':>10s}  drive  drive |coh|")
     print(f"{'':36s} {'(dB)':>6s} {'(dB)':>9s}  {'by cycle':>11s}  {'that point':>11s}  {'median / max':>14s}  {'median':>10s}  (dB)   median")
     for (cname, lname), r in results.items():
         full = np.flatnonzero(r['solved'] >= r['solved'].max())
