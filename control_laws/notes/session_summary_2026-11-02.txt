@@ -265,6 +265,33 @@ OPEN ITEMS
     defaults with a console warning.  Fixed: such a string now raises, like other
     named-form mistakes.  Legacy strings (numbers, db/linear) are unaffected: 246/246
     golden pairs identical.  Committed after 1e.
+2c. (2026-11-03) The laws on the 10x14 frame plant, with plots.  Scripts in control_laws/tests:
+      plot_law_spectra.py       SDP, fast, octave, band_average (+ capped): target / best
+                                achievable / control, per line, one PNG per law
+      plot_octave_exact_c.py    the octave law with the exact band cross-power (experiment,
+                                octave_exact_c.py), per line and as band averages
+      plot_bandavg_bands.py     band_average as 1/6-octave band averages, and the scoring of
+                                all five laws under three band definitions
+    PNGs: examples/tendrive14resp/results/plots/ (10 files).  rms dB error vs the spec, 15
+    cycles, 20-frame estimates (11 reachable channels / all 14; bands = 100-1000 Hz lines):
+                         per line         1/6-octave bands
+      SDP                0.12 / 3.26      0.12 / 2.61
+      fast               0.23 / 3.29      0.27 / 2.63
+      octave (shipped)   3.22 / 4.78      2.21 / 3.20
+      octave, exact C    2.66 / 5.43      0.32 / 2.50
+      band_average       3.27 / 5.12      3.08 / 4.23     (3.36 / 4.57 in its own definition)
+      best achievable        - / 2.40     1.14 / 2.01
+    "Best achievable" = achievable_response.achievable_diagonal: the best rms dB over ALL 14
+    channels, so it is not a floor for the 11 the SDP/fast laws reach.
+    FINDINGS.  (1) The octave law's error is its mean-of-H band average: with the exact band
+    cross-power C = mean(h_m h_m^H) the band error falls from 2.21 to 0.32 dB.  C needs only
+    the per-line H the law already gets, so its docstring "known limitation" does not apply.
+    (2) The octave law's top band (945-1060 Hz) takes in lines above fmax where the spec is
+    zero, so its target is diluted by about half (from the code; not tested alone).
+    (3) band_average is the least accurate here even in its own bands and exact CPSDs; its
+    knee sweep predicts ~2.5 dB but it achieves ~4.6 (all 14).  Cause not found; one global
+    condition number (about 18) discarding weak plant directions is the first guess.
+    Next: octave-law option (exact C, off by default; trim the top band); chase (3).
  3. The named syntax has been tested through the law constructors (the same string
     type the GUI passes) but NOT typed into the Rattlesnake GUI box or a spreadsheet
     cell.  Worth one try on the rig before relying on it.

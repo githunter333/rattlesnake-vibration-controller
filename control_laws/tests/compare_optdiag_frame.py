@@ -70,7 +70,9 @@ def run(p, cls, params, n_cycles, n_frames, seed=1):
 
     errs, ms, lines, solved = [], [], [], []
     n_solves = lambda law: law.n_fast_solves + law.n_safe_solves if hasattr(law, 'n_fast_solves') \
-        else law.n_sdp_refinements + getattr(law, 'n_stale_refinements', 0)
+        else law.n_sdp_refinements + getattr(law, 'n_stale_refinements', 0) \
+        if hasattr(law, 'n_sdp_refinements') else 0            # laws with no per-line solves (band_average)
+    refined_of = lambda law: getattr(law, 'sdp_refined', np.zeros(p['f'].size, dtype=bool))
     with contextlib.redirect_stdout(io.StringIO()):
         law = cls(p['spec'], p['warn'], p['abort'], params, None, *args, None, 0, nf, None, None)
         t0 = time.perf_counter()
@@ -78,7 +80,7 @@ def run(p, cls, params, n_cycles, n_frames, seed=1):
         X = law.control(H, p['coh'], nf, nf, None, None)
         t_init = time.perf_counter() - t0
         errs.append(err(X))
-        solved.append(int(np.sum(law.sdp_refined[sel])))
+        solved.append(int(np.sum(refined_of(law)[sel])))
         for _ in range(n_cycles):
             Gyy, Gxx, coh = cs.measure(H, X, noise_diag, n_frames, rng)
             s0 = n_solves(law)
@@ -87,13 +89,13 @@ def run(p, cls, params, n_cycles, n_frames, seed=1):
             ms.append(1e3*(time.perf_counter() - t0))
             lines.append(n_solves(law) - s0)
             errs.append(err(X))
-            solved.append(int(np.sum(law.sdp_refined[sel])))
+            solved.append(int(np.sum(refined_of(law)[sel])))
     drive = 10*np.log10(np.mean(np.real(np.einsum('fii->f', X))[sel]))
     d = np.real(np.einsum('fii->fi', X))[sel]
     c = np.abs(X[sel])/np.sqrt(np.maximum(d[:, :, None]*d[:, None, :], 1e-300))
     iu = np.triu_indices(X.shape[1], 1)
     coh_med = float(np.median(c[:, iu[0], iu[1]]))
-    refined = int(np.sum(law.sdp_refined[sel]))
+    refined = int(np.sum(refined_of(law)[sel]))
     return dict(X=X, errs=np.array(errs), solved=np.array(solved), ms=np.array(ms), lines=np.array(lines), t_init=t_init,
                 drive=drive, coh=coh_med, refined=refined, n_sel=int(sel.sum()))
 
