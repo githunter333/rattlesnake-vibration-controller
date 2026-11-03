@@ -1279,32 +1279,81 @@ class optimal_diagonal_control:
         IN-BAND ONLY.  Out of band there is no drive energy, the measured
         diagonal is noise, and the ratio is unbounded.
         """
-        if self.response_trim_gain <= 0 or last_response_cpsd is None:
+        inputs = self._trim_inputs(last_response_cpsd)
+        if inputs is None:
             return
+        z, p, tc, spec = inputs
+
+        scored = self._trim_score(z, p, tc, spec)
+        if scored is None:
+            return
+        ok, gate_ok, err_db, in_band, n_scored, n_gated, n_moving = scored
+
+        if self.y_trim is None:
+            self.y_trim = np.ones_like(spec)
+        trim_db = 10*np.log10(np.maximum(self.y_trim, 1e-30))
+
+        # Nothing to act on AND nothing accumulated to bleed off: return
+        # exactly as the pre-leak code did.
+        if n_moving == 0 and not np.any(np.abs(trim_db) > 0.0):
+            self._p_commanded = None
+            self._target_commanded = None
+            return
+
+        step_db, n_leaked = self._trim_step(err_db, ok, gate_ok, in_band, trim_db, spec)
+
+        new_trim_db = np.clip(trim_db + step_db,
+                              -self.response_trim_limit_db, self.response_trim_limit_db)
+        applied_db = new_trim_db - trim_db
+        moved_mask = applied_db != 0.0
+        self.y_trim = 10.0**(new_trim_db/10.0)
+        self.n_trim_updates += 1
+
+        n_bins_scaled = self._trim_rescale_output(applied_db, moved_mask, spec)
+
+        if self.n_trim_updates <= 5 or self.n_trim_updates % 20 == 0:
+            self._log_trim_update(n_scored, n_gated, n_moving, n_leaked, applied_db,
+                                  moved_mask, new_trim_db, in_band, n_bins_scaled)
+
+        self._p_commanded = None
+        self._target_commanded = None
+
+    def _trim_inputs(self, last_response_cpsd):
+        """The measured and the commanded diagonals the trim compares, as (z, p, tc, spec),
+        or None when there is nothing it may act on this cycle (trim off, no measurement,
+        frozen after a level change, nothing cached from the last command, or shapes that
+        do not line up).  Counts the freeze down as a side effect."""
+        if self.response_trim_gain <= 0 or last_response_cpsd is None:
+            return None
         if self._trim_frozen_calls > 0:
             self._trim_frozen_calls -= 1
             self._p_commanded = None
             self._target_commanded = None
-            return
+            return None
         if self._p_commanded is None or self._target_commanded is None:
-            return
+            return None
 
         z = np.real(np.einsum('fmm->fm', last_response_cpsd))
         if z.shape != self.y_diag_target.shape:
-            return
+            return None
         z = np.nan_to_num(z, nan=0.0, posinf=0.0, neginf=0.0)
         p = self._p_commanded
         tc = self._target_commanded
         spec = self.y_diag_target
         if p.shape != z.shape or tc.shape != z.shape:
-            return
+            return None
+        return z, p, tc, spec
 
+    def _trim_score(self, z, p, tc, spec):
+        """Which channel-bins the trim may act on: scored (in band, everything positive),
+        passed the solver-agreement gate, and outside the deadband.  Returns (ok, gate_ok,
+        err_db, in_band, n_scored, n_gated, n_moving), or None if nothing is scored."""
         in_band = spec.max(axis=1) > 0
         ok = (np.broadcast_to(in_band[:, None], z.shape)
               & (z > 0) & (p > 0) & (tc > 0) & (spec > 0))
         n_scored = int(ok.sum())
         if n_scored == 0:
-            return
+            return None
 
         # GATE: did the solver get what it asked for on this bin/channel?
         shortfall_db = np.zeros_like(z)
@@ -1318,18 +1367,11 @@ class optimal_diagonal_control:
         err_db[ok] = 10*np.log10(z[ok]/spec[ok])
         ok &= np.abs(err_db) > self.response_trim_deadband_db
         n_moving = int(ok.sum())
+        return ok, gate_ok, err_db, in_band, n_scored, n_gated, n_moving
 
-        if self.y_trim is None:
-            self.y_trim = np.ones_like(spec)
-        trim_db = 10*np.log10(np.maximum(self.y_trim, 1e-30))
-
-        # Nothing to act on AND nothing accumulated to bleed off: return
-        # exactly as the pre-leak code did.
-        if n_moving == 0 and not np.any(np.abs(trim_db) > 0.0):
-            self._p_commanded = None
-            self._target_commanded = None
-            return
-
+    def _trim_step(self, err_db, ok, gate_ok, in_band, trim_db, spec):
+        """How far each channel-bin's trim moves this cycle, in dB, and how many are
+        leaking back toward zero: (step_db, n_leaked)."""
         step_db = np.clip(-self.response_trim_gain*err_db,
                           -self.response_trim_step_db, self.response_trim_step_db)
         step_db[~ok] = 0.0
@@ -1352,16 +1394,12 @@ class optimal_diagonal_control:
         if n_leaked:
             step_db[idle] = -(np.sign(trim_db[idle])
                               * np.minimum(np.abs(trim_db[idle]), _TRIM_LEAK_DB))
+        return step_db, n_leaked
 
-        new_trim_db = np.clip(trim_db + step_db,
-                              -self.response_trim_limit_db, self.response_trim_limit_db)
-        applied_db = new_trim_db - trim_db
-        moved_mask = applied_db != 0.0
-        self.y_trim = 10.0**(new_trim_db/10.0)
-        self.n_trim_updates += 1
-
-        # Realize the common part of each bin's change immediately (see
-        # SPEED above).  Mean over the channels that actually moved.
+    def _trim_rescale_output(self, applied_db, moved_mask, spec):
+        """Realize the common part of each bin's change immediately (see SPEED in
+        _update_response_trim): rescale the stored drive CPSD.  Returns how many bins."""
+        # Mean over the channels that actually moved.
         n_bins_scaled = 0
         if self.output_cpsd is not None and self.output_cpsd.shape[0] == spec.shape[0]:
             # Follow moved_mask, not ok -- leaked bins changed too, and the
@@ -1373,25 +1411,24 @@ class optimal_diagonal_control:
                 g = 10.0**(g_db/10.0)
                 self.output_cpsd[rows] *= g[:, None, None]
                 n_bins_scaled = int(rows.size)
+        return n_bins_scaled
 
-        if self.n_trim_updates <= 5 or self.n_trim_updates % 20 == 0:
-            moved = applied_db[moved_mask]
-            at_clamp = int(np.sum(np.abs(new_trim_db[in_band]) >=
-                                  self.response_trim_limit_db - 1e-9))
-            print(f"[optimal_diagonal_control] response-error trim #{self.n_trim_updates}: "
-                  f"{n_scored} in-band channel-bins scored, {n_gated} passed the "
-                  f"{self.response_trim_gate_db:g} dB solver-agreement gate, "
-                  f"{n_moving} outside the "
-                  f"{self.response_trim_deadband_db:g} dB deadband; "
-                  f"{n_leaked} leaking back toward 0; "
-                  f"applied median {(np.median(moved) if moved.size else 0.0):+.3f} dB "
-                  f"(max |{(np.abs(moved).max() if moved.size else 0.0):.3f}|), "
-                  f"{n_bins_scaled} bins rescaled "
-                  f"in place, {at_clamp} channel-bins at the "
-                  f"+/-{self.response_trim_limit_db:g} dB clamp.", flush=True)
-
-        self._p_commanded = None
-        self._target_commanded = None
+    def _log_trim_update(self, n_scored, n_gated, n_moving, n_leaked, applied_db, moved_mask,
+                         new_trim_db, in_band, n_bins_scaled):
+        moved = applied_db[moved_mask]
+        at_clamp = int(np.sum(np.abs(new_trim_db[in_band]) >=
+                              self.response_trim_limit_db - 1e-9))
+        print(f"[optimal_diagonal_control] response-error trim #{self.n_trim_updates}: "
+              f"{n_scored} in-band channel-bins scored, {n_gated} passed the "
+              f"{self.response_trim_gate_db:g} dB solver-agreement gate, "
+              f"{n_moving} outside the "
+              f"{self.response_trim_deadband_db:g} dB deadband; "
+              f"{n_leaked} leaking back toward 0; "
+              f"applied median {(np.median(moved) if moved.size else 0.0):+.3f} dB "
+              f"(max |{(np.abs(moved).max() if moved.size else 0.0):.3f}|), "
+              f"{n_bins_scaled} bins rescaled "
+              f"in place, {at_clamp} channel-bins at the "
+              f"+/-{self.response_trim_limit_db:g} dB clamp.", flush=True)
 
     # ------------------------------------------------------------------
     def system_id_update(self,
