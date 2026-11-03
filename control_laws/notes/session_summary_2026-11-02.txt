@@ -297,10 +297,20 @@ OPEN ITEMS
     the per-line H the law already gets, so its docstring "known limitation" does not apply.
     (2) The octave law's top band (945-1060 Hz) takes in lines above fmax where the spec is
     zero, so its target is diluted by about half (from the code; not tested alone).
-    (3) band_average is the least accurate here even in its own bands and exact CPSDs; its
-    knee sweep predicts ~2.5 dB but it achieves ~4.6 (all 14).  Cause not found; one global
-    condition number (about 18) discarding weak plant directions is the first guess.
-    Next: octave-law option (exact C, off by default; trim the top band); chase (3).
+    (3) band_average looked worst here (4.57 dB rms, all 14, in its own bands).  Cause, found with
+    tests/bandavg_gap.py: its automatic condition number (kappa) comes out too low.  The knee
+    sweep (_resolve_auto_kappa) predicts each candidate with the plain regularised minimum-norm
+    fit and drops negative eigenvalues; the real solve (_solve_bands -> _realizable) refits over
+    PSD drives when that costs more than 0.1 dB.  So the sweep's prediction RISES with kappa
+    (2.5 dB at 18 -> 11.5 dB at 1e5, mean |dB|) while the real solve's error FALLS (2.06 at 18 ->
+    0.9 from kappa 100 up).  The sweep picks kappa 18; the same rule applied to the real solve
+    picks 100.  Law's own bands, 20-frame closed loop, 10x14 (rms dB, all 14 / 11 reachable):
+      auto kappa 18   4.57 / 3.36      kappa 100   2.81 / 0.94      kappa 1000   2.76 / 0.51 (1st solve)
+    Drive cost: -26.5 dB at kappa 18, -21.6 at 100 (the SDP law is at about -12).  The earlier
+    "predicted 2.5 vs achieved 4.6" was partly a metric difference (the sweep predicts mean |dB|;
+    the achieved mean |dB| is 2.06, so the law does meet its own forecast), partly this.
+    Next: octave-law option (exact C, off by default; trim the top band); band_average knee
+    from the real solve (option, off by default).
  3. The named syntax has been tested through the law constructors (the same string
     type the GUI passes) but NOT typed into the Rattlesnake GUI box or a spreadsheet
     cell.  Worth one try on the rig before relying on it.
