@@ -409,7 +409,7 @@ def check(selected, strict, rtol, atol_db, law_dir=LAW_DIR):
             print(f"FAIL     {sc['name']:32s} not in the recording (run --record)")
             n_fail += 1
             continue
-        if g['definition'] != sc:
+        if g['definition'] != json.loads(json.dumps(sc)):   # JSON turns int keys and tuples into str and list
             print(f"FAIL     {sc['name']:32s} scenario definition differs from the recording (run --record if intended)")
             n_fail += 1
             continue

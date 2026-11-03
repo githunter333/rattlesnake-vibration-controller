@@ -888,56 +888,86 @@ class optimal_diagonal_control:
              never get under that no matter how many times they're
              re-solved) -- closes the gap where step 2 can never reconsider
              a bin once every bin has been refined at least once
+
+        Each step is its own method (_refine_drifted_bins, _refine_new_bins,
+        _refine_stale_bins) and takes what is left of the budget; the time budget
+        (max_solve_ms_per_update) is shared through _time_left and _solve_line.
         """
         self._n_calls += 1
         H_clean = np.nan_to_num(transfer_function, nan=0.0, posinf=0.0, neginf=0.0)
         H_clean = self._reject_diverged_frf(H_clean)
         self._H_last_used = H_clean
         H_changed = self.H_cache is None or not np.array_equal(H_clean, self.H_cache)
+        t0 = self._start_call_clock()
         budget = self.max_bins_per_update
+
+        fixed = self._refine_drifted_bins(H_clean, budget)
+        n_fix = int(fixed.size)
+        budget -= n_fix
+        n_refine = self._refine_new_bins(H_clean, budget)
+        budget -= n_refine
+        n_stale = self._refine_stale_bins(H_clean, budget, fixed)
+
+        self_rms_per_channel = self._self_predicted_rms(H_clean)
+        self._escape_deadlock_if_starved(
+            H_clean, worked=(n_fix > 0 or n_refine > 0 or n_stale > 0))
+        if self._idle_call_suppressed(H_changed, n_fix, n_refine, n_stale):
+            return
+        self._log_refine_call(H_changed, t0, n_fix, n_refine, n_stale, self_rms_per_channel)
+
+    # --- the time budget, shared by the three steps -------------------------------------
+    def _start_call_clock(self):
+        """Per-call time-budget state; returns the call's start time."""
         # Time budget (max_solve_ms_per_update).  Checked BEFORE each solve;
         # the first solve of a call always runs, so a budget smaller than one
         # solve still makes progress.  Step 1 may use at most half the time,
         # mirroring its half-the-count cap.
-        _t0 = time.perf_counter()
-        _limit = self.max_solve_ms_per_update/1000.0
+        t0 = time.perf_counter()
         self._solves_this_call = 0
         self._stopped_by_time = False
-        # PREDICTIVE: a solve is started only if the time spent so far PLUS a
-        # running estimate of one solve still fits.  A plain "is there time
-        # left?" check let one ~100 ms SDP solve start just under a 300 ms
-        # limit and finish far past it (12-drive test: 560-670 ms calls).
-        def _time_left(fraction=1.0):
-            if _limit <= 0 or self._solves_this_call == 0:
-                return True
-            # SOLVE time only: the scheduler's fixed bookkeeping before the
-            # first solve (error triage over the whole band) is not counted --
-            # at 12 drives x 30 controls it is ~250 ms on its own, and counting
-            # it left room for one solve per call.
-            est = getattr(self, '_solve_s_avg', 0.0)
-            if self._solve_s_this_call + est <= fraction*_limit:
-                return True
-            self._stopped_by_time = True
-            return False
-        def _solve(f):
-            ts = time.perf_counter()
-            X = self._solve_one_bin(H_clean[f], self._eff_target(f), X_warm=self.output_cpsd[f])
-            dt = time.perf_counter() - ts
-            # Running average of one solve.  The law's FIRST solve is left out:
-            # it includes building the cvxpy problem (the SDP is built once and
-            # reused), several times a normal solve, and seeding the average
-            # with it held the 12-drive test at one solve per call for many
-            # calls while the average decayed.
-            self._n_solves_life = getattr(self, '_n_solves_life', 0) + 1
-            if self._n_solves_life > 1:
-                prev = getattr(self, '_solve_s_avg', None)
-                self._solve_s_avg = dt if prev is None else 0.7*prev + 0.3*dt
-            self._solves_this_call += 1
-            self._solve_s_this_call += dt
-            return X
         self._solve_s_this_call = 0.0
+        return t0
 
-        # --- Step 1: re-solve drifted, previously-refined bins ---
+    def _time_left(self, fraction=1.0):
+        """May another line be solved in this call?  PREDICTIVE: a solve is started
+        only if the time spent so far PLUS a running estimate of one solve still fits.
+        A plain "is there time left?" check let one ~100 ms SDP solve start just under a
+        300 ms limit and finish far past it (12-drive test: 560-670 ms calls)."""
+        limit = self.max_solve_ms_per_update/1000.0
+        if limit <= 0 or self._solves_this_call == 0:
+            return True
+        # SOLVE time only: the scheduler's fixed bookkeeping before the
+        # first solve (error triage over the whole band) is not counted --
+        # at 12 drives x 30 controls it is ~250 ms on its own, and counting
+        # it left room for one solve per call.
+        est = getattr(self, '_solve_s_avg', 0.0)
+        if self._solve_s_this_call + est <= fraction*limit:
+            return True
+        self._stopped_by_time = True
+        return False
+
+    def _solve_line(self, H_clean, f):
+        """Solve line f against the current FRF, keeping the running solve-time average."""
+        ts = time.perf_counter()
+        X = self._solve_one_bin(H_clean[f], self._eff_target(f), X_warm=self.output_cpsd[f])
+        dt = time.perf_counter() - ts
+        # Running average of one solve.  The law's FIRST solve is left out:
+        # it includes building the cvxpy problem (the SDP is built once and
+        # reused), several times a normal solve, and seeding the average
+        # with it held the 12-drive test at one solve per call for many
+        # calls while the average decayed.
+        self._n_solves_life = getattr(self, '_n_solves_life', 0) + 1
+        if self._n_solves_life > 1:
+            prev = getattr(self, '_solve_s_avg', None)
+            self._solve_s_avg = dt if prev is None else 0.7*prev + 0.3*dt
+        self._solves_this_call += 1
+        self._solve_s_this_call += dt
+        return X
+
+    # --- step 1 -----------------------------------------------------------------------------
+    def _refine_drifted_bins(self, H_clean, budget):
+        """Step 1: re-solve previously-refined lines whose FRF has drifted.  Returns the
+        lines it re-solved."""
         # Capped at half the budget so persistent (or noise-driven false-
         # positive) drift can never fully starve step 2's new-bin coverage --
         # without this cap, small run-to-run FRF jitter that keeps tripping
@@ -970,9 +1000,9 @@ class optimal_diagonal_control:
         n_fix = min(drifted.size, drift_budget, budget)
         done = []
         for f in drifted[:n_fix]:
-            if not _time_left(0.5):
+            if not self._time_left(0.5):
                 break
-            self.output_cpsd[f] = _solve(f)
+            self.output_cpsd[f] = self._solve_line(H_clean, f)
             self.H_cache[f] = H_clean[f]
             done.append(f)
         fixed_this_call = np.array(done, dtype=int)
@@ -980,9 +1010,12 @@ class optimal_diagonal_control:
         if n_fix > 0:
             self.err_db_cache[fixed_this_call] = self._err_db(H_clean, fixed_this_call)
             self.n_frf_updates += int(n_fix)
-        budget -= n_fix
+        return fixed_this_call
 
-        # --- Step 2: worst-error not-yet-refined bins get remaining budget ---
+    # --- step 2 -----------------------------------------------------------------------------
+    def _refine_new_bins(self, H_clean, budget):
+        """Step 2: solve the not-yet-refined lines with the largest predicted error, within
+        what is left of the budget.  Returns how many it solved."""
         not_refined = np.where(~self.sdp_refined)[0]
         self.n_deferred = 0
         n_refine = 0
@@ -995,9 +1028,9 @@ class optimal_diagonal_control:
 
             n_refine = 0
             for f in order[:min(order.size, budget)]:
-                if not _time_left():
+                if not self._time_left():
                     break
-                self.output_cpsd[f] = _solve(f)
+                self.output_cpsd[f] = self._solve_line(H_clean, f)
                 self.sdp_refined[f] = True
                 self.H_cache[f] = H_clean[f]
                 n_refine += 1
@@ -1005,10 +1038,14 @@ class optimal_diagonal_control:
             if n_refine > 0:
                 self.err_db_cache[order[:n_refine]] = self._err_db(H_clean, order[:n_refine])
             self.n_sdp_refinements += int(n_refine)
-            budget -= n_refine
+        return n_refine
 
-        # --- Step 3: stale-error re-triage on ALREADY-refined bins, using
-        # whatever budget steps 1 and 2 didn't spend. Step 1 only catches
+    # --- step 3 -----------------------------------------------------------------------------
+    def _refine_stale_bins(self, H_clean, budget, fixed_this_call):
+        """Step 3: stale-error re-triage on ALREADY-refined lines (not the ones step 1 just
+        re-solved), using whatever budget steps 1 and 2 didn't spend.  Returns how many it
+        re-solved."""
+        # Step 1 only catches
         # bins whose H moved a lot (>frf_update_threshold); a bin can drift
         # less than that and still be hurting accuracy, and once every bin
         # is refined (not_refined empty forever) step 2 can never reconsider
@@ -1024,7 +1061,7 @@ class optimal_diagonal_control:
         n_stale = 0
         self.n_stale_deferred = 0
         refined_idx = np.where(self.sdp_refined)[0]
-        if n_fix > 0:
+        if fixed_this_call.size > 0:
             refined_idx = refined_idx[~np.isin(refined_idx, fixed_this_call)]
         if budget > 0 and refined_idx.size > 0:
             err_db_r = self._err_db(H_clean, refined_idx)
@@ -1036,16 +1073,20 @@ class optimal_diagonal_control:
 
             n_stale = 0
             for f in stale_order[:min(stale_order.size, budget)]:
-                if not _time_left():
+                if not self._time_left():
                     break
-                self.output_cpsd[f] = _solve(f)
+                self.output_cpsd[f] = self._solve_line(H_clean, f)
                 self.H_cache[f] = H_clean[f]
                 n_stale += 1
             self.n_stale_deferred = int(stale_order.size - n_stale)
             if n_stale > 0:
                 self.err_db_cache[stale_order[:n_stale]] = self._err_db(H_clean, stale_order[:n_stale])
             self.n_stale_refinements += int(n_stale)
+        return n_stale
 
+    # --- what the call reports -------------------------------------------------------------
+    def _self_predicted_rms(self, H_clean):
+        """Per-channel rms dB error this law's OWN H and current solution predict."""
         # Self-consistency check: what does the control law's OWN H estimate
         # and current solution predict the achieved diagonal error to be?
         # If this stays near 0 dB while Rattlesnake's live measured Response
@@ -1059,18 +1100,17 @@ class optimal_diagonal_control:
             achieved_all = np.maximum(np.real(np.einsum('fmm->fm', Y_all)), 1e-30)
             target_all = np.maximum(self._eff_target(in_band), 1e-30)
             err_db_all = 10 * np.log10(achieved_all / target_all)
-            self_rms_per_channel = np.sqrt(np.mean(err_db_all ** 2, axis=0))
-        else:
-            self_rms_per_channel = np.zeros(self.M)
+            return np.sqrt(np.mean(err_db_all ** 2, axis=0))
+        return np.zeros(self.M)
 
+    def _idle_call_suppressed(self, H_changed, n_fix, n_refine, n_stale):
+        """Count idle calls and print the idle notices.  True if this call's main log line
+        should be skipped."""
         # A call that solved nothing, deferred nothing and saw no FRF movement
         # has nothing to report that the previous line did not already say.
         # Log the first few, then one in every _log_every_when_idle, so the
         # loop stays visibly alive without flooding.  Any real activity resets
         # the counter and restores full logging immediately.
-        self._escape_deadlock_if_starved(
-            H_clean, worked=(n_fix > 0 or n_refine > 0 or n_stale > 0))
-
         idle = (not H_changed and n_fix == 0 and n_refine == 0 and n_stale == 0
                 and self.n_deferred == 0 and self.n_stale_deferred == 0)
         if idle:
@@ -1085,10 +1125,10 @@ class optimal_diagonal_control:
                   f"static -- nothing left to do. Logging one call in "
                   f"{self._log_every_when_idle} from here. THIS IS NOT A HANG.",
                   flush=True)
-        if (idle and self._idle_repeats > 3
-                and self._idle_repeats % self._log_every_when_idle != 0):
-            return
+        return bool(idle and self._idle_repeats > 3
+                    and self._idle_repeats % self._log_every_when_idle != 0)
 
+    def _log_refine_call(self, H_changed, t0, n_fix, n_refine, n_stale, self_rms_per_channel):
         print(f"[optimal_diagonal_control] _refine_batch call #{self._n_calls}: "
               f"H_changed_since_last={H_changed}, drifted_resolved={n_fix}, "
               f"newly_refined={n_refine}, n_deferred={self.n_deferred}, "
@@ -1097,7 +1137,7 @@ class optimal_diagonal_control:
               f"cum_stale_refinements={self.n_stale_refinements}, "
               f"cum_solver_failures={self.n_solver_failures}, n_refined_total={int(np.sum(self.sdp_refined))}/{self.F}, "
               f"solves_this_call={self._solves_this_call} ({1e3*self._solve_s_this_call:.0f} ms solving, "
-              f"{1e3*(time.perf_counter() - _t0 - self._solve_s_this_call):.0f} ms other)"
+              f"{1e3*(time.perf_counter() - t0 - self._solve_s_this_call):.0f} ms other)"
               f"{' (time limit ' + format(self.max_solve_ms_per_update, 'g') + ' ms reached)' if self._stopped_by_time else ''}, "
               f"self_predicted_rms_db_per_channel={np.array2string(self_rms_per_channel, precision=2)}"
               f"{self._trim_log_fragment()}",
