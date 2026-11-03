@@ -508,7 +508,40 @@ class optimal_diagonal_control:
         # is in _BASE_PARAMS above.
         self._read_parameters(extra_parameters, optimal_diagonal_control.OWN_PARAMS)
 
+        self._init_solution_state()
+        self._init_sdp_cache()
+        self._init_trim_state()
+        self._init_guard_state()
+        self._init_counters()
+        self._log_construction(transfer_function, sysid_response_cpsd)
+
+        if transfer_function is not None:
+            self._initialize(transfer_function, sysid_response_cpsd)
+
+    # --- state, by what it is for (all set before any call can use it) -------------------
+    def _init_solution_state(self):
+        """The drive solution and what it was derived from."""
         self.output_cpsd = None    # (F, N, N) current best drive CPSD per bin
+        self._H_last_used = None
+        self._sysid_response_cpsd = None
+        self.H_cache = None        # (F, M, N) FRF each bin's current solution was derived from
+        self.sdp_refined = None    # (F,) bool -- True once a bin has been through the SDP
+        self.err_db_cache = None   # (F,) achieved dB error each bin had the last time it was solved --
+                                    # lets step 3 detect "got worse since I last touched this bin" instead
+                                    # of "isn't perfect" (many bins, e.g. near a structural null, can never
+                                    # get under error_threshold_db no matter how many times they're re-solved)
+        self.N = None
+        self._initialized = False
+
+    def _init_sdp_cache(self):
+        """The parametrized cvxpy problem, built once on the first solve."""
+        self._sdp_prob = None        # cached parametrized cp.Problem, built once (see _build_sdp_problem)
+        self._sdp_X = None
+        self._sdp_W_params = None
+        self._sdp_y_param = None
+        self._sdp_shape = None       # (M, N) the cached problem was built for
+
+    def _init_trim_state(self):
         # Response-error trim state.  y_trim stays None while the trim is
         # off, and _eff_target then returns the specification slice itself,
         # so the solve is bit-identical to the pre-trim code.
@@ -518,42 +551,34 @@ class optimal_diagonal_control:
         self._trim_frozen_calls = 0
         self._trim_gate_fail = None   # (F, M) consecutive gate failures per bin
         self._test_level_db = None
-        self._H_last_used = None
         self.n_trim_updates = 0
-        # Console throttling -- see _should_log.  Once every bin is solved and the FRF is
-        # frozen, _refine_batch does no work, so repeated identical log lines are suppressed
-        # (two print statements per cycle read as a hung process).
+
+    def _init_guard_state(self):
+        """Live-FRF guards, the deadlock escape and log throttling.  Set here as well as in
+        _initialize so a harness that reaches _refine_batch without going through
+        _initialize cannot raise AttributeError."""
+        # Console throttling -- see _idle_call_suppressed.  Once every bin is solved and the
+        # FRF is frozen, _refine_batch does no work, so repeated identical log lines are
+        # suppressed (two print statements per cycle read as a hung process).
         self._idle_repeats = 0
-        # Live-FRF guard state.  Set here as well as in _initialize so a harness that
-        # reaches _refine_batch without going through _initialize cannot raise
-        # AttributeError.
+        self._log_every_when_idle = 50
         self._frf_rejected = 0
         self._last_frf_rejected = 0
         self._starved_calls = 0
         self._n_escapes = 0
-        self._sysid_response_cpsd = None
-        self._log_every_when_idle = 50
-        self.H_cache = None        # (F, M, N) FRF each bin's current solution was derived from
-        self.sdp_refined = None    # (F,) bool -- True once a bin has been through the SDP
-        self.err_db_cache = None   # (F,) achieved dB error each bin had the last time it was solved --
-                                    # lets step 3 detect "got worse since I last touched this bin" instead
-                                    # of "isn't perfect" (many bins, e.g. near a structural null, can never
-                                    # get under error_threshold_db no matter how many times they're re-solved)
-        self.N = None
-        self._sdp_prob = None        # cached parametrized cp.Problem, built once (see _build_sdp_problem)
-        self._sdp_X = None
-        self._sdp_W_params = None
-        self._sdp_y_param = None
-        self._sdp_shape = None       # (M, N) the cached problem was built for
+
+    def _init_counters(self):
+        """Diagnostic counters.  Read from outside by the test and comparison scripts, so
+        the names are part of the interface."""
         self.n_frf_updates = 0       # diagnostic: drifted-refined-bin re-solves
         self.n_sdp_refinements = 0   # diagnostic: total worst-error refinements performed
         self.n_deferred = 0          # diagnostic: never-refined bins still above threshold, awaiting SDP budget
         self.n_stale_refinements = 0 # diagnostic: already-refined bins re-solved due to stale predicted error
         self.n_stale_deferred = 0    # diagnostic: stale already-refined bins still above threshold, awaiting budget
         self.n_solver_failures = 0   # diagnostic: SDP solves that fell back to pinv
-        self._initialized = False
         self._n_calls = 0            # diagnostic: total system_id_update()/control() calls
 
+    def _log_construction(self, transfer_function, sysid_response_cpsd):
         print(f"[optimal_diagonal_control] __init__: F={self.F} M={self.M} "
               f"reg={self.reg:g} frf_update_threshold={self.frf_update_threshold:g} "
               f"max_bins_per_update={self.max_bins_per_update} "
@@ -562,9 +587,6 @@ class optimal_diagonal_control:
               f"transfer_function={'given' if transfer_function is not None else 'None'} "
               f"sysid_response_cpsd={'given' if sysid_response_cpsd is not None else 'None'}",
               flush=True)
-
-        if transfer_function is not None:
-            self._initialize(transfer_function, sysid_response_cpsd)
 
     # ------------------------------------------------------------------
     # Fast "buzz" baseline (Rattlesnake's own match_coherence_phase logic)
