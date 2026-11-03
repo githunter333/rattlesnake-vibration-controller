@@ -41,6 +41,9 @@ response_trim_gain: 1.0      # trim on
 
 A name the law does not have, or a value it cannot read, stops the test from
 starting with a message naming the line and the nearest valid name.
+A string with no `:` anywhere is read as the comma form below, so a named line whose colon
+is missing (`reg = 1e-5`, `max_bins_per_update 10`) is refused with a message as well, not run
+on defaults.
 
 **Comma-separated (the original form).**  Positional, by the *field* number in the
 tables below; an empty field means "the default"; a field that cannot be read

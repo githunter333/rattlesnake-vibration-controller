@@ -139,6 +139,24 @@ def _():
     assert law.max_bins_per_update == 200 and law.reg == 1e-6
 
 
+@check('a named-form line whose colon went missing raises instead of running on defaults')
+def _():
+    for key in ('SDP', 'fast', 'octave'):
+        for text in ('reg = 1e-5', 'reg = 1e-5\nmax_bins_per_update = 10', 'max_bins_per_update 10',
+                     'response_trim_gain', 'max_bins_per_update=10', 'reg\uff1a 1e-5',
+                     '1e-6,0.5,max_bins_per_update'):
+            raises(key, text, 'no \':\'', 'name: value')
+    raises('fast', 'bm_rank 3', 'no \':\'')            # one law's name, read by another's table
+    raises('SDP', 'bm_rank 3', 'no \':\'')
+
+
+@check('legacy strings with words in them (db, linear, junk, inf/nan) are not mistaken for the named form')
+def _():
+    for text in ('1e-6,0.5,20,1.0,0.95,6,-9.0,db', '1e-6,0.5,20,1.0,0.95,6,-9.0,linear,2',
+                 '1e-6,abc,30', 'inf,nan,None', '1E-6'):
+        build('SDP', text)                                       # warns at most, never raises
+
+
 @check('empty or missing strings give the defaults')
 def _():
     for text in ('', None, '   '):

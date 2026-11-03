@@ -1,0 +1,278 @@
+OPTIMAL DIAGONAL LAWS: CLEANUP SESSION
+2026-11-02
+================================================================================
+
+Repo     /Users/nhunterjr/Code/python/rattlesnake-vibration-controller
+Branch   control-laws-on-dev  (fork: githunter333/rattlesnake-vibration-controller)
+State    Fork is at 70ff25e0 (you pushed 1a-1d); 1e (8daaa0a2) is one commit ahead.
+Env      conda env "rattlesnake" (has cvxpy).  Every test below runs there.
+
+The goal of the day was the cleanup list from your Oct 30-31 notes, items 1a-1d,
+for optimal_diagonal_control.py, optimal_diagonal_control_fast.py and
+octave_band_switching_control.py.  1a, 1b, 1c, 1d and 1e are finished (1d without the
+"diagnostics dict", which was dropped on purpose; see below).  Nothing about what the
+laws compute changed: every step was proven against recorded output, bit for bit.
+
+
+WHERE THINGS STOOD AT THE START
+--------------------------------------------------------------------------------
+* The session began in ~/Documents/Code/python/rattlesnake-vibration-controller,
+  which is now empty.  The real repo is ~/Code/python/rattlesnake-vibration-
+  controller.  The session was re-pointed there.
+* That clone was 4 commits behind your Oct 30-31 work.  Three files (frame_plant.py,
+  frame18_model.npz, check_control_laws_on_dev.py) were identical to the incoming
+  versions and blocked the pull; they were removed and the pull fast-forwarded.
+* The octave / spectral-analysis / example work from July lived on other branches
+  (main, optimaldiaglaws, control-law-development-2026-09, ...), not on
+  control-laws-on-dev.  control-law-development-2026-09 is a superset of the others,
+  so 361 files from it (spectral_analysis/, siso_octave_control/, examples/) plus the
+  10x14 channel table and README were committed onto control-laws-on-dev
+  (50ca7c06).  No new branch.
+* Still only on this disk, in no commit anywhere: examples/sixdrive12resp/results/
+  runs (40 GB, ~174 .nc4 files), the .nc4 files in control_laws/, regenerable .npz
+  results, exlanatoins/, temp/, and band_average.py (git-excluded on purpose).
+* Permission prompts: working outside the session folder caused most of them.  The
+  session now lives in the repo.  A read-only allowlist was added to
+  .claude/settings.json (git rev-list, ls-tree, merge-base, check-ignore; conda env
+  list) and committed (e3f4dd4b).
+
+
+1a  GOLDEN-OUTPUT TEST                                                  [done]
+--------------------------------------------------------------------------------
+control_laws/tests/golden_optdiag.py runs fixed closed-loop scenarios on the frame
+plants (6x8, 10x14, 10x14 rank-deficient) with seeded measurement noise and compares
+each cycle's drive CPSD with a recording.  The laws use no random numbers and repeat
+bit for bit, so the check is exact first (a hash per cycle) and numeric second
+(--rtol / --atol-db).  --strict demands bit-identical output.  --law-dir tests a
+copy of the laws, which is how every mutation check below was done.
+
+How good a net is it?  Measured, not assumed:
+  * Shifting each of the 30 parameter reads by one position, and disabling each of
+    the 25 parameter fields, in a copy of the laws: all caught.  The first version
+    missed 11 of 30; the misses were fields whose test values did not change the
+    output (error_threshold_db does nothing below ~12 dB on these plants, svd_floor
+    nothing below the plant's small singular ratios, a time budget that never
+    bound, an FRF that never moved).  The scenarios were fixed, not the claim.
+  * Scenarios ended at 20, then 30 (named twins, 1b), then 43 (below).
+
+Commits: b2faa157.
+
+
+1b  NAMED PARAMETERS                                                    [done]
+--------------------------------------------------------------------------------
+Before: three laws each parsed the same comma string by position, with defaults
+repeated in code, docstrings and comments, and any bad value silently dropped every
+later field.
+
+Now: one parameter table per law (name, default, conversion, legacy position),
+one parser, one place for defaults.
+  * Named form:  one "name: value" per line (or separated by ;), # comments,
+    case-insensitive, empty value = default, e.g.
+        max_bins_per_update: 10
+        max_drive_coherence: 0.8
+    A misspelled or unknown name, or an unreadable value, stops the test with a
+    message that names the line and the nearest valid name, e.g.
+        unknown parameter 'rgu' (did you mean 'reg'?)
+    (Rattlesnake catches constructor exceptions and shows them in an error dialog.)
+  * Legacy comma strings parse exactly as before; all 14 distinct archived-profile
+    strings (15 law-and-string pairs across 46 workbooks) are in the test set.  One deliberate change: a field that cannot be read keeps
+    its default with a warning and the later fields are still read.
+  * The octave law's collision is fixed for the named form.  Its five parameters
+    shared positions 6-10 with the base class, so a legacy string such as
+    "...,5,0,6,100,1000" also set error_domain 'db' and 100 IRLS passes.  Measured:
+    that made the law about 60x slower (18 s vs 0.3 s over three cycles on 6x8).
+    Legacy strings still behave that way so archived runs reproduce, and now print a
+    warning.
+  * Generated reference: control_laws/optimal_diagonal_parameters.md (name, field
+    number, default, meaning), produced from the tables by tests/make_parameter_
+    reference.py; a test fails if it goes stale.  The old docstring said
+    frf_update_threshold defaulted to 0.05; it has been 0.5 since 2026-09-19.
+
+Proof:
+  * Parameter golden (tests/golden_params.py): 82 strings x 3 laws = 246 pairs.  A
+    baseline taken from the OLD laws (commit b2faa157) matched the rewritten laws on
+    179 of 183 pairs; the 4 differences are the intended bad-value change.
+  * Twins: all 56 legacy strings, written with names by hand, resolve identically
+    (112 of 112).  Ten scenarios in the output golden are named twins of legacy
+    ones and must hash identically.
+  * tests/check_named_params.py: 20 checks of the syntax; each shown to fail when
+    the parser is deliberately broken.
+
+Commits: 89ebe64a 912c6e25 6613b77c 58a4a3b8 3c2e4cde f99911e9.
+
+
+1c  RUN HISTORY OUT OF THE CODE                                         [done]
+--------------------------------------------------------------------------------
+Run numbers, measurements, retractions, "this was wrong the first time" and dates
+moved, verbatim, to control_laws/notes/optimal_diagonal_history.md: 51 excerpts
+under 20 anchors, each naming where it came from.  In the code each rule keeps what
+it does now, why that is right in a sentence or two, and a pointer to the entry.
+
+  * optimal_diagonal_control.py   1525 -> 1411 lines
+  * optimal_diagonal_control_fast.py  897 -> 758 lines
+
+Proof that nothing but comments and docstrings changed: the syntax trees, with
+docstrings removed, are identical to the commit before (tests/same_code.py, which
+flags even a one-character change to a constant).  Goldens unchanged.
+
+Three of the moved passages claimed things the code no longer does; the notes flag
+each: the trim-leak comment said deadband bins decay (only gate failures do); a fast-
+law docstring called 'db' the default (it is 'linear'); and the drive_rcond
+measurement table predates the move from an absolute ratio to a multiple.
+
+Kept in the code on purpose: the fast law's field-22..25 "added 2026-10-25" notes
+(they say how to reproduce older runs) and the benchmark numbers that justify why
+the fast law exists.
+
+Commit: 82f287f5.
+
+
+1d  SPLIT THE LONG METHODS, ONE LOADER HELPER                            [done]
+--------------------------------------------------------------------------------
+First, a finding.  A refactor is only as safe as the tests that run the code it
+moves, so a line trace of the golden scenarios was taken (tests/line_coverage.py;
+the "coverage" package is not installed and was not added).  170 lines never ran,
+concentrated in exactly the functions to be split: n_stale_refinements was 0 in
+every scenario, so scheduler step 3 was never exercised, and neither were the
+divergence guard, the deadlock escape, the trim's freeze and leak, the SDP solver's
+fallback, or control() before system_id_update.
+
+Thirteen scenarios were added to reach them (43 in all): a creeping FRF that makes
+solved lines stale; step 1 cut short by the time budget; an idle scheduler; an FRF
+that runs away for three cycles and recovers; a deliberately starved law (deadlock
+escape); the trim across level changes and over 60 cycles; control() first; a second
+system_id_update; construction with the FRF in hand (SDP and fast); a solver that
+raises, and one that returns nothing.  Lines never run: 170 -> 98 (base law 84% ->
+94%).  What is left is mostly guards on malformed input.  The 30 pre-existing
+scenarios hashed exactly as before.  (c602e3cf)
+
+Then the splits, each proven bit-identical on all 43 scenarios under --strict:
+  * _refine_batch, 229 lines -> a 30-line driver that reads as the algorithm, plus
+    _refine_drifted_bins, _refine_new_bins, _refine_stale_bins, _start_call_clock,
+    _time_left, _solve_line (the old closures), _self_predicted_rms,
+    _idle_call_suppressed, _log_refine_call.  (f33a8915)
+  * _update_response_trim, 174 lines (59 of them docstring) -> a 35-line driver plus
+    _trim_inputs, _trim_score, _trim_step, _trim_rescale_output, _log_trim_update.
+    (3fe08c53)
+
+  * __init__, 91 lines -> a 15-line sequence plus _init_solution_state,
+    _init_sdp_cache, _init_trim_state, _init_guard_state, _init_counters and
+    _log_construction.  The assignments are unchanged and called in a fixed order, so
+    the subclasses' habit of setting their own state before super().__init__() is
+    unaffected.  (bb67a4de)
+  * One loader helper.  The laws load their siblings so they work when Rattlesnake
+    loads a file standalone, by path.  optimal_diagonal_control.py now defines
+    load_sibling() and uses it for control_laws.py; the fast law uses it too.  One raw
+    importlib load is left in each subclass, and cannot go: the helper does not exist
+    until the base file is loaded.  Four blocks became two plus the helper.  Checked
+    by the dev loader (all 14 laws load standalone, the dropdown still lists only the
+    three law classes).  (70ff25e0)
+  * "One diagnostics dict": NOT done, on purpose.  The counters (n_sdp_refinements,
+    n_fast_solves, n_stale_refinements, ...) are read by seven other scripts (the
+    golden test, two comparison scripts, four archived example scripts), so renaming
+    them would break reproducing those analyses.  They are now grouped in one place,
+    _init_counters, and their names are documented there as interface.
+
+Longest methods now: base law _update_response_trim 99 lines (59 of them docstring),
+_reject_diverged_frf 62, _escape_deadlock_if_starved 53; fast law _h_moved 71; octave
+law _refine_batch_octave 72.  Base law 1516 lines, fast 750, octave 439.
+
+
+1e  CONSISTENCY                                                         [done]
+--------------------------------------------------------------------------------
+Three items on your list; one was a real inconsistency, one was already fine, one was
+missing guidance.
+
+  * Coherence measure.  The laws cap the MAGNITUDE |X_ij|/sqrt(X_ii X_jj) of a pair of
+    drives (the SDP constraint, the shared cap helper and the fast law's guard all do),
+    but compare_optdiag.py and compare_optdiag_frame.py reported the SQUARE under the
+    plain name, so a law sitting exactly on its 0.95 cap printed 0.90 against it.  Now
+    "drive coherence" means the magnitude everywhere; the squared measure is always
+    called coherence squared (gamma^2).  Defined once in the base law's docstring, said
+    in the parameter description and the cap helper, and the two comparison scripts
+    report the magnitude (their old numbers are the squares of the new ones, e.g. the
+    0.19 / 0.30 gamma^2 medians in your Oct 30-31 table read about 0.44 / 0.55 now).
+    tests/check_coherence_measure.py pins it, including a run of the SDP law on a real
+    plant with a cap of 0.5 (it stays under and reaches it); both mutations tried were
+    caught.
+  * Parameter doc.  Mostly settled by 1b's generated reference.  The remaining risk was
+    docstring prose quoting a default that the table has since changed (it had: 0.05 vs
+    0.5 for frf_update_threshold).  check_named_params.py now compares every "default X"
+    in the three docstrings with the tables.  None had drifted; changing one in a copy
+    makes the check name it.
+  * Time-budget default.  Already consistent: 0 (off) in the code, the docstrings and the
+    reference.  Left at 0, because every behaviour change in these laws ships off by
+    default and archived profiles must reproduce.  What was missing was the guidance:
+    at 10 drives x 14 controls the default 20 lines per call can exceed a 1 s control
+    cycle (worst call 1.1-1.5 s).  The generated reference now has a "Choosing the time
+    budget" section.  The numbers were re-measured today with compare_optdiag_frame.py:
+    the errors (SDP 0.12 dB, fast 0.23 dB) and the fast law's line counts reproduce your
+    notes; times and the budgeted SDP row (0.63 dB, 109 lines today; 0.34 dB, 148 lines in
+    your notes) depend on the machine.  Whether the DEFAULT should change (say to 500 ms
+    for the fast law) is a policy call that is yours; the code is ready for either.
+
+No logic changed: the syntax trees of the laws and control_laws.py, ignoring docstrings
+and Param descriptions, are identical to the commit before; all 43 golden scenarios are
+bit-identical under --strict.  (8daaa0a2)
+
+
+HOW TO RUN THE CHECKS  (repo root, conda env "rattlesnake")
+--------------------------------------------------------------------------------
+  python control_laws/tests/golden_optdiag.py --strict     43 scenarios, ~3-4 min
+  python control_laws/tests/golden_params.py               parameters, no solves, seconds
+  python control_laws/tests/check_named_params.py          syntax, reference, documented defaults
+  python control_laws/tests/check_coherence_measure.py     one meaning of drive coherence
+  PYTHONPATH=src python control_laws/tests/check_control_laws_on_dev.py   all 14 laws load
+  python control_laws/tests/line_coverage.py [--lines]     what the scenarios execute, ~90 s
+  python control_laws/tests/same_code.py --rev REV FILE    comment-only change proof
+  python control_laws/tests/make_parameter_reference.py [--check]
+
+Re-record a golden (--record) only after a change that is meant to alter output, and
+say so in the commit message.  After a behaviour-preserving change it must pass
+unchanged.
+
+
+COMMITS TODAY  (oldest first; all pushed except the last)
+--------------------------------------------------------------------------------
+  50ca7c06  Bring the octave and example work onto control-laws-on-dev     (pushed)
+  e3f4dd4b  Add project permission allowlist                               (pushed)
+  b2faa157  Golden-output regression test                                  1a
+  89ebe64a  Record how the laws resolve parameter strings                  1b
+  912c6e25  Base law reads parameters from one table                       1b
+  6613b77c  Fast law reads parameters from the shared table                1b
+  58a4a3b8  Octave law reads parameters from the shared table              1b
+  3c2e4cde  Test the named syntax and pin it against the legacy form       1b
+  f99911e9  Document the named parameters, generate the reference          1b
+  82f287f5  Move run history into a notes file                             1c
+  c602e3cf  Golden scenarios for the paths the restructuring will move      1d
+  f33a8915  Split _refine_batch                                            1d
+  3fe08c53  Split _update_response_trim                                    1d
+  bb67a4de  Split __init__'s state setup by purpose                        1d
+  70ff25e0  One load_sibling helper instead of four importlib blocks        1d
+  8daaa0a2  One meaning for drive coherence; defaults checked vs the docs   1e   (not pushed)
+
+
+OPEN ITEMS
+--------------------------------------------------------------------------------
+ 1. Push 1e (8daaa0a2).  My shell cannot authenticate to GitHub; from your own
+    Terminal:  git push githunter333 control-laws-on-dev
+ 2. DECIDED (2026-11-03): max_solve_ms_per_update keeps defaulting to 0 (off), for
+    every law.  Set it per profile where a cycle must not be overrun (see the
+    "Choosing the time budget" section of optimal_diagonal_parameters.md).
+ 2b. (2026-11-03) Named syntax explored with GUI/spreadsheet-style inputs (CRLF, tabs,
+    NBSP, number cells, BOM, typos).  Everything failed loudly except a named line with
+    its colon missing ('reg = 1e-5'), which fell back to the comma reading and ran on
+    defaults with a console warning.  Fixed: such a string now raises, like other
+    named-form mistakes.  Legacy strings (numbers, db/linear) are unaffected: 246/246
+    golden pairs identical.  Committed after 1e.
+ 3. The named syntax has been tested through the law constructors (the same string
+    type the GUI passes) but NOT typed into the Rattlesnake GUI box or a spreadsheet
+    cell.  Worth one try on the rig before relying on it.
+ 4. The octave law's legacy quirk is preserved on purpose.  Say if you want legacy
+    strings fixed too; that changes what archived octave-law runs would produce.
+ 5. Remaining from your list: 1f (retire unused options: needs your call on which
+    were used on the rig).  Also item 2 (cut the 10-20 ms per-call bookkeeping),
+    3 (run 10x14 in Rattlesnake) and 4 (capped band-average law on 10x14).
+ 6. Back up the disk-only data listed at the top; git is not the place for 40 GB.
+ 7. The golden test records the law source hashes; after any source change it prints
+    "law source changed since recording".  That is informational, not a failure.

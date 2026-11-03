@@ -91,7 +91,9 @@ A name this law does not have, or a value it cannot read, stops the test from
 starting, with a message that says which line and the nearest valid name
 (Rattlesnake shows it in an error dialog).  The named form is the same for
 optimal_diagonal_control_fast and octave_band_switching_control, each of which
-adds its own names.
+adds its own names.  A string with no ':' anywhere is read as the old comma form, so
+a named line whose colon is missing ('reg = 1e-5', 'max_bins_per_update 10') is refused
+with a message too, rather than run on defaults.
 
 COMMA-SEPARATED (the original form, still accepted, and what every archived
 profile uses).  Positional; an empty field means "the default"; a field that
@@ -295,6 +297,7 @@ except ImportError as e:
 #                                                  separated by ;), # comments
 # ---------------------------------------------------------------------------
 import difflib
+import re
 
 
 def _as_int(s):
@@ -350,6 +353,22 @@ def _parse_named(text, valid):
             raise ValueError(f"parameter {name!r} is given twice")
         items[name] = value
     return items
+
+
+_NAME_LIKE = re.compile(r'[a-z]+_[a-z_0-9]*|[=\uff1a\uff1b]')
+
+
+def _reject_named_form_without_colon(parts, valid):
+    """Legacy strings are numbers (and db/linear).  A field holding a parameter name, an
+    underscore word or an '=' is a named-form line whose colon went missing; reading it
+    as legacy would run the whole test on defaults with only a console warning."""
+    for i, part in enumerate(parts):
+        low = part.lower()
+        if _NAME_LIKE.search(low) or any(name in low for name in valid):
+            raise ValueError(
+                f"parameter field {i + 1} {part.strip()[:60]!r} looks like the named form "
+                f"but has no ':' -- write one 'name: value' per line (a string with no ':' "
+                f"anywhere is read as the old comma-separated numbers)")
 
 
 _BASE_PARAMS = [
@@ -448,6 +467,7 @@ class optimal_diagonal_control:
             parsed = ('named', _parse_named(text, valid))
         else:
             parts = [x.strip() for x in text.split(',')]
+            _reject_named_form_without_colon(parts, {p.name for p in type(self).parameter_table()})
             parsed = ('legacy', {'all': parts, 'nonblank': [x for x in parts if x != '']})
         self._param_cache = (text, parsed)
         return parsed
