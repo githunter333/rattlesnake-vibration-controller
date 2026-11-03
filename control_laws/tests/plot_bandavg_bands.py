@@ -10,7 +10,7 @@ Run in the 'rattlesnake' env with PYTHONPATH=src, from the repository root:
 
     python control_laws/tests/plot_bandavg_bands.py
 
-Writes spectra_10x14_bandavg_bands.png and ..._bandavg_capped_bands.png into
+Writes spectra_10x14_band_average_law_bands.png and ..._band_average_law_capped_bands.png into
 examples/tendrive14resp/results/plots/.  The band_average runs use df 5, oct_order 6 and the drive
 RMS limit off (the plant's drive units are arbitrary).
 """
@@ -61,6 +61,6 @@ for lab, X in runs:
 b2, b10 = band_err(best, masks2), band_err(best, masks10)
 print(f"{'best achievable':72s} {rms(b2, reach):8.2f} {rms(b2, everyone):7.2f} {rms(b10, reach):13.2f} {rms(b10, everyone):12.2f}")
 
-for (lab, X), short in ((runs[3], 'bandavg_bands'), (runs[4], 'bandavg_capped_bands')):
-    path = os.path.join(out, f'spectra_10x14_{short}.png')
+for (lab, X), slug in ((runs[3], pl.SLUGS[3]), (runs[4], pl.SLUGS[4])):
+    path = pl.plot_path(out, '10x14', slug, 'bands')
     pl.figure(lab, p, X, best, lost, names, '10x14', path, bands=(masks10, cent10)); print('wrote', path)

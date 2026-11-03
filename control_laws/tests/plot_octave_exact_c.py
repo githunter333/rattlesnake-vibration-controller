@@ -5,7 +5,7 @@ plot_law_spectra.py.  Run in the 'rattlesnake' env with PYTHONPATH=src, from the
 
     python control_laws/tests/plot_octave_exact_c.py
 
-Writes spectra_10x14_octave_exactC.png, ..._octave_exactC_bands.png, ..._octave_bands.png into
+Writes spectra_10x14_octave_exactC_experiment_{lines,bands}.png and spectra_10x14_octave_law_bands.png into
 examples/tendrive14resp/results/plots/ and prints the in-band-lines score table.
 """
 import sys, os, io, contextlib
@@ -30,10 +30,11 @@ with contextlib.redirect_stdout(io.StringIO()):
 cen, lo, hi = mod._octave_band_frequencies(100.0, 1000.0, 6)
 pairs = [(m, c) for m, c in zip(((f >= l) & (f < h) & p['band'] for l, h in zip(lo, hi)), cen) if m.any()]
 bands = ([m for m, _ in pairs], np.array([c for _, c in pairs]))
-T1 = 'octave 1/6, exact band cross-power (experiment)'
-T0 = 'octave 1/6 as shipped (mean of H)'
-for title, Xx, short, b in ((T1, exact, 'octave_exactC', None), (T1, exact, 'octave_exactC_bands', bands), (T0, shipped, 'octave_bands', bands)):
-    path = os.path.join(out, f'spectra_10x14_{short}.png')
+T1 = 'EXPERIMENT, not a repo law: OCTAVE law with exact band cross-power averaging (octave_exact_c)'
+T0 = laws[2][0]                                  # the octave law as shipped
+for title, Xx, slug, view, b in ((T1, exact, 'octave_exactC_experiment', 'lines', None), (T1, exact, 'octave_exactC_experiment', 'bands', bands),
+                                 (T0, shipped, 'octave_law', 'bands', bands)):
+    path = pl.plot_path(out, '10x14', slug, view)
     pl.figure(title, p, Xx, best, lost, names, '10x14', path, bands=b); print('wrote', path)
 
 reach = ~lost; everyone = np.ones(lost.size, bool)

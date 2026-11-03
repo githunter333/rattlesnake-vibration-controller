@@ -272,7 +272,10 @@ OPEN ITEMS
                                 octave_exact_c.py), per line and as band averages
       plot_bandavg_bands.py     band_average as 1/6-octave band averages, and the scoring of
                                 all five laws under three band definitions
-    PNGs: examples/tendrive14resp/results/plots/ (10 files).  rms dB error vs the spec, 15
+    PNGs: examples/tendrive14resp/results/plots/ (10 files), spectra_10x14_<law>_<view>.png with
+    law = sdp_law, fast_law, octave_law, band_average_law, band_average_law_capped, or
+    octave_exactC_experiment (NOT a repo law: the octave law with the exact band cross-power),
+    and view = lines (every 5 Hz line) or bands (1/6-octave band averages).  rms dB error vs the spec, 15
     cycles, 20-frame estimates (11 reachable channels / all 14; bands = 100-1000 Hz lines):
                          per line         1/6-octave bands
       SDP                0.12 / 3.26      0.12 / 2.61

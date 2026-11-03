@@ -5,7 +5,7 @@ the target spec, the best achievable spec, and what the law produced.
     python control_laws/tests/plot_law_spectra.py [plant] [n_cycles] [n_frames] [outdir]
     defaults: 10x14 15 20 examples/tendrive14resp/results/plots
 
-One PNG per law, one panel per control channel:
+One PNG per law, one panel per control channel (file names: see SLUGS and plot_path):
   target spec      dashed, the specification autospectrum
   best achievable  achievable_response.achievable_diagonal: per line, the diagonal that
                    minimizes the rms dB error over ALL channels at once (the spec the rig
@@ -59,12 +59,22 @@ def laws():
             self.set_test_level_db(0.0)
     with contextlib.redirect_stdout(io.StringIO()):
         band = load_control_module(os.path.join(cf.LAW_DIR, 'band_average.py')).band_average
-    return [('SDP (optimal_diagonal_control)', out['SDP'], ''),
-            ('fast (optimal_diagonal_control_fast)', out['fast'], ''),
-            ('octave 1/6 (octave_band_switching_control)', OctaveEngaged, OCTAVE_PARAMS),
-            ('band average 1/6 octave (band_average)', band, BAND_PARAMS),
-            ('band average 1/6 octave, drive coherence capped at 0.95 (band_average)', band,
+    return [('SDP law (optimal_diagonal_control)', out['SDP'], ''),
+            ('FAST law (optimal_diagonal_control_fast)', out['fast'], ''),
+            ('OCTAVE law (octave_band_switching_control): 1/6-octave bands, mean-of-H averaging',
+             OctaveEngaged, OCTAVE_PARAMS),
+            ('BAND-AVERAGE law (band_average): 1/6-octave bands, exact cross-power averaging', band, BAND_PARAMS),
+            ('BAND-AVERAGE law (band_average), drive coherence capped at 0.95', band,
              BAND_PARAMS + '\nmax_drive_coherence: 0.95')]
+
+
+# File-name stem of each entry of laws(), in order; a plot is spectra_<plant>_<stem>_<view>.png
+# with view 'lines' (every line) or 'bands' (1/6-octave band averages).
+SLUGS = ['sdp_law', 'fast_law', 'octave_law', 'band_average_law', 'band_average_law_capped']
+
+
+def plot_path(outdir, plant, slug, view):
+    return os.path.join(outdir, f'spectra_{plant}_{slug}_{view}.png')
 
 
 def response(H, X):
@@ -136,8 +146,10 @@ def figure(name, p, X, best, lost, names, plant, outpath, bands=None):
              f'  {int(reach.sum())} reachable:      this law {rms_db(got, reach):.2f},  best achievable {rms_db(bst, reach):.2f}',
              transform=key.transAxes, fontsize=8.5, color=INK2, va='top', linespacing=1.5)
     fig.supylabel('response autospectrum (units$^2$/Hz)', fontsize=9, color=INK2, x=0.005)
-    fig.suptitle(f'{name} on the {plant} plant' + ('' if bands is None else ' -- 1/6-octave band averages'), fontsize=12, color=INK, x=0.015, ha='left', y=0.99)
-    fig.tight_layout(rect=(0.01, 0, 1, 0.975))
+    view = f"every {p['df']:g} Hz line" if bands is None else '1/6-octave band averages'
+    fig.text(0.015, 0.995, name, fontsize=12, color=INK, ha='left', va='top')
+    fig.text(0.015, 0.972, f'{plant} plant  |  view: {view}', fontsize=9.5, color=INK2, ha='left', va='top')
+    fig.tight_layout(rect=(0.01, 0, 1, 0.955))
     fig.savefig(outpath, dpi=150, facecolor=SURFACE)
     plt.close(fig)
 
@@ -180,8 +192,8 @@ def main():
     final = np.array([np.sqrt(np.mean((10*np.log10(response(p['H'], X)[sel]/spec_d[sel]))**2, axis=0)) for _, X in runs])
     lost = np.all(final[:2] > 3.0, axis=0)               # channels the SDP and fast laws both give up
     score_table(p, runs, lost, spec_d)
-    for (label, X), short in zip(runs, ('sdp', 'fast', 'octave', 'bandavg', 'bandavg_capped')):
-        path = os.path.join(outdir, f'spectra_{plant}_{short}.png')
+    for (label, X), short in zip(runs, SLUGS):
+        path = plot_path(outdir, plant, short, 'lines')
         figure(label, p, X, best, lost, names, plant, path)
         print('wrote', path)
 
