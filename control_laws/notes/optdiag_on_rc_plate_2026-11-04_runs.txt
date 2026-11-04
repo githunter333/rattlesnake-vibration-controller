@@ -1,0 +1,93 @@
+########## CASE 1: study grid, FRF fixed, both budgets, with floor
+rc_plate_state_space.npz: 48 controls x 12 drives, 4097 lines at 1 Hz, 3981 specified (20-4000 Hz)
+  in band: rank 12 (min 12), sigma_min/sigma_max median 5.2e-05, 10th pct 6.8e-06, min 6.9e-08
+  specification: channel RMS 7.66 to 45.53 g (median 20.56), trace 158.6 g RMS
+  plant check: state-space H vs modal sum, relative error median 8.3e-16, max 1.1e-10
+  spec check: 101Z+ 18.46 g RMS, range 7.66-45.53 g (band-average plot_spec.py records 18.5 g of 7.7 to 45.5)
+  exact plant      : sigma_min/sigma_max median 5.2e-05, 10th pct 6.8e-06, min 6.9e-08
+  FRF to the law (meas): sigma_min/sigma_max median 5.3e-03, 10th pct 6.2e-04, min 1.3e-04
+  identification: 50 averages at 4 lbf RMS per drive, multiple coherence median 0.995, 5th pct 0.928
+  calibration: pseudoinverse_control (rcond 1e-15) on this FRF gives drive_lbf2 8.417e+04; the study's n_pinv_noclip row records 8.356e+04
+
+15 cycles, 20-frame CPSD estimates, FRF held fixed
+
+best achievable on this plant (40 lines sampled over the band): RMS 0.44 dB median, 2.75 dB worst; peak 0.73 dB median; drive trace +45.3 dB re 1 lbf^2 median
+  48 controls on 12 drives: this is the floor every law here is measured against.
+
+                                    err  band_db         solved         ms/call   lines   drive_lbf2          drive RMS lbf        fast/  |coh|
+                                   (dB)     (dB)   of specified    median / max   /call  (study 8e4)     min / median / max   SDP solves  median  drive rank (of 12)
+defaults (20 lines/call)           3.89     1.55     340/3981      4977 /  5362      20    5.523e+04    33.3 /  77.2 /  81.3    340/0        0.53  median 12, 1-12
+full band (400 lines, 500 ms)      6.51     1.85    1848/3981      5740 /  5914     110    1.256e+04    21.1 /  35.1 /  37.2   1848/0        0.78  median 11, 1-12
+
+err (dB) by cycle (cycle 0 = the first control call, startup-capped):
+                           cycle         0         1         2         3         4         5         6         7         8         9        10        11        12        13        14        15
+defaults (20 lines/call)              9.65      3.31      3.34      3.37      3.40      3.44      3.49      3.55      3.58      3.61      3.66      3.70      3.75      3.81      3.84      3.89
+full band (400 lines, 500 ms)         9.82      3.79      3.97      4.17      4.39      4.61      4.84      5.10      5.31      5.51      5.68      5.85      6.03      6.21      6.36      6.51
+
+drive_lbf2 by cycle (the study records 3e3 for auto-Tikhonov, 8e4 for pinv):
+                           cycle         0         1         2         3         4         5         6         7         8         9        10        11        12        13        14        15
+defaults (20 lines/call)          1.21e+04  7.63e+04  7.31e+04  6.99e+04  6.81e+04  6.64e+04  6.56e+04  6.44e+04  6.31e+04  6.25e+04  6.19e+04  6.03e+04  5.86e+04  5.79e+04  5.71e+04  5.52e+04
+full band (400 lines, 500 ms)     9.11e+03  5.81e+04  5.17e+04  4.70e+04  4.23e+04  3.74e+04  3.34e+04  3.08e+04  2.78e+04  2.54e+04  2.29e+04  2.07e+04  1.81e+04  1.59e+04  1.41e+04  1.26e+04
+
+per-channel final error, worst and best 6 channels (full-band budget if run):
+  worst: 111Y+ +11.80  112Y+ +11.62  105Y+ +11.34  106Y+ +10.94  107Y+ +10.61  108Y+ +10.43
+  best : 104Z+  +1.60  106Z+  +2.07  114Z+  +2.20  108Z+  +2.36  102Z+  +2.36  107Z+  +2.46
+  42 of 48 channels over 3 dB RMS; 21 over 6 dB
+########## CASE 2: study grid, in-control FRF update (the study's nl8n_hu_odf_tfu configuration)
+rc_plate_state_space.npz: 48 controls x 12 drives, 4097 lines at 1 Hz, 3981 specified (20-4000 Hz)
+  in band: rank 12 (min 12), sigma_min/sigma_max median 5.2e-05, 10th pct 6.8e-06, min 6.9e-08
+  specification: channel RMS 7.66 to 45.53 g (median 20.56), trace 158.6 g RMS
+  plant check: state-space H vs modal sum, relative error median 8.3e-16, max 1.1e-10
+  spec check: 101Z+ 18.46 g RMS, range 7.66-45.53 g (band-average plot_spec.py records 18.5 g of 7.7 to 45.5)
+  exact plant      : sigma_min/sigma_max median 5.2e-05, 10th pct 6.8e-06, min 6.9e-08
+  FRF to the law (meas): sigma_min/sigma_max median 5.3e-03, 10th pct 6.2e-04, min 1.3e-04
+  identification: 50 averages at 4 lbf RMS per drive, multiple coherence median 0.995, 5th pct 0.928
+  calibration: pseudoinverse_control (rcond 1e-15) on this FRF gives drive_lbf2 8.417e+04; the study's n_pinv_noclip row records 8.356e+04
+
+15 cycles, 20-frame CPSD estimates, FRF re-identified every cycle
+
+                                    err  band_db         solved         ms/call   lines   drive_lbf2          drive RMS lbf        fast/  |coh|
+                                   (dB)     (dB)   of specified    median / max   /call  (study 8e4)     min / median / max   SDP solves  median  drive rank (of 12)
+defaults (20 lines/call)           4.11     1.81     340/3981      4829 /  4873      20    8.273e+04    52.3 /  92.6 /  98.8    340/300      0.51  median 12, 1-12
+
+err (dB) by cycle (cycle 0 = the first control call, startup-capped):
+                           cycle         0         1         2         3         4         5         6         7         8         9        10        11        12        13        14        15
+defaults (20 lines/call)              9.65      3.36      3.37      4.09      3.43      3.46      3.47      3.77      3.84      3.74      3.87      3.93      3.92      3.95      4.10      4.11
+
+drive_lbf2 by cycle (the study records 3e3 for auto-Tikhonov, 8e4 for pinv):
+                           cycle         0         1         2         3         4         5         6         7         8         9        10        11        12        13        14        15
+defaults (20 lines/call)          1.21e+04  8.10e+04  8.08e+04  3.37e+15  8.02e+04  8.14e+04  8.17e+04  8.15e+04  8.13e+04  8.08e+04  8.12e+04  8.05e+04  8.12e+04  8.05e+04  8.17e+04  8.27e+04
+
+per-channel final error, worst and best 6 channels (full-band budget if run):
+  worst: 111Y+  +6.05  112Y+  +5.86  108Y+  +5.77  108X+  +5.64  107Y+  +5.50  105Y+  +5.44
+  best : 104Z+  +2.10  114Z+  +2.38  107Z+  +2.43  108Z+  +2.43  102Z+  +2.71  103Z+  +2.72
+  39 of 48 channels over 3 dB RMS; 1 over 6 dB
+########## CASE 3: exact analytic FRF handed to the law (NOT what the rig does)
+rc_plate_state_space.npz: 48 controls x 12 drives, 4097 lines at 1 Hz, 3981 specified (20-4000 Hz)
+  in band: rank 12 (min 12), sigma_min/sigma_max median 5.2e-05, 10th pct 6.8e-06, min 6.9e-08
+  specification: channel RMS 7.66 to 45.53 g (median 20.56), trace 158.6 g RMS
+  plant check: state-space H vs modal sum, relative error median 8.3e-16, max 1.1e-10
+  spec check: 101Z+ 18.46 g RMS, range 7.66-45.53 g (band-average plot_spec.py records 18.5 g of 7.7 to 45.5)
+  exact plant      : sigma_min/sigma_max median 5.2e-05, 10th pct 6.8e-06, min 6.9e-08
+  FRF to the law (exac): sigma_min/sigma_max median 5.2e-05, 10th pct 6.8e-06, min 6.9e-08
+  calibration: pseudoinverse_control (rcond 1e-15) on this FRF gives drive_lbf2 6.653e+10; the study's n_pinv_noclip row records 8.356e+04
+
+15 cycles, 20-frame CPSD estimates, FRF held fixed
+
+                                    err  band_db         solved         ms/call   lines   drive_lbf2          drive RMS lbf        fast/  |coh|
+                                   (dB)     (dB)   of specified    median / max   /call  (study 8e4)     min / median / max   SDP solves  median  drive rank (of 12)
+defaults (20 lines/call)           2.92     1.17     340/3981      4959 /  5052      20    1.773e+11   966.9 /59973.2 /212000.3    340/0        0.86  median 7, 4-12
+
+err (dB) by cycle (cycle 0 = the first control call, startup-capped):
+                           cycle         0         1         2         3         4         5         6         7         8         9        10        11        12        13        14        15
+defaults (20 lines/call)              9.42      2.87      2.88      2.89      2.90      2.91      2.90      2.90      2.90      2.90      2.91      2.91      2.91      2.91      2.91      2.92
+
+drive_lbf2 by cycle (the study records 3e3 for auto-Tikhonov, 8e4 for pinv):
+                           cycle         0         1         2         3         4         5         6         7         8         9        10        11        12        13        14        15
+defaults (20 lines/call)          2.39e+10  1.78e+11  1.78e+11  1.78e+11  1.78e+11  1.77e+11  1.77e+11  1.77e+11  1.77e+11  1.77e+11  1.77e+11  1.77e+11  1.77e+11  1.77e+11  1.77e+11  1.77e+11
+
+per-channel final error, worst and best 6 channels (full-band budget if run):
+  worst: 104X+  +4.54  101Y+  +3.84  108X+  +3.83  112Y+  +3.81  111Y+  +3.81  107X+  +3.79
+  best : 104Z+  +1.14  105Z+  +1.57  102Z+  +1.60  107Z+  +1.64  103Z+  +1.83  110Z+  +1.84
+  19 of 48 channels over 3 dB RMS; 0 over 6 dB
+########## DONE
