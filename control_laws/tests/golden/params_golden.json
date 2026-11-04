@@ -1,9 +1,9 @@
 {
  "note": "parameters each law resolves from each string, recorded from the code before the parser rewrite (step 1b); see golden_params.py",
  "law_sources": {
-  "optimal_diagonal_control.py": "5bb2efd7a5a31cdf",
-  "optimal_diagonal_control_fast.py": "a5126543fdb965bd",
-  "octave_band_switching_control.py": "a5eb886b3057062c"
+  "optimal_diagonal_control.py": "84065d9d861f4358",
+  "optimal_diagonal_control_fast.py": "f9bb0f63e6a7f616",
+  "octave_band_switching_control.py": "98372bc77142776d"
  },
  "environment": {
   "python": "3.11.14",
@@ -1398,6 +1398,80 @@
    }
   },
   {
+   "string": ",,,,,,,,,,,,,,,,,,0.1,,,,,,,2.5",
+   "tags": [
+    "scenario"
+   ],
+   "resolved": {
+    "SDP": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "4",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.1",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "20",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "None",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "None",
+     "octave_fmax": "None"
+    }
+   }
+  },
+  {
    "string": ",,10,,0.5,,,,,,,,,,,,,,,,,1",
    "tags": [
     "scenario"
@@ -1838,6 +1912,228 @@
      "octave_fraction": "6",
      "octave_fmin": "100.0",
      "octave_fmax": "1000.0"
+    }
+   }
+  },
+  {
+   "string": ",,400",
+   "tags": [
+    "scenario"
+   ],
+   "resolved": {
+    "SDP": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "400",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "400",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "4",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "400",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "None",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "None",
+     "octave_fmax": "None"
+    }
+   }
+  },
+  {
+   "string": ",0.02,15,,,,,,,,,,,,,,,,,,0.001",
+   "tags": [
+    "scenario"
+   ],
+   "resolved": {
+    "SDP": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.02",
+     "max_bins_per_update": "15",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.001",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.02",
+     "max_bins_per_update": "15",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.001",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "4",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.02",
+     "max_bins_per_update": "15",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.001",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "None",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "None",
+     "octave_fmax": "None"
+    }
+   }
+  },
+  {
+   "string": ",,10",
+   "tags": [
+    "scenario"
+   ],
+   "resolved": {
+    "SDP": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "10",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5"
+    },
+    "fast": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "10",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "bm_rank": "4",
+     "svd_select": "0",
+     "svd_gap_min": "3.0",
+     "svd_floor": "1e-06",
+     "svd_weak_max": "0.05",
+     "svd_min_keep": "0",
+     "cap_baseline": "0",
+     "db_coherence_guard": "1",
+     "warm_start": "1",
+     "gate_reference": "1"
+    },
+    "octave": {
+     "reg": "1e-06",
+     "frf_update_threshold": "0.5",
+     "max_bins_per_update": "10",
+     "error_threshold_db": "1.0",
+     "max_drive_coherence": "0.95",
+     "startup_test_level_cap_db": "-9.0",
+     "error_domain": "'linear'",
+     "n_irls_passes": "2",
+     "drive_rcond": "2.0",
+     "max_solve_ms_per_update": "0.0",
+     "response_trim_gain": "0.0",
+     "response_trim_limit_db": "3.0",
+     "response_trim_step_db": "0.5",
+     "response_trim_deadband_db": "0.5",
+     "response_trim_gate_db": "0.5",
+     "frequency_spacing": "None",
+     "switch_level_db": "0.0",
+     "octave_fraction": "6",
+     "octave_fmin": "None",
+     "octave_fmax": "None"
     }
    }
   },
@@ -4924,7 +5220,7 @@
      "error": "ValueError: unknown parameter 'frequency_spacing'; valid names: drive_rcond, error_domain, error_threshold_db, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db"
     },
     "fast": {
-     "error": "ValueError: unknown parameter 'frequency_spacing'; valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
+     "error": "ValueError: unknown parameter 'frequency_spacing'; valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_flat_max, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
     },
     "octave": {
      "reg": "1e-06",
@@ -4960,7 +5256,7 @@
      "error": "ValueError: unknown parameter 'frequency_spacing'; valid names: drive_rcond, error_domain, error_threshold_db, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db"
     },
     "fast": {
-     "error": "ValueError: unknown parameter 'frequency_spacing'; valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
+     "error": "ValueError: unknown parameter 'frequency_spacing'; valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_flat_max, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
     },
     "octave": {
      "reg": "1e-06",
@@ -4996,7 +5292,7 @@
      "error": "ValueError: unknown parameter 'max_bin_per_update' (did you mean 'max_bins_per_update'?); valid names: drive_rcond, error_domain, error_threshold_db, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db"
     },
     "fast": {
-     "error": "ValueError: unknown parameter 'max_bin_per_update' (did you mean 'max_bins_per_update'?); valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
+     "error": "ValueError: unknown parameter 'max_bin_per_update' (did you mean 'max_bins_per_update'?); valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_flat_max, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
     },
     "octave": {
      "error": "ValueError: unknown parameter 'max_bin_per_update' (did you mean 'max_bins_per_update'?); valid names: drive_rcond, error_domain, error_threshold_db, frequency_spacing, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, octave_fmax, octave_fmin, octave_fraction, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, switch_level_db"
@@ -5013,7 +5309,7 @@
      "error": "ValueError: unknown parameter 'rgu' (did you mean 'reg'?); valid names: drive_rcond, error_domain, error_threshold_db, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db"
     },
     "fast": {
-     "error": "ValueError: unknown parameter 'rgu' (did you mean 'reg'?); valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
+     "error": "ValueError: unknown parameter 'rgu' (did you mean 'reg'?); valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_flat_max, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
     },
     "octave": {
      "error": "ValueError: unknown parameter 'rgu' (did you mean 'reg'?); valid names: drive_rcond, error_domain, error_threshold_db, frequency_spacing, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, octave_fmax, octave_fmin, octave_fraction, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, switch_level_db"
@@ -5071,7 +5367,7 @@
      "error": "ValueError: unknown parameter 'frequency_spacing'; valid names: drive_rcond, error_domain, error_threshold_db, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db"
     },
     "fast": {
-     "error": "ValueError: unknown parameter 'frequency_spacing'; valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
+     "error": "ValueError: unknown parameter 'frequency_spacing'; valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_flat_max, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
     },
     "octave": {
      "reg": "1e-06",
@@ -5158,7 +5454,7 @@
      "error": "ValueError: unknown parameter 'octave_fmin'; valid names: drive_rcond, error_domain, error_threshold_db, frf_update_threshold, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db"
     },
     "fast": {
-     "error": "ValueError: unknown parameter 'octave_fmin'; valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
+     "error": "ValueError: unknown parameter 'octave_fmin'; valid names: bm_rank, cap_baseline, db_coherence_guard, drive_rcond, error_domain, error_threshold_db, frf_update_threshold, gate_reference, max_bins_per_update, max_drive_coherence, max_solve_ms_per_update, n_irls_passes, reg, response_trim_deadband_db, response_trim_gain, response_trim_gate_db, response_trim_limit_db, response_trim_step_db, startup_test_level_cap_db, svd_flat_max, svd_floor, svd_gap_min, svd_min_keep, svd_select, svd_weak_max, warm_start"
     },
     "octave": {
      "reg": "1e-06",

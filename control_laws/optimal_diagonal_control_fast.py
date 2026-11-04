@@ -83,7 +83,16 @@ between the modes is how the cut for each line is chosen:
   svd_select = 0  (default, unchanged)  one threshold for the whole band:
         drive_rcond > 0  ->  drive_rcond x the band's median structural
                              spread (_effective_drive_rcond), then each line
-                             keeps sigma >= that x its own sigma_max
+                             keeps sigma >= that x its own sigma_max.  The
+                             "structural spread" is the smallest direction
+                             above the band's identification noise floor, and
+                             since 2026-11-04 that floor is found by the three
+                             detectors in _structural_floor (numerically absent
+                             directions, a flat plateau at the bottom of the
+                             spectrum, then an isolated deep step onto a weak
+                             floor) rather than by the largest gap alone, which
+                             mistook a structural gap for the floor on every
+                             full-rank plant measured with noise
         drive_rcond < 0  ->  an absolute ratio |drive_rcond|, e.g. -1e-3
         drive_rcond = 0  ->  no restriction
   svd_select = 1  each line chooses from ITS OWN spectrum: the deepest gap
@@ -106,6 +115,14 @@ between the modes is how the cut for each line is chosen:
     svd_weak_max  field 19, default 0.05  (a gap counts as a structural floor
                                            only if the direction below it has
                                            sigma/sigma_1 at or under this)
+    svd_flat_max  field 26, default 0     adjacent ratios below this are FLAT;
+                                           a run of at least two of them at the
+                                           BOTTOM of the band's median spectrum
+                                           is the identification noise floor
+                                           (0 = auto, sqrt(svd_gap_min)).  Band
+                                           mode only -- it is what finds the
+                                           floor on a full-rank plant, where no
+                                           gap marks it.
     svd_min_keep  field 20, default 0     FEWEST directions any line keeps, in
                                           EITHER mode: 0 = auto, the band's
                                           structural rank minus one (rank from
@@ -126,8 +143,9 @@ between the modes is how the cut for each line is chosen:
 Empty fields keep their position and mean "use the default".  Per-line
 selection on, everything else default:
     ,,,,,,,,,,,,,,,1
-A full default string with per-line selection on:
-    1e-6,0.5,20,1.0,0.95,4,-9,0,2,2.0,0,3,0.5,0.5,0.5,1,3,1e-6,0.05,0
+A full default string with per-line selection on (fields 1-26; 21 is
+max_solve_ms_per_update, read by the base class):
+    1e-6,0.5,20,1.0,0.95,4,-9,0,2,2.0,0,3,0.5,0.5,0.5,1,3,1e-6,0.05,0,0,0,1,1,1,0
 Field 21, max_solve_ms_per_update, is the base class's per-call time budget
 (see optimal_diagonal_control); it caps the SDP fallback's calls too.
 
@@ -163,6 +181,7 @@ reproduces a pre-2026-10-25 run exactly.  For that, append fields 23-25 as 0
 
 import os
 import importlib.util
+import warnings
 import numpy as np
 import scipy.optimize as _scipy_optimize  # module import, not `from ... import minimize` --
                                             # a bare top-level `minimize` name would itself get
@@ -189,6 +208,7 @@ _cap_drive_coherence = _base_module.load_sibling(
 # read by the base class, these here.
 Param = _base_module.Param
 _as_int, _magnitude = _base_module._as_int, _base_module._magnitude
+_non_negative = _base_module._non_negative
 
 _FAST_PARAMS = [
     Param('bm_rank', 4, _as_int, 5,
@@ -203,6 +223,9 @@ _FAST_PARAMS = [
           'a gap counts as a structural floor only if the direction below it has sigma/sigma_1 at or under this'),
     Param('svd_min_keep', 0, _as_int, 19,
           'fewest directions any line keeps (0 = auto: structural rank - 1; -1 = N - 1; 1 = pre-2026-10-24 behaviour)'),
+    Param('svd_flat_max', 0.0, _non_negative, 25,
+          'adjacent sigma ratios below this count as FLAT; a run of them at the bottom of the '
+          'band spectrum is the identification noise floor (0 = auto, sqrt(svd_gap_min))'),
     Param('cap_baseline', 0, _as_int, 21,
           '1 = apply max_drive_coherence to the buzz baseline that unsolved lines sit on'),
     Param('db_coherence_guard', 1, _as_int, 22,
@@ -249,6 +272,7 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
               f"svd_select={self.svd_select} ({'per line' if self.svd_select == 1 else 'band'}) "
               f"svd_gap_min={self.svd_gap_min:g} svd_floor={self.svd_floor:g} "
               f"svd_weak_max={self.svd_weak_max:g} "
+              f"svd_flat_max={self.svd_flat_max if self.svd_flat_max > 0 else 'auto'} "
               f"svd_min_keep={self.svd_min_keep if self.svd_min_keep != 0 else 'auto'} "
               f"cap_baseline={self.cap_baseline} db_coherence_guard={self.db_coherence_guard} "
               f"warm_start={self.warm_start} "
@@ -466,6 +490,98 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         return L @ L.conj().T
 
     # ------------------------------------------------------------------
+    # The fewest flat adjacent ratios that count as a plateau.  A noise floor is a
+    # REGION of the spectrum, not one direction: a single flat step at the bottom is
+    # as likely to be two close structural modes.  Not a parameter -- it is what the
+    # word "plateau" means here, and 2 is the smallest run that can show flatness.
+    _MIN_PLATEAU = 2
+
+    def _structural_floor(self, med):
+        """Index of the LOWEST direction in `med` still treated as structural,
+        and the name of the detector that decided it.
+
+        `med` is the median sigma_k/sigma_1 over in-band bins, descending.  Both
+        the band threshold (_effective_drive_rcond) and the band structural rank
+        (_band_structural_rank) are measured from this one answer, so they cannot
+        disagree about where the plant stops and the noise starts.
+
+        THE THREE DETECTORS, strongest evidence first.  Each one asks "is the
+        bottom of this spectrum the structure or the identification?", and they
+        are tried in order because each is sound where the next is not:
+
+          svd_floor  sigma/sigma_1 below svd_floor is numerically absent -- a
+                     direction the model does not have at all (an exactly
+                     rank-deficient plant: the 6x8 frame's 6th direction sits at
+                     4e-17).  Definitive, so it is checked first and the
+                     remaining detectors only look above it.
+          plateau    a run of at least _MIN_PLATEAU adjacent ratios flatter than
+                     svd_flat_max at the BOTTOM of the spectrum.  An H1 estimate
+                     whose smallest singular values are all noise has no gaps
+                     left down there: they are noise against noise, and the ratios
+                     collapse toward 1.  This is what a MEASURED full-rank plant
+                     looks like and what the gap rule alone cannot see.
+          gap        the deepest adjacent ratio of at least svd_gap_min whose
+                     LOWER side is at or under svd_weak_max -- an isolated step
+                     down onto a floor.  Both conditions matter: the deepest, not
+                     the largest, because near a resonance the largest gap is
+                     sigma_1/sigma_2; and the weak-side test because a large gap
+                     high in the spectrum is a property of the STRUCTURE, not a
+                     floor.  (The same two conditions the per-line rule
+                     _per_line_k has used since 2026-10-24.)
+
+        If none of them fires there is no identifiable floor and every direction
+        present is structural -- the reference is then the smallest one, and
+        drive_rcond still trims from there.
+
+        WHY NOT THE LARGEST GAP ALONE, which is what this did until 2026-11-04:
+        on a full-rank plant measured with noise the largest gap in the spectrum
+        is a STRUCTURAL one near the top, and taking it as the floor throws away
+        most of the plant.  Measured on the band-average 12-drive RC plate
+        (notes/optdiag_on_rc_plate_2026-11-04.md): the 50-average H1 estimate's
+        medians run 1.00 .51 .21 .070 .053 .025 .014 .0105 .0088 .0074 .0064
+        .0053 -- noise flattens the bottom six into a gapless plateau (adjacent
+        ratios 1.16-1.21), so the largest gap left was the real 3.04x at
+        sigma_3->sigma_4, the reference came out at 0.21, and the rule kept 2 of
+        12 drive directions and converged 7.9 dB off its own target.  The
+        plateau detector reads the same spectrum as a floor under sigma_6 and
+        keeps 5.  It also fired on this repo's own 10x14 frame, which is
+        documented FULL RANK 10: the largest gap there is 2.31x at
+        sigma_7->sigma_8 with a lower side of 0.118, nowhere near a noise floor,
+        and the old rule kept 6 of 10.
+        """
+        n = int(med.size)
+        if n < 2:
+            return max(0, n - 1), 'single'
+        flat_max = self.svd_flat_max if self.svd_flat_max > 0 else float(np.sqrt(self.svd_gap_min))
+        # (1) numerically absent directions
+        n_absent = int(np.sum(med < self.svd_floor))
+        top = n - n_absent                       # directions above the numerical floor
+        if top < 2:
+            return max(0, top - 1), 'svd_floor'
+        r = med[:top]
+        gaps = r[:-1]/np.maximum(r[1:], 1e-300)
+        # (2) a flat plateau at the bottom
+        flat = 0
+        for g in gaps[::-1]:
+            if g >= flat_max:
+                break
+            flat += 1
+        # THE PLATEAU MUST BE WEAK, the same test the gap detector applies to the
+        # direction below a candidate gap.  A well-conditioned plant is flat
+        # EVERYWHERE -- 10x14's exact spectrum has no adjacent ratio above 2.4 -- and
+        # without this a generous svd_flat_max would read the whole spectrum as noise
+        # and keep one direction, which is the collapse this rewrite exists to stop.
+        # So a run of flat ratios is the noise floor only if its topmost direction is
+        # itself at or under svd_weak_max; otherwise it is just a smooth structure.
+        if flat >= self._MIN_PLATEAU and top - flat >= 1 \
+                and r[top - flat] <= self.svd_weak_max:
+            return top - 1 - flat, 'plateau'
+        # (3) an isolated deep step onto a weak floor
+        big = np.where((gaps >= self.svd_gap_min) & (r[1:] <= self.svd_weak_max))[0]
+        if big.size:
+            return int(big[-1]), 'gap'
+        return top - 1, 'svd_floor' if n_absent else 'none'
+
     def _effective_drive_rcond(self, H):
         """The subspace threshold actually used, as a MULTIPLE of this plant's
         own singular-value spread.
@@ -525,14 +641,33 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         med = np.median(ratios, axis=0)                      # (N,)
         med = med[np.isfinite(med) & (med > 0)]
         if med.size < 2:
-            ref = _FALLBACK_SPREAD
+            ref, why = _FALLBACK_SPREAD, 'fallback'
         else:
-            gaps = med[:-1]/np.maximum(med[1:], 1e-300)
-            ref = float(med[int(np.argmax(gaps))])           # last direction above the gap
+            i, why = self._structural_floor(med)
+            ref = float(med[i])                  # smallest direction above the floor
         eff = float(np.clip(self.drive_rcond*ref, 1e-4, 0.5))
         self._rcond_cache = eff; self._rcond_key = key
+        # WHAT THIS PRINTS AND WHY IT IS LOUD.  Discarding most of the drive space is
+        # invisible from the outside: the law still converges, just to a floor nobody
+        # can explain (on the RC plate, 7.9 dB with 2 of 12 directions).  So say the
+        # threshold, the detector that set it, the rank it implies and the spectrum it
+        # was read from -- enough to tell a correct cut from a wrong one without
+        # instrumenting the law -- and warn outright when over half the drive space goes.
+        n_keep = int(np.sum(med >= eff))
+        n_tot = int(med.size)
         print(f"[optimal_diagonal_control_fast] drive_rcond {self.drive_rcond:g} x "
-              f"plant spread {ref:.4f} -> effective {eff:.4g}", flush=True)
+              f"plant spread {ref:.4g} ({why}) -> effective {eff:.4g}; keeps {n_keep} "
+              f"of {n_tot} drive directions; median sigma_k/sigma_1 "
+              f"{np.array2string(med, precision=4, max_line_width=200)}", flush=True)
+        if n_tot >= 2 and n_keep*2 < n_tot:
+            msg = (f"optimal_diagonal_control_fast: the drive-subspace restriction keeps only "
+                   f"{n_keep} of {n_tot} drive directions (detector '{why}', effective rcond "
+                   f"{eff:.4g}).  If the plant is better conditioned than that, the control "
+                   f"error will floor out well above what the plant can reach; check the "
+                   f"median singular-value spectrum printed above, and set drive_rcond to 0 "
+                   f"(no restriction) or a negative absolute ratio to override.")
+            print(f"[optimal_diagonal_control_fast] WARNING: {msg}", flush=True)
+            warnings.warn(msg, RuntimeWarning, stacklevel=2)
         return eff
 
     def _restricted_basis(self, H):
@@ -611,16 +746,15 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         med = np.median(sv/np.maximum(sv[:, :1], 1e-300), axis=0)
         med = med[np.isfinite(med) & (med > 0)]
         n = int(med.size)
+        why = 'none'
         if n >= 2:
-            gaps = med[:-1]/np.maximum(med[1:], 1e-300)
-            i = int(np.argmax(gaps))
-            if gaps[i] >= self.svd_gap_min:
-                n = i + 1
+            i, why = self._structural_floor(med)
+            n = i + 1
         self._struct_rank, self._struct_rank_key = n, key
         print(f"[optimal_diagonal_control_fast] band structural rank {n} of "
-              f"{Hb.shape[2]} drives (median sigma ratios "
-              f"{np.array2string(med, precision=4)}); fewest directions kept "
-              f"per line = {self._min_keep(Hb.shape[2])}", flush=True)
+              f"{Hb.shape[2]} drives ({why}; median sigma ratios "
+              f"{np.array2string(med, precision=4, max_line_width=200)}); fewest "
+              f"directions kept per line = {self._min_keep(Hb.shape[2])}", flush=True)
         return n
 
     def _min_keep(self, N):
