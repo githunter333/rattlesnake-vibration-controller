@@ -1,0 +1,121 @@
+ONE CODE FOLDER; THE NEWER BAND-AVERAGE LAW FIXES THE KAPPA PROBLEM
+2026-11-04   (continues session_summary_2026-11-03.txt)
+================================================================================
+
+Repo     /Users/nhunterjr/Code/python/rattlesnake-vibration-controller
+Branch   control-laws-on-dev  (fork: githunter333/rattlesnake-vibration-controller)
+Other    ~/Code/python/rattlesnake-band-average  (bzwink/rattlesnake-band-average, private,
+         branch band-average-study, at 732f483 after today's fast-forward)
+Env      conda env "rattlesnake" for the laws and plots; PYTHONPATH=src, from the repo root.
+
+
+1  ONE CODE DIRECTORY
+--------------------------------------------------------------------------------
+There were four folders that looked like "code" under /Users/nhunterjr:
+    ~/Code                155 GB.  The real one: python, matlab, mathematica, shared.   KEPT
+    ~/Documents/Code      1 MB.  shared/MIMO Work was an exact duplicate; python/sdynpy was
+                          an empty folder; python/rattlesnake-vibration-controller held 3
+                          files from September ("Claude outputs": law_comparison_report.pdf
+                          and .docx, bounded_softening.py).             MOVED TO THE TRASH
+    ~/Documents/Code 2    16 KB.  mathematica and matlab archive folders, all identical to
+                          copies in ~/Code.                             MOVED TO THE TRASH
+    ~/Downloads/CODE      the 2017 DMD book code (CH01-CH12).  Not yours.      LEFT ALONE
+Before anything moved, every file in the two old folders was checked against ~/Code with
+rsync dry runs (nothing missing, nothing different) and the three unique files were copied to
+~/Code/python/rattlesnake-vibration-controller/Claude outputs/ and verified by checksum.
+They are untracked in that repo.  Finder refused the Trash request (an unanswered permission
+prompt), so the two folders were moved into ~/.Trash by hand, renamed
+"Code (from Documents, 2026-11-04)" and "Code 2 (from Documents, 2026-11-04)".  They have no
+"Put Back"; drag them out to restore.  Nothing was permanently deleted.
+
+The conda env "sigproc" had editable installs pointing into the old folders:
+    sdynpy        re-installed editable from ~/Code/python/sdynpy (--no-deps; only that one
+                  line of the 239 packages changed).  It imports from the new place.
+    MIMOExProject a dead stub: its editable mapping was empty, so it never exposed a package,
+                  and ~/Code/python/MIMO FRF Estimation has no pyproject.  Uninstalled
+                  (metadata only; the folder is untouched).
+Nothing on the Mac refers to ~/Documents/Code any more.
+
+GitHub sign-in: the Terminal already stores credentials in the macOS Keychain (osxkeychain);
+git over HTTPS wants a personal access token where it says "password".  GitKraken keeps its
+own sign-in.  I cannot enter a token; clones of private repos are done by you.
+
+
+2  THE rattlesnake-band-average REPO
+--------------------------------------------------------------------------------
+Already cloned (earlier today), clean, on band-average-study.  My shell cannot fetch it (it
+is private), but the remote-tracking ref showed one newer commit, which was fast-forwarded
+locally: 732f483 "Warn that the specification's cross terms were reversed; correct the
+export script" (AGENTS.md, studies/rc_plate/make_barc_vdyn.py).  Worth reading before
+building a specification with cross terms.
+
+It tracks control_laws/band_average_2026_11_04.py, a dated rewrite of the band-average law
+("a new version of this law gets a new date in its file name"), plus studies/rc_plate/ (a
+band-average study on the frame plant and a PDF report on the RC plate).  This answers the
+caveat in the 2026-11-03 note: the law in THIS repo (control_laws/band_average.py) is
+git-excluded on purpose, but the dated law is tracked upstream.
+
+
+3  THE NEW LAW FIXES THE KAPPA PROBLEM
+--------------------------------------------------------------------------------
+The 2026-11-03 finding: the old law's automatic kappa came out at 18 because the knee sweep
+predicted each kappa with a plain fit while the real solve refits over PSD drives.  The
+2026-11-04 version chooses kappa band by band and scores each candidate with the drive the
+law outputs, PSD re-fit included.  Default kappa_rule 'front' (bands chosen together, one
+energy price for all, knee of the error/energy front); also 'knee' and 'lcurve'.  Same
+interface and attribute names, so it drops into the 10x14 harness.
+
+tests/bandavg_versions.py runs both versions, 10x14, 15 cycles, 20-frame estimates, df 5,
+oct_order 6, drive RMS limit off.  rms dB error in the law's own bands, all 14 channels / the
+11 the SDP law reaches:
+                                    bands, own def.   per line        drive    first solve
+    OLD  auto kappa (18)            4.57 / 3.36       5.12 / 3.27     -26.5    0.07 s
+    OLD  condition_number 100       2.81 / 0.94       4.43 / 2.29     -21.7    0.03 s
+    NEW  front (default)            2.84 / 0.73       4.52 / 2.18     -22.9    2.1 s
+    NEW  knee                       2.81 / 0.59       4.49 / 2.26     -21.8    2.1 s
+    NEW  lcurve                     2.80 / 0.52       4.68 / 2.39     -19.2    2.1 s
+    NEW  condition_number 100       2.81 / 0.94       4.43 / 2.29     -21.7    0.04 s
+    (SDP law, same definition: 2.92 / 0.11, drive about -12 dB)
+* With a fixed kappa the two versions agree to every digit, so they differ only in how kappa
+  is chosen.
+* 'front' picks a median kappa of 100 (range 24-562 over 21 bands); 'lcurve' reaches up to
+  100000 and spends more drive.
+* The sweep costs about 2 s once, at the first solve, not in the control loop.
+* One plant, one run; the drive limit is off.
+DECISION: do not implement the planned "knee from the real solve" option in this repo's
+band_average.py; it exists upstream.  Plots of the new law: see below.
+
+
+4  PLOTS OF THE NEW LAW
+--------------------------------------------------------------------------------
+tests/plot_bandavg_new.py writes spectra_10x14_band_average_law_2026_11_04_{lines,bands}.png
+into examples/tendrive14resp/results/plots/ (same layout and "best achievable" reference as the
+other ten; 12 PNGs now).  rms dB error vs the spec, 11 reachable / all 14, default 'front' rule:
+                                   per line     base-2 bands   law bands     law definition
+    SDP law                        0.12 / 3.26  0.12 / 2.61    0.12 / 2.98   0.11 / 2.92
+    FAST law                       0.23 / 3.29  0.27 / 2.63    0.26 / 3.04   0.26 / 2.97
+    BAND-AVERAGE 2026-11-04        2.18 / 4.52  1.27 / 3.19    0.75 / 2.89   0.73 / 2.84
+    best achievable (held)         0.00 / 2.99  0.00 / 2.38    0.00 / 2.74
+    joint 14-channel compromise    1.40 / 2.40  1.14 / 2.01    1.38 / 2.20
+"base-2 bands" are the octave law's edges, "law bands" the band-average law's own ANSI
+base-ten edges, both on 100-1000 Hz lines only; "law definition" is T_narrow_to_octave @
+response (partly covered edge bands read low).  In its own bands the new law is within 0.15 dB
+of the best achievable on all 14 channels (2.89 vs 2.74).  What is left on the 11 reachable
+channels is mostly the lowest bands (100-200 Hz, 2-4 lines each): 9x is about 5 dB low there,
+10x and 8x 3-4 dB; elsewhere the control sits on the target.  On 7x, 13x and 14x it follows
+the best-achievable curve closely.
+
+
+OPEN ITEMS (carried from 2026-11-03, minus the kappa option)
+--------------------------------------------------------------------------------
+ 1. Octave law: option for the exact band cross-power (off by default) and to trim the top
+    band at fmax.  octave_exact_c.py is the prototype.
+ 2. Try the named parameter syntax in the real Rattlesnake GUI box or a spreadsheet cell.
+ 3. 1f: retire unused options (needs your call on which were used on the rig).
+ 4. Cut the 10-20 ms per-call bookkeeping at 10x14.
+ 5. Run the 10x14 case in Rattlesnake with the SDynPy hardware file; run the band-average law
+    (new version) on 10x14 there.
+ 6. Read Brandon's 732f483 note on reversed specification cross terms.
+ 7. Back up the disk-only data listed in the 2026-11-02 file (40 GB of runs, .nc4 files).
+ 8. Clone the other repos you were after (forcefinder is public: sandialabs/forcefinder;
+    "visualdynamics" is on PyPI, repo URL not found).
