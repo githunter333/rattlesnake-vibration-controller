@@ -12,6 +12,9 @@ Env:    conda env `rattlesnake` (cvxpy 1.8.2), `PYTHONPATH=src` from the repo ro
 PYTHONPATH=src python control_laws/tests/optdiag_on_rc_plate.py --df 1 --cycles 15
 ```
 
+Raw console output of the three runs quoted below:
+`optdiag_on_rc_plate_2026-11-04_runs.txt`.
+
 ## Which law this is
 
 `control_laws/optimal_diagonal_control_fast.py` at `control-laws-on-dev`
