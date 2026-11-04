@@ -249,6 +249,39 @@ exactly 1.00, in-model error 7.93 dB.  After the fix, 3.08 dB -- against the 2.8
 drive than `drive_rcond: 0` commands.  Same conclusion as the 1 Hz grid, reached from a
 worse starting point.
 
+### Control levels at three representative channels
+
+![requested, best achievable and achieved control levels](optdiag_rc_plate_levels_2026-11-04.png)
+
+`control_laws/tests/plot_optdiag_on_rc_plate.py` draws the figure above --
+`optdiag_rc_plate_levels_2026-11-04.png`, one subplot per axis, requested against best
+achievable against achieved, with the pre-fix result dashed.  The channels are picked by
+a criterion that reads only the SPECIFICATION, never any result, so it cannot be steered
+by which channel flatters the law: within each axis, the one whose spec ASD is closest in
+SHAPE to that axis's median ASD curve (smallest median |dB deviation| over in-band lines).
+That gives 105X+, 104Y+ and 109Z+, each the most typical of its sixteen.
+
+| channel | requested RMS | pre-fix | post-fix | floor |
+| --- | --- | --- | --- | --- |
+| 105X+ | 21.2 g | 7.35 dB | 3.30 dB | 0.71 dB |
+| 104Y+ | 16.8 g | 8.60 dB | 2.12 dB | 0.56 dB |
+| 109Z+ | 21.3 g | 5.81 dB | 2.61 dB | 0.73 dB |
+
+What the figure shows that the aggregate numbers do not: the pre-fix law tracks the
+specification acceptably up to roughly 1.5 kHz and then **abandons whole bands**, diving
+one to three decades below the spec wherever the two retained drive directions cannot
+reach -- the deep red excursions above 1.5 kHz on all three channels, well outside the
++/-6 dB abort limit.  It is not a uniform error; it is a reachability collapse confined
+to the top of the band.  Post-fix, those bands come back inside or near the warning band,
+and the green floor markers show the plant could always reach them.
+
+A note on the floor number.  Over these 177 log-spaced lines the reachability floor is
+0.15 dB median (4.81 dB worst) across all 48 channels, against the 0.44 dB median (2.75
+worst) quoted from the 40-line sample in the RC plate note.  Log spacing puts more lines
+in the flat low-frequency region where the spec is easy, which lowers the median, and
+more lines overall find a worse worst case.  Both say the same thing -- the floor is far
+below anything the law achieves -- but they are not the same statistic.
+
 Raw output of every run quoted above is in
 [structural_floor_rewrite_2026-11-04_runs.txt](structural_floor_rewrite_2026-11-04_runs.txt).
 
