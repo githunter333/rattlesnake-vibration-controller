@@ -240,7 +240,7 @@ def _():
 
 @check('the tables: unique names, unique legacy positions, every name is an attribute')
 def _():
-    for key, n in (('SDP', 15), ('fast', 25), ('octave', 20)):
+    for key, n in (('SDP', 15), ('fast', 26), ('octave', 20)):
         table = LAWS[key].parameter_table()
         names = [p.name for p in table]
         assert len(names) == len(set(names)) == n, (key, len(names))

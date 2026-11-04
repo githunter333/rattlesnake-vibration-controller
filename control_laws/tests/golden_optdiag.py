@@ -139,7 +139,7 @@ def scenario(name, plant, law, params='', n_cycles=6, level_db=None, frf_drift=0
 #  10-14 response trim: gain, limit_db, step_db, deadband_db, gate_db
 #  15-19 svd_select, svd_gap_min, svd_floor, svd_weak_max, svd_min_keep (fast)
 #  20 max_solve_ms_per_update  21 cap_baseline  22 db_coherence_guard
-#  23 warm_start  24 gate_reference
+#  23 warm_start  24 gate_reference  25 svd_flat_max (fast)
 #
 # Every field a scenario sets is given a value that DIFFERS from its default AND
 # is large enough to change the output on these plants (checked by deleting and
@@ -165,6 +165,14 @@ SCENARIOS = [
              fields({0: 1e-5, 2: 10, 3: 0.5, 4: 0.8, 5: 3, 9: 0.5,
                      15: 1, 16: 2.0, 17: 0.03, 18: 0.2, 19: 2})),
     scenario('fast_db_guard_flags', '6x8', 'fast', fields({7: 1, 22: 2})),
+    # The BAND-mode structural floor (svd_select 0, the default), whose plateau
+    # detector reads svd_flat_max and svd_weak_max.  On 6x8's exact spectrum the
+    # adjacent ratios above the numerically-absent 6th direction are 2.42, 2.71,
+    # 2.39, 2.15, so a flat threshold of 2.5 makes the bottom two a plateau and a
+    # weak-max of 0.1 lets it count: the band threshold then keeps 2 of 6 drive
+    # directions instead of the default 4.  Both fields have to be read, and read
+    # at the right positions, for that to happen.
+    scenario('fast_band_plateau', '6x8', 'fast', fields({18: 0.1, 25: 2.5})),
     # Fields 21 and 23 are in scenarios of their own: set next to a neighbour
     # with the same value, a parser that read the wrong position would not show.
     # cap_baseline only acts on lines still unsolved, hence the small line cap
@@ -204,6 +212,8 @@ SCENARIOS = [
                     'svd_weak_max': 0.2, 'svd_min_keep': 2}), same_as='fast_rank_svd_rcond'),
     scenario('fast_db_guard_flags_named', '6x8', 'fast',
              named({'error_domain': 'db', 'db_coherence_guard': 2}), same_as='fast_db_guard_flags'),
+    scenario('fast_band_plateau_named', '6x8', 'fast',
+             named({'svd_weak_max': 0.1, 'svd_flat_max': 2.5}), same_as='fast_band_plateau'),
     scenario('fast_cap_baseline_named', '6x8', 'fast',
              named({'max_bins_per_update': 2 * 5, 'max_drive_coherence': 0.5, 'cap_baseline': 1}),
              same_as='fast_cap_baseline'),

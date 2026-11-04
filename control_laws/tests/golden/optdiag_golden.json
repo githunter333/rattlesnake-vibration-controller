@@ -1,5 +1,5 @@
 {
- "recorded": "2026-11-02 18:56:03",
+ "recorded": "2026-11-04 14:44:46",
  "environment": {
   "python": "3.11.14",
   "numpy": "2.4.6",
@@ -9,9 +9,9 @@
   "system": "Darwin"
  },
  "law_sources": {
-  "optimal_diagonal_control.py": "721f22dd517f9907",
-  "optimal_diagonal_control_fast.py": "73f7389e6250e34f",
-  "octave_band_switching_control.py": "48d3e402374e1e4f"
+  "optimal_diagonal_control.py": "84065d9d861f4358",
+  "optimal_diagonal_control_fast.py": "f9bb0f63e6a7f616",
+  "octave_band_switching_control.py": "98372bc77142776d"
  },
  "seed": 1,
  "n_frames": 20,
@@ -435,6 +435,61 @@
     3.6770603626555003,
     3.502278794949036,
     2.031169617134518
+   ],
+   "counters": {
+    "n_sdp_refinements": 160,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 160,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 160
+   }
+  },
+  "fast_band_plateau": {
+   "definition": {
+    "name": "fast_band_plateau",
+    "plant": "6x8",
+    "law": "fast",
+    "params": ",,,,,,,,,,,,,,,,,,0.1,,,,,,,2.5",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": null,
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
+    "tags": []
+   },
+   "hashes": [
+    "3c1ae5f77232726e58c709e3",
+    "b54218b3534e73a673f94c1e",
+    "e0dba9e8a9bd56d2e25739ad",
+    "c80e8fee1aadf65629741906",
+    "4710b2d659d5d0dc50c6a46d",
+    "fa2ca6a7ee0fbe0fa498cc0f",
+    "94b435cdbf5899b4debaeace"
+   ],
+   "err_rms": [
+    11.876367221143473,
+    6.244374843243905,
+    6.475261158585246,
+    6.76617956408543,
+    6.96974083607683,
+    7.045751371997665,
+    7.148852507714759
+   ],
+   "drive_db": [
+    -3.852091461351355,
+    4.731824403100823,
+    4.73126467462765,
+    4.082084391998995,
+    2.240117248786087,
+    1.9643821803780952,
+    -1.5323304102371975
    ],
    "counters": {
     "n_sdp_refinements": 160,
@@ -1245,6 +1300,61 @@
     3.6770603626555003,
     3.502278794949036,
     2.031169617134518
+   ],
+   "counters": {
+    "n_sdp_refinements": 160,
+    "n_stale_refinements": 0,
+    "n_fast_solves": 160,
+    "n_safe_solves": 0,
+    "n_frf_updates": 0,
+    "n_trim_updates": 0,
+    "refined_lines": 160
+   }
+  },
+  "fast_band_plateau_named": {
+   "definition": {
+    "name": "fast_band_plateau_named",
+    "plant": "6x8",
+    "law": "fast",
+    "params": "svd_weak_max: 0.1\nsvd_flat_max: 2.5",
+    "n_cycles": 6,
+    "level_db": null,
+    "frf_drift": 0.0,
+    "frf_walk": false,
+    "same_as": "fast_band_plateau",
+    "level_changes": {},
+    "frf_jump": null,
+    "pokes": {},
+    "sysid_calls": 1,
+    "frf_at_construction": false,
+    "tags": []
+   },
+   "hashes": [
+    "3c1ae5f77232726e58c709e3",
+    "b54218b3534e73a673f94c1e",
+    "e0dba9e8a9bd56d2e25739ad",
+    "c80e8fee1aadf65629741906",
+    "4710b2d659d5d0dc50c6a46d",
+    "fa2ca6a7ee0fbe0fa498cc0f",
+    "94b435cdbf5899b4debaeace"
+   ],
+   "err_rms": [
+    11.876367221143473,
+    6.244374843243905,
+    6.475261158585246,
+    6.76617956408543,
+    6.96974083607683,
+    7.045751371997665,
+    7.148852507714759
+   ],
+   "drive_db": [
+    -3.852091461351355,
+    4.731824403100823,
+    4.73126467462765,
+    4.082084391998995,
+    2.240117248786087,
+    1.9643821803780952,
+    -1.5323304102371975
    ],
    "counters": {
     "n_sdp_refinements": 160,
@@ -2453,28 +2563,28 @@
     "34c17def035f1430e40ad330",
     "80b94603b6c79dd2ee8c5e6f",
     "ffbe66f58d0000074fcadf60",
-    "855bf8e5fad8d3f0fa10b414",
-    "0357773346a8f4a820d35b1e",
-    "97fc45ff9b3d9311dae41985",
-    "da02084860d46f59b1a97835"
+    "e26aea4f01a8239bf1281723",
+    "fd39a4cc25cdcdbbb97ef8cf",
+    "66abe9265f0e5a8d8e631a09",
+    "0c4d671d9f3b3e78a03bad1d"
    ],
    "err_rms": [
     10.154910986983923,
     3.4439037990426375,
     3.3970858668703716,
-    3.355955208174679,
-    3.3311993764291734,
-    3.3118587359301954,
-    3.29761864387772
+    3.3559650272221098,
+    3.331200020653316,
+    3.311842439093945,
+    3.2975796148853243
    ],
    "drive_db": [
     -12.447802307198284,
     -3.7199255152872506,
     -4.011412826717581,
-    -4.5475583403315705,
-    -5.1458305775264925,
-    -6.23026216926191,
-    -7.282328761511367
+    -4.547465909123984,
+    -5.145692151205266,
+    -6.229978202560443,
+    -7.281744973211001
    ],
    "counters": {
     "n_sdp_refinements": 160,
