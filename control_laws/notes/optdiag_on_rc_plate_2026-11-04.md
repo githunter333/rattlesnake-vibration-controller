@@ -137,6 +137,15 @@ lines.
 
 ## Why: `_effective_drive_rcond`'s gap rule inverts on this plant
 
+> **FIXED 2026-11-04**, after this was written: the gap rule has been replaced by
+> `_structural_floor`'s three detectors, and on this plant the in-model error goes
+> from 6.56 to 3.01 dB with 0 of 48 channels over 6 dB.  The diagnosis below stands
+> as written -- see [structural_floor_rewrite_2026-11-04.md](structural_floor_rewrite_2026-11-04.md)
+> for the replacement criterion, the before/after on every plant in the repo, and
+> one correction to the account below: `_band_structural_rank` had the same defect,
+> and on the frame plants it was the `svd_min_keep` floor built on it that masked
+> the band threshold's error.  Both failed together here.
+
 One parameter at a time, `--df 8`, full-band budget, 10 cycles:
 
 | variant | err/model | err/truth | band_db | drive_lbf2 | drive rank | \|coh\| | effective rcond |
