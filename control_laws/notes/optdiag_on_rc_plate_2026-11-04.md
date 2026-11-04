@@ -81,6 +81,14 @@ worst.  So the specification is very nearly reachable here -- 48 controls on 12
 drives, but the specification was generated from 12 BARC forces, so it lies
 close to a rank-12 image.  Nothing in these numbers is a reachability limit.
 
+The other two configurations, same grid and cycles, default budget:
+
+| configuration | err | band_db | drive_lbf2 | fast/SDP | drive rank | median \|coh\| | ch > 6 dB |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| FRF fixed (case 1) | 3.89 | 1.55 | 5.52e+04 | 340 / 0 | 12 | 0.53 | 21 of 48 |
+| in-control FRF update (`--tf-update`) | 4.11 | 1.81 | 8.27e+04 | 340 / **300** | 12 | 0.51 | **1 of 48** |
+| exact analytic FRF (`--frf exact`) | 2.92 | 1.17 | **1.77e+11** | 340 / 0 | 7 | 0.86 | 0 of 48 |
+
 Beside the study's `n_` rows (same linear plant with noise), `band_db` / drive:
 
     this law, defaults    1.55 / 5.5e4        n_pinv_noclip        1.65 / 8.4e4
@@ -202,6 +210,47 @@ back wrong and the next solve is made against them.  That is a self-reinforcing
 loop, and the study's streamed `nl8n_hu_odf_tfu` row is where it ends:
 band_db 155 dB, drive_lbf2 5.86e+27.
 
+### The exact-FRF run corroborates the gap mechanism from the other side
+
+Case 3 hands the law the exact analytic plant.  The gap rule then finds the
+8.35x gap at sigma_11 -> sigma_12, takes reference 0.0004, sets the threshold to
+0.0009 and should keep 8 of 12 directions.  The observed commanded drive has
+median effective rank **7**, range 4-12 -- against **2** on the measured FRF,
+where the rule predicts 2.  The drive rank tracks the gap rule's own arithmetic
+in both cases, which is about as direct as this gets without instrumenting the
+law.
+
+It also shows why the exact-FRF experiment is the wrong one: it is the most
+accurate run of the three (err 2.92 dB, band_db 1.17 dB, no channel over 6 dB)
+and completely unusable, at drive_lbf2 1.77e+11 -- 212,000 lbf on the worst
+drive.
+
+### The in-control FRF update: the safety rule fires, and a 3.4e+15 excursion
+
+With `--tf-update`, **300 of 640 solves go to the coherence-capped SDP**, so the
+`_h_moved` safety rule does what it is for once the FRF genuinely moves.  Note
+it did NOT fire when the FRF was re-identified from an independent flat
+excitation rather than from the control drive: a fresh 50-average H1 estimate
+moves well under `frf_update_threshold` 0.5 in relative Frobenius norm.  It is
+the control-drive estimate, poisoned by the drive's own rank, that moves H
+enough to trip the gate.
+
+The SDP path is the better-behaved one on the error distribution: **1 of 48
+channels over 6 dB**, against 21 with the FRF held fixed, and drive rank stays
+12.  But the drive is not safe.  `drive_lbf2` by cycle:
+
+    1.21e+04  8.10e+04  8.08e+04  3.37e+15  8.02e+04  8.14e+04  ... 8.27e+04
+
+One cycle, eleven orders of magnitude, then a recovery.  The true error barely
+registered it (3.43 -> 4.09 dB), because the excursion went into near-null
+directions -- which is exactly why it would not be caught by a response-based
+abort.  It recovered here only because the next cycle's re-identification
+happened to be well conditioned.  On the rig, ramping level on a softening
+plant, it did not: `nl8n_hu_odf_tfu`, drive_lbf2 5.86e+27.
+
+So this configuration should be treated as having no usable drive bound on this
+plant, independent of how good its band error looks.
+
 ## Limitations
 
 - The offline loop is 15 control cycles at one test level.  The study's streamed
@@ -211,3 +260,10 @@ band_db 155 dB, drive_lbf2 5.86e+27.
   budget then covers a larger fraction of the band per cycle.  Quote 1 Hz.
 - The achievable floor is computed on a sample of lines (`--floor-lines`), not
   all 3981.
+- The attribution table and the model-vs-truth comparison were run at `--df 8`,
+  where 15 cycles cover essentially the whole band.  The effective `drive_rcond`
+  (0.421) and the singular-value spectra are grid-independent, but the error
+  numbers in that table are the full-coverage ones, not the 1 Hz ones.
+- The 3.37e+15 drive excursion is one cycle of one seed.  It has not been swept
+  over seeds, so its rate is unknown; what the run establishes is that it
+  happens at all, and recovers without any response-side signal.
