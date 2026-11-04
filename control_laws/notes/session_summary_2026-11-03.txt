@@ -1,0 +1,194 @@
+THE LAWS ON THE 10x14 PLANT: PARAMETERS, PLOTS, AND WHY THE OCTAVE LAWS MISS
+2026-11-03   (continues session_summary_2026-11-02.txt, which covers cleanup items 1a-1e)
+================================================================================
+
+Repo     /Users/nhunterjr/Code/python/rattlesnake-vibration-controller
+Branch   control-laws-on-dev  (fork: githunter333/rattlesnake-vibration-controller)
+State    Everything is pushed.  Local and fork are both at 48681437.  No uncommitted
+         tracked changes.  Nothing is running.
+Env      conda env "rattlesnake" (cvxpy), PYTHONPATH=src, commands from the repo root:
+         /opt/anaconda3/envs/rattlesnake/bin/python control_laws/tests/<script>.py
+
+The day went: finish 1e and settle the time-budget default; understand and harden the
+named-parameter syntax; run the laws on the 10x14 frame plant and plot them; and trace why
+the two octave-based laws score worse than the SDP and fast laws.  No control-law logic
+changed except one input check (item 2).  Everything else is scripts, plots and notes.
+
+
+DECISIONS
+--------------------------------------------------------------------------------
+* max_solve_ms_per_update keeps defaulting to 0 (off), for every law.  Set it per profile
+  where a cycle must not be overrun; see "Choosing the time budget" in
+  control_laws/optimal_diagonal_parameters.md.  (At 10 drives x 14 controls the default 20
+  lines per call can take 1.1-1.5 s.)
+* Parallelizing the per-line solves was discussed by mistake and dropped.  Not started.
+  (The lines are independent, so it would help; the obstacles are the shared cvxpy problem
+  object, the GIL, cores on the rig PC, and the time-budget logic.)
+
+
+1  1e FINISHED, PUSHED
+--------------------------------------------------------------------------------
+Commit 8daaa0a2 (one meaning for drive coherence: the magnitude |X_ij|/sqrt(X_ii X_jj);
+docstring defaults checked against the tables) was pushed by you at the start of the day.
+
+
+2  NAMED PARAMETER SYNTAX: HOW IT WORKS, AND ONE HOLE CLOSED          ef08cd87
+--------------------------------------------------------------------------------
+Where the parameters are defined: one Param table per law, in that law's own file.
+    _BASE_PARAMS   optimal_diagonal_control.py            15 entries
+    _FAST_PARAMS   optimal_diagonal_control_fast.py       10 entries
+    _OCTAVE_PARAMS octave_band_switching_control.py        5 entries
+parameter_table() collects them up the class chain: fast law 25, octave law 20.  The Param
+class, the parser (_parse_named) and the readers live in the base file only; the other two
+files load it by path.  Each Param = name, default, converter, legacy position, one-line doc.
+
+A string with a ':' anywhere is the named form (one name: value per line, or ';', '#'
+comments); a string without one is the old comma form.  Named mistakes raise ValueError with
+the nearest valid name (Rattlesnake shows it in a dialog).  Legacy mistakes warn and keep the
+default.
+
+Tried GUI/spreadsheet-style inputs through the real constructors (the GUI passes
+toPlainText() verbatim, a spreadsheet passes the cell value):
+    fine     CRLF and CR line ends, tabs, non-breaking space, ';' separators, comments,
+             capitals, empty values, a number-typed cell (still means field 1)
+    loud     misspelled names, spaces/hyphens in a name, units or '%' in a value, smart
+             quotes, two items on one line, a byte-order mark
+    HOLE     a named line with its colon missing ("reg = 1e-5", "max_bins_per_update 10")
+             was read as the comma form: one console warning, every default kept, the test
+             ran on defaults.
+FIX: in the comma branch, a field that holds a parameter name, an underscore word, '=' or a
+full-width colon/semicolon now raises, asking for "name: value".  Real legacy strings
+(numbers, db/linear) are untouched.
+Checks: check_named_params.py 23/23 (two new tests; deleting the guard in a copy makes one
+fail), golden_params 246/246 pairs and 112/112 named twins, golden_optdiag --strict 43/43.
+NOT DONE: the named syntax has not been typed into the real Rattlesnake GUI box or a
+spreadsheet cell.  Worth one try on the rig.
+
+
+3  THE LAWS ON THE 10x14 PLANT
+--------------------------------------------------------------------------------
+Plant: frame_plant('10x14'): 10 drives, 14 controls, 100-1000 Hz, 5 Hz lines, flat spec.
+15 closed-loop cycles, 20-frame CPSD estimates, FRF held fixed, defaults for every law
+(octave law switched into octave mode with set_test_level_db(0); nothing in Rattlesnake
+calls that hook yet).  band_average run with df 5, oct_order 6, drive_rms_limit none (the
+plant's drive units are arbitrary).
+
+Three different "octave" things; the file names say which:
+    OCTAVE law            octave_band_switching_control.py.  A subclass of the SDP law; one
+                          SDP per 1/6-octave band; averages H over the band (mean of H).
+    BAND-AVERAGE law      band_average.py.  A separate law; minimum-norm drive per band from
+                          the exact band cross-power; automatic regularization (kappa).
+    octave_exactC         EXPERIMENT, not a repo law (tests/octave_exact_c.py): the octave
+                          law with the exact band cross-power in place of the mean of H.
+
+rms dB error vs the spec.  First number: the 11 channels the SDP/fast laws can reach.
+Second: all 14.  Bands are 1/6-octave, 100-1000 Hz lines only.
+                                   per line         1/6-octave bands
+    SDP law                        0.12 / 3.26      0.12 / 2.61
+    fast law                       0.23 / 3.29      0.27 / 2.63
+    octave law (mean of H)         3.22 / 4.78      2.21 / 3.20
+    octave, exact band cross-power 2.66 / 5.43      0.32 / 2.50
+    band_average (auto kappa 18)    3.27 / 5.12      3.08 / 4.23
+    band_average, coherence cap 0.95 3.25 / 5.11     3.08 / 4.23   (the cap does not bind here)
+    best achievable (see below)    0.00 / 2.99      0.00 / 2.38
+    joint 14-channel compromise    1.40 / 2.40      1.14 / 2.01
+Cost per call (ms, median / worst): SDP defaults 18 / 1508; fast 20 / 107; octave 1 / 3.
+The SDP law with a 500 ms budget (400 lines) is still converging at 0.61 dB after 15 cycles.
+
+The two "best achievable" rows:
+  joint        achievable_response.achievable_diagonal: per line, the rms dB optimum over all
+               14 channels at once.  It trades the 11 reachable channels off against the other
+               three (7x, 13x, 14x), so on those 11 it is NOT a floor (the SDP law's 0.12 dB
+               beats its 1.40 dB there).  In the first plots this made the control look better
+               than "best achievable" on some channels.
+  held (plots) the reachable 11 held on target (weight 100:1, within 0.01 dB) and the three
+               hard channels as close as they can then get.  This is the curve now plotted.
+               The SDP law is within 0.27 dB of it on all 14 (3.26 vs 2.99).
+The three given-up channels are 7x (above about 770 Hz), 13x and 14x: 14 controls on 10
+drives, so part of any 14-channel spec cannot be met.
+
+
+4  WHY THE OCTAVE-BASED LAWS MISS
+--------------------------------------------------------------------------------
+(a) OCTAVE LAW: the mean-of-H band average is the error.  With the exact band cross-power
+    C = mean over the band's lines of (h_m h_m^H) in place of the mean of H, the band error
+    on the 11 reachable channels falls from 2.21 to 0.32 dB (all 14: 3.20 -> 2.50, better
+    than the SDP law's 2.61).  Per line it only improves 3.22 -> 2.66 dB, because a drive
+    that is flat inside a band cannot follow resonances.  C needs only the per-line H the law
+    already receives, so the "known limitation" in its docstring does not apply.
+(b) OCTAVE LAW: the top band is diluted.  Its last band (945-1060 Hz) takes in lines above
+    fmax where the spec is zero, so its target is the band mean including zeros, about half.
+    From the code (_oct_y_target is a mean over all the band's lines); not tested alone.
+(c) BAND-AVERAGE LAW: looked worst (4.57 dB rms, all 14, in its own bands).  Cause, found
+    with tests/bandavg_gap.py: its automatic condition number is too low.
+      - The law's knee sweep (_resolve_auto_kappa) predicts each kappa with the plain
+        regularized fit and drops negative eigenvalues.  The real solve (_solve_bands ->
+        _realizable) refits over PSD drives when that costs more than 0.1 dB.
+      - So the sweep's predicted error RISES with kappa (2.5 dB at 18 -> 11.5 at 1e5, mean
+        |dB|) while the real solve's error FALLS (2.06 at 18 -> 0.9 from kappa 100 up).
+      - The sweep picks kappa 18.  The same 0.1 dB rule on the real solve picks 100.
+      - The earlier "predicts 2.5, achieves 4.6" was partly a metric difference: the sweep
+        predicts mean |dB|, I scored rms dB.  The achieved mean |dB| is 2.06, so the law does
+        meet its own forecast.
+    Law's own bands, 20-frame closed loop (rms dB, all 14 / 11 reachable; drive level):
+      auto kappa 18      4.57 / 3.36   -26.5 dB
+      kappa 100          2.81 / 0.94   -21.6 dB
+      kappa 1000         2.76 / 0.51   -19.9 dB (first solve)
+      SDP law            2.92 / 0.11   about -12 dB
+    So at kappa 100 the law is about as good as the SDP law on all 14, still far behind on
+    the 11 reachable, and uses much less drive.
+
+
+5  PLOTS                                              examples/tendrive14resp/results/plots/
+--------------------------------------------------------------------------------
+Ten PNGs, spectra_10x14_<law>_<view>.png, one panel per control channel, framed, with grid
+lines, on a shared +-20 dB window; each key quotes the error against the reference:
+    law  = sdp_law, fast_law, octave_law, band_average_law, band_average_law_capped,
+           octave_exactC_experiment (NOT a repo law)
+    view = lines (every 5 Hz line) or bands (1/6-octave band averages)
+Per line: all six laws.  Bands: octave_law, octave_exactC_experiment, band_average_law,
+band_average_law_capped (the SDP and fast laws have no band view).  Titles name the law and
+its class; the second title line gives the plant and the view.
+Regenerate (about a minute each; they overwrite):
+    plot_law_spectra.py       per-line plots for SDP, fast, octave, band_average (+ capped),
+                              and the score table with the two references
+    plot_octave_exact_c.py    the experiment (per line and bands) and octave_law_bands
+    plot_bandavg_bands.py     band_average bands; scores the laws under three band definitions
+                              (base-2 bands; the law's own base-ten bands on in-band lines;
+                              the law's own definition, partly covered edge bands reading low)
+    bandavg_gap.py            the kappa investigation of 4(c)
+    octave_exact_c.py         the experiment class, and its own comparison table
+
+
+COMMITS TODAY (all pushed)
+--------------------------------------------------------------------------------
+    ef08cd87  A named parameter line with its colon missing is refused
+    f01be4b0  Plots for the laws on 10x14; the octave law's error traced to mean-of-H
+    0fdeba2b  Plot file names and titles say which law and which view
+    b165b5a2  Best achievable holds the reachable channels on target
+    48681437  band_average: why it misses its forecast (bandavg_gap.py)
+compare_optdiag_frame.py got a small change so it runs laws with no SDP counters.
+
+
+A CAVEAT TO KNOW
+--------------------------------------------------------------------------------
+band_average.py is git-excluded on purpose (.git/info/exclude; it is on this disk only).
+plot_law_spectra.py, plot_bandavg_bands.py, plot_octave_exact_c.py and bandavg_gap.py all
+load it, so they run only where that file exists.  The plots themselves are committed.
+
+
+OPEN ITEMS
+--------------------------------------------------------------------------------
+ 1. band_average: score each kappa in _resolve_auto_kappa with the real solve (option, off by
+    default so archived runs keep their kappa; time the sweep, it may need a coarser grid).
+    Then redo the band_average plots at kappa 100 next to the SDP and octave plots.
+ 2. Octave law: an option for the exact band cross-power (off by default), and an option to
+    trim the top band at fmax.  octave_exact_c.py is the working prototype.
+ 3. Try the named syntax in the real Rattlesnake GUI box or a spreadsheet cell.
+ 4. 1f: retire unused options (needs your call on which were used on the rig).
+ 5. Cut the 10-20 ms per-call bookkeeping at 10x14.
+ 6. Run the 10x14 case in Rattlesnake with the SDynPy hardware file; run the capped
+    band-average law on 10x14 there.
+ 7. The octave law's legacy comma-string quirk (fields 6-10 shared with the base class) is
+    kept on purpose; say if you want it fixed (it changes what archived octave runs give).
+ 8. Back up the disk-only data listed in the 2026-11-02 file (40 GB of runs, .nc4 files).
