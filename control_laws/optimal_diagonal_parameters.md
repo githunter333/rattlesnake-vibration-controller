@@ -102,6 +102,7 @@ called coherence squared (gamma^2); a cap of 0.95 is gamma^2 = 0.9025.
 | `svd_floor` | 18 | `1e-06` | sigma/sigma_1 below this is never kept and never counted as a gap |
 | `svd_weak_max` | 19 | `0.05` | a gap counts as a structural floor only if the direction below it has sigma/sigma_1 at or under this |
 | `svd_min_keep` | 20 | `0` | fewest directions any line keeps (0 = auto: structural rank - 1; -1 = N - 1; 1 = pre-2026-10-24 behaviour) |
+| `svd_flat_max` | 26 | `0.0` | adjacent sigma ratios below this count as FLAT; a run of them at the bottom of the band spectrum is the identification noise floor (0 = auto, sqrt(svd_gap_min)) |
 | `cap_baseline` | 22 | `0` | 1 = apply max_drive_coherence to the buzz baseline that unsolved lines sit on |
 | `db_coherence_guard` | 23 | `1` | with the dB objective, a fast solution that breaks the coherence cap: 1 = re-solve with the SDP, 2 = shrink its cross terms, 0 = off |
 | `warm_start` | 24 | `1` | 1 = start each fast solve from the line's current drive when that scores better than the buzz seed |
