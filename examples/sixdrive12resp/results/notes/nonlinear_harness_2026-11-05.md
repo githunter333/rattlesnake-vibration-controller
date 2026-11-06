@@ -215,3 +215,49 @@ The queue is unbounded (`mp.Queue()` with no maxsize), so nothing deadlocks, but
 nothing trims it either and on macOS it never did. The trimmer now stands down
 once with a message and keeps the thread alive for a clean join. A headless run
 has to drain `gui_update_queue` itself, which `run_headless_levels.py` does.
+
+## The port is validated: `validate51i` reproduces run 51 at full level
+
+Re-run with the fixed harness, 60 control updates a level, all five saves
+stamped `control / 20 frames`:
+
+| level | rms_coh | rms_raw | % out | level vs spec | median coh | drive | run 51 rms_raw | run 51 % out |
+|---|---|---|---|---|---|---|---|---|
+| -18 | 10.04 | **12.91** | 87.1 | +15.78 | 0.461 | 133.8 | 5.61 | 19.2 |
+| -12 | 8.15 | 8.15 | 61.8 | +3.99 | 0.999 | 7.9 | -- | -- |
+| -6 | 6.35 | 6.33 | 41.8 | +1.53 | 0.998 | 8.6 | -- | -- |
+| -3 | 5.86 | 5.79 | 31.4 | +0.99 | 0.994 | 9.4 | -- | -- |
+| **+0** | 5.80 | **5.59** | 34.9 | +1.61 | 0.976 | 9.7 | **5.49** | 31.7 |
+
+The full-level point reproduces run 51 to 0.1 dB, and does so per channel, which
+is the part that cannot happen by coincidence:
+
+```
+validate51i  +0 dB   5.52  2.34  3.49  3.13  2.53  3.01  10.33  8.37
+run 51       +0 dB   5.47  2.49  3.46  3.16  2.39  3.33  10.34  7.71
+```
+
+Channels 7 and 8 sit at 10.3 and 8.4 dB in both, which is the achievable floor
+with 6 drives; the six channels the law can actually place agree within 0.3 dB.
+**The nonlinear hardware port reproduces the historical plant.**
+
+### The -18 dB row is a startup snapshot, not a law difference
+
+Its save was taken at update 61, about 30 s of data into the run. Three numbers
+say it had not converged: the response is **+15.8 dB above** spec, the median
+coherence is **0.46** against 0.98-0.999 at every later level, and the drive is
+**133.8** against 7.9-9.7 everywhere else -- a 14x larger drive at the *lowest*
+level is not a physical result, it is the initial drive prediction before the
+law has corrected it.
+
+The law's own `self_predicted_rms_db_per_channel` falls monotonically across the
+whole run -- about 9 dB early, 6.2 by the middle, 5.5 / 2.5 / 3.6 / 3.3 / 2.8 /
+3.0 / 10.9 / 8.7 at the end -- so the five levels are five points along ONE
+convergence, not five converged states. Run 51 was operator-paced and held each
+level for minutes. 60 updates (about 4 minutes of wall clock, 30 s of data) is
+enough at the end of a run and not enough at the start of one.
+
+So for the law comparison the settle has to be long enough that each level is
+converged on its own: **150 updates a level**, roughly 10 minutes a level and
+50 minutes a run at the measured 0.25 updates/s. Runs 53 and 54 are a trim-off /
+trim-on pair, so an unconverged level would be charged to the trim.
