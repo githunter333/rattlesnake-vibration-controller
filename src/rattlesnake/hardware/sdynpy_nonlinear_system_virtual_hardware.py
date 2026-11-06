@@ -61,12 +61,14 @@ from typing import List
 
 import numpy as np
 
-from rattlesnake.hardware.hardware_utilities import Channel
+from rattlesnake.hardware.hardware_utilities import Channel, HardwareType
 from rattlesnake.hardware.sdynpy_system_virtual_hardware import (
     SDynPySystemAcquisition,
     SDynPySystemMetadata,
     SDynPySystemOutput,
 )
+
+HARDWARE_TYPE = HardwareType.SDYNPY_NONLINEAR
 
 #: RK4 substeps between reported samples.  A single step per sample does NOT
 #: resolve this system's higher modes (to ~900 Hz): a single-substep RK4 was
@@ -78,7 +80,21 @@ N_SUB = 4
 
 
 class SDynPyNonlinearSystemMetadata(SDynPySystemMetadata):
-    """Identical to the linear metadata; the hardware type comes from the file."""
+    """The linear metadata, reporting this hardware type instead.
+
+    The override matters: ``SDynPySystemMetadata.__init__`` passes its own
+    module's ``HARDWARE_TYPE`` to ``HardwareMetadata``, and both
+    ``acquisition.py`` and ``output.py`` dispatch on
+    ``metadata.hardware_type`` at run time --
+    ``HARDWARE_ACQUISITION[metadata.hardware_type]``.  Inheriting the base
+    value would therefore load a profile that names hardware type 9 and then
+    quietly run it on the LINEAR integrator, turning a nonlinear test into a
+    linear one with nothing in the log to say so.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hardware_type = HARDWARE_TYPE
 
 
 class SDynPyNonlinearSystemOutput(SDynPySystemOutput):
