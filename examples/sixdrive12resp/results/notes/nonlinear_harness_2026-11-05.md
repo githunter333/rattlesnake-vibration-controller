@@ -152,3 +152,66 @@ confirming as intended before it goes in.
 Historical file naming, for whoever wires up the scoring: `_spec_m18`,
 `_spec_m03`, `_spec_p04`, and a bare `_spec` for 0 dB — underscore before the
 level, `m`/`p` for sign.
+
+## The first validation run was empty, and looked complete
+
+`validate51h` (18:53-20:34, the historical `optimal_diagonal_control` on the
+ported nonlinear hardware) produced five spectral files of identical size, five
+`[save]` lines, a clean `run exit: 0` and 96 minutes of wall clock. It contains
+no control data at all.
+
+The profile manager fired the workbook's own schedule:
+
+```
+18:58:35  Profile Manager -- Profile Firing Event Global GlobalCommands.STOP_HARDWARE
+18:58:35  Frame 6x12 Random -- Stopping Control
+18:58:35  Frame 6x12 Random Data Analysis got STOP_CONTROL
+```
+
+`profile_42h_optdiag_bsoft_trimoff_hist.xlsx` carries the full timed schedule —
+level steps at 46 / 91 / 136 / 181 s and `Stop Streaming` / `Stop Hardware` at
+271 / 275 s — and `run_headless_levels.py` passed it through unchanged while
+logging "start-only events". So control ran 280 s of wall clock, about 30 s of
+data, and the remaining 4500 s were dead air. The four profile level steps had
+already walked all five levels inside those 30 s of data, which is the exact
+failure `schedule()`'s docstring was written to prevent; the harness's own
+`ADJUST_TEST_LEVEL` commands afterwards went to a stopped environment.
+
+Two things hid it:
+
+- **The pacing signal saturates.** The frame count on a `CONTROL_UPDATE` is the
+  number of frames in the averaged CPSD, so it tops out at `frames_in_cpsd`
+  (20). A settle target of 60 is unreachable, so each level waited out its
+  1200 s cap and the log read `frame 20/80 updates=49` — plausible-looking, and
+  in fact 20 minutes of nothing. `updates` was frozen at 49 from t=280 s to the
+  end of the run, which is the one number in that line that gave it away.
+- **A save after control stops writes the system ID.** Five identical files.
+
+The only reason this was caught before it was scored is the `spectral_data_source`
+stamp added with the save fix in the previous section: every file says
+`system_id`, `frames 0`. Without it, five plausible files would have been scored
+and a number reported.
+
+### What changed (commit 22f45b3a)
+
+| | |
+|---|---|
+| schedule | the harness keeps the pre-start events and drops every later level step and every stop, naming each dropped event in the log |
+| pacing | on the cumulative control-update count, which rises as long as the law runs, not on the saturating CPSD frame count |
+| silence | 120 s with no control update stops the run instead of waiting out the cap |
+| reporting | the run summary prints each file's `spectral_data_source` and frame count |
+
+`prepare_bsoft_profiles.py --write` still rewrites profiles 42-45 to the
+start-only sheet, and is still the right thing to run for them. The harness no
+longer depends on it: the `42h` variant built for this validation was never in
+`TARGETS`, which is how it kept its schedule.
+
+### Unrelated, found in the same log
+
+`gui_queue_cleanup` died on its first poll on macOS — `multiprocessing.Queue.qsize()`
+has no `sem_getvalue()` behind it there and raises `NotImplementedError` — leaving
+a traceback at the head of every headless log that reads like a controller fault.
+The queue is unbounded (`mp.Queue()` with no maxsize), so nothing deadlocks, but
+nothing trims it either and on macOS it never did. The trimmer now stands down
+once with a message and keeps the thread alive for a clean join. A headless run
+has to drain `gui_update_queue` itself, which `run_headless_levels.py` does.
