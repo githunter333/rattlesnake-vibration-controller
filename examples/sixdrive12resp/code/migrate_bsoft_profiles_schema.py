@@ -29,6 +29,31 @@ the run:
                                       old sheet carried Ramp Fraction % = 0
                                       and no ramp time at all
 
+TWO OLD FIELDS ARE LOST, NOT CARRIED.  The old sheet kept Control Averaging
+Type (Exponential) and Control Averaging Coefficient (0.04) in columns 3-4 of
+rows 1-2.  The current random environment HARDCODES
+`averaging_type = AveragingTypes.LINEAR` and has no such settings, so they
+cannot be carried.  The control CPSD is therefore averaged differently here
+than in the historical runs, which is a real difference in the control loop's
+error estimate and a limit on how exactly those runs can be reproduced.
+
+MULTI-COLUMN ROWS.  Control Channels (1-based) spans columns 2..N (one channel
+per column, 8 of them here), so the whole row is carried, not just column 2.
+
+TWO FIELDS CHANGED UNITS.  COLA Overlap % and CPSD Overlap % were stored as
+percentages (50); the current code validates them as FRACTIONS --
+`if not (0 <= self.cpsd_overlap < 1)` -- even though its error message still
+says "percentage".  They are divided by 100.  Note the hazard: a stored value
+below 1 would have passed that check and silently meant something else.
+System ID Overlap % is still a percentage and is left alone.
+
+ONE OLD VALUE IS ALSO OVERRIDDEN.  The old profiles carry Noise Averages = 0,
+which the current code rejects outright -- abstract_sysid_data_analysis.validate
+raises "System ID noise averages must be greater than 0".  It is set to 10, the
+value the band-average study uses.  This adds a noise-floor measurement before
+the system ID that the historical runs did not make; it occupies a few quiet
+frames and does not excite the article.
+
     python migrate_bsoft_profiles_schema.py [--write]
 """
 
@@ -66,7 +91,7 @@ CURRENT = [
     ("Control Python Script:", ("old", "Control Python Script:")),
     ("Control Python Function:", ("old", "Control Python Function:")),
     ("Control Parameters:", ("old", "Control Parameters:")),
-    ("Control Channels (1-based):", ("old", "Control Channels (1-based):")),
+    ("Control Channels (1-based):", ("row", "Control Channels (1-based):")),
     ("Sigma Clipping", ("new", 5)),
     ("System ID Samples per Frame", ("new", 4096)),
     ("System ID Averaging:", ("old", "System ID Averaging:")),
@@ -90,22 +115,49 @@ CURRENT = [
 ]
 
 
+#: old label -> replacement value, applied after the label mapping, for values
+#: the current code refuses.  Each one is justified in the module docstring.
+OVERRIDES = {"Noise Averages:": 10}
+
+#: old label -> callable, for fields whose UNITS changed between the layouts
+CONVERSIONS = {
+    "COLA Overlap %:": lambda v: float(v) / 100.0 if float(v) >= 1 else float(v),
+    "CPSD Overlap %:": lambda v: float(v) / 100.0 if float(v) >= 1 else float(v),
+}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--write", action="store_true")
+    ap.add_argument(
+        "--redo",
+        action="store_true",
+        help="restore each profile from its .preschema.bak and migrate again",
+    )
     a = ap.parse_args()
 
     for stem in STEMS:
         path = os.path.join(PROFILES, stem + ".xlsx")
+        backup = path + ".preschema.bak"
+        if a.redo and os.path.exists(backup):
+            if a.write:
+                shutil.copy(backup, path)
+            print(f"  {stem}: restored from .preschema.bak")
         book = openpyxl.load_workbook(path)
         sheet_name = next(s for s in book.sheetnames if "Random" in s)
         sheet = book[sheet_name]
 
-        old = {}
+        old, old_rows = {}, {}
         for i in range(1, sheet.max_row + 1):
             label = sheet.cell(i, 1).value
             if label is not None:
-                old[str(label).strip()] = sheet.cell(i, 2).value
+                key = str(label).strip()
+                old[key] = sheet.cell(i, 2).value
+                old_rows[key] = [
+                    sheet.cell(i, c).value
+                    for c in range(2, sheet.max_column + 1)
+                    if sheet.cell(i, c).value is not None
+                ]
 
         if "Percent Lines Out" in old:
             print(f"  {stem}: already migrated, skipped")
@@ -113,11 +165,26 @@ def main():
 
         rows, missing = [], []
         for label, (kind, src) in CURRENT:
-            if kind == "old":
+            if kind == "row":
+                key = str(src).strip()
+                if key not in old_rows:
+                    missing.append(key)
+                    rows.append((label, None))
+                else:
+                    rows.append((label, list(old_rows[key])))
+                    print(f"      row:      {key} -> {len(old_rows[key])} values")
+            elif kind == "old":
                 key = str(src).strip()
                 if key not in old:
                     missing.append(key)
                     rows.append((label, None))
+                elif key in OVERRIDES:
+                    rows.append((label, OVERRIDES[key]))
+                    print(f"      override: {key} {old[key]!r} -> {OVERRIDES[key]!r}")
+                elif key in CONVERSIONS:
+                    new_value = CONVERSIONS[key](old[key])
+                    rows.append((label, new_value))
+                    print(f"      units:    {key} {old[key]!r} -> {new_value!r}")
                 else:
                     rows.append((label, old[key]))
             else:
@@ -133,11 +200,17 @@ def main():
 
         shutil.copy(path, path + ".preschema.bak")
         for i in range(sheet.max_row, 0, -1):
-            for c in (1, 2):
+            for c in range(1, sheet.max_column + 1):
                 sheet.cell(i, c, None)
         for i, (label, value) in enumerate(rows, start=1):
             sheet.cell(i, 1, label)
-            sheet.cell(i, 2, value)
+            if isinstance(value, list):
+                for j, v in enumerate(value):
+                    sheet.cell(i, 2 + j, v)
+            else:
+                sheet.cell(i, 2, value)
+        # Current files carry a schema marker here; informational, nothing reads it.
+        sheet.cell(1, 3, "v4.0")
         book.save(path)
         print("      written (old kept as .preschema.bak)")
 
