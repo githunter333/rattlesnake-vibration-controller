@@ -527,13 +527,30 @@ def gui_queue_cleanup(
     max_queue_size=500,
     poll_interval=0.25,
 ):
+    measurable = True
     while not shutdown_event.wait(poll_interval):
-        if gui_active_check():
+        if gui_active_check() or not measurable:
             continue
         try:
             while gui_update_queue.qsize() > max_queue_size:
                 gui_update_queue.get_nowait()
         except (thqueue.Empty, mpqueue.Empty):
+            continue
+        except NotImplementedError:
+            # macOS has no sem_getvalue(), so multiprocessing.Queue.qsize()
+            # raises here and -- before this guard -- killed the thread at its
+            # first poll, with a traceback that looked like a controller fault.
+            # There is no way to measure the queue without it, so the trimmer
+            # stands down rather than guessing: on macOS a headless run must
+            # drain gui_update_queue itself (examples/sixdrive12resp/code/
+            # run_headless_levels.py does).  The thread stays alive so that
+            # shutdown still joins it cleanly.
+            print(
+                "gui_queue_cleanup: Queue.qsize() is unavailable on this "
+                "platform; the GUI update queue will not be trimmed. A "
+                "headless run must consume it itself."
+            )
+            measurable = False
             continue
 
 

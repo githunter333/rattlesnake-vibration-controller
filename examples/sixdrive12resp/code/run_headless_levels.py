@@ -78,7 +78,7 @@ def level_tag(level):
     return f"m{abs(lv)}" if lv < 0 else f"{lv}"
 
 
-def run(xlsx, out_base, levels, settle_frames, per_level_cap, overall_cap):
+def run(xlsx, out_base, levels, settle_updates, per_level_cap, overall_cap):
     import openpyxl
     from rattlesnake.engine import RattlesnakeController
     from rattlesnake.load_utilities import load_metadata_from_workbook
@@ -101,6 +101,7 @@ def run(xlsx, out_base, levels, settle_frames, per_level_cap, overall_cap):
     sysid_metadata = env.sysid_metadata
 
     last_level = 0.0
+    kept, dropped, started = [], [], False
     for ev in profile_event_list:
         name = getattr(ev.command, "name", "")
         if isinstance(ev.data, (int, str)) and not isinstance(ev.data, bool):
@@ -109,15 +110,28 @@ def run(xlsx, out_base, levels, settle_frames, per_level_cap, overall_cap):
             except (TypeError, ValueError):
                 pass
         if name == "ADJUST_TEST_LEVEL" and isinstance(ev.data, float):
+            if started:
+                dropped.append((ev.timestamp, name, ev.data))
+                continue
             last_level = ev.data
         elif name == "START_ENVIRONMENT":
             ev.data = RandomVibrationInstructions(ev.environment_name, last_level)
+            started = True
+        elif name == "START_STREAMING":
+            started = True
+        elif "STOP" in name or "SHUTDOWN" in name:
+            dropped.append((ev.timestamp, name, ev.data))
+            continue
+        kept.append(ev)
+    profile_event_list = kept
     log(
         f"loaded {os.path.basename(xlsx)}; env={env_name!r}; "
-        f"{len(profile_event_list)} profile events; hardware "
+        f"{len(profile_event_list)} profile events kept; hardware "
         f"type {getattr(hardware_metadata.hardware_type, 'name', '?')}"
     )
-    log(f"levels {levels}; settle = {settle_frames} frames of data a level; "
+    for t, name, payload in dropped:
+        log(f"  dropped profile event t={t}s {name} {payload!r}")
+    log(f"levels {levels}; settle = {settle_updates} control updates a level; "
         f"caps {per_level_cap:g} s a level, {overall_cap:g} s overall")
 
     rat = RattlesnakeController(threaded=False, timeout=600)
@@ -151,22 +165,38 @@ def run(xlsx, out_base, levels, settle_frames, per_level_cap, overall_cap):
         rat.start_profile(profile_event_list)
         log("profile started (start-only events; levels stepped from here)")
 
-        def wait_for(target_frames, label, cap):
-            """Block until the controller's frame count reaches target_frames."""
+        def wait_for(target_updates, label, cap):
+            """Block until the control law has run target_updates more times.
+
+            Pacing is on the CUMULATIVE control-update count, not on the frame
+            count the update carries: that frame count is the number of frames
+            in the averaged CPSD, so it saturates at frames_in_cpsd (20 here)
+            and a target above it can never be reached.  The first validation
+            run asked for 60 and sat at 20 through five 1200 s caps.
+            """
             t_level = time.time()
             last_log = 0.0
-            while state["frames"] < target_frames:
+            stalled_since = time.time()
+            seen = state["updates"]
+            while state["updates"] < target_updates:
+                if state["updates"] != seen:
+                    seen, stalled_since = state["updates"], time.time()
+                if time.time() - stalled_since > 120:
+                    log(f"  [{label}] STALLED: no control update in 120 s at "
+                        f"update {state['updates']} of {target_updates} -- the "
+                        f"test is no longer controlling, stopping")
+                    return None
                 if time.time() - t_level > cap:
-                    log(f"  [{label}] CAP {cap:g} s reached at frame "
-                        f"{state['frames']} of {target_frames} -- moving on")
+                    log(f"  [{label}] CAP {cap:g} s reached at update "
+                        f"{state['updates']} of {target_updates} -- moving on")
                     return False
                 if time.time() - t0 > overall_cap:
                     log(f"  [{label}] overall cap reached -- stopping")
                     return False
                 if time.time() - last_log > 20:
-                    rate = state["frames"] / max(time.time() - t0, 1e-9)
-                    log(f"  [{label}] frame {state['frames']}/{target_frames}  "
-                        f"updates={state['updates']}  {rate:.2f} frames/s wall  "
+                    rate = state["updates"] / max(time.time() - t0, 1e-9)
+                    log(f"  [{label}] update {state['updates']}/{target_updates}  "
+                        f"cpsd frames={state['frames']}  {rate:.2f} updates/s wall  "
                         f"t={time.time()-t0:5.0f}s")
                     last_log = time.time()
                 time.sleep(1.0)
@@ -177,9 +207,11 @@ def run(xlsx, out_base, levels, settle_frames, per_level_cap, overall_cap):
                 rat.send_environment_command(
                     env_name, RandomVibrationCommands.ADJUST_TEST_LEVEL, float(level)
                 )
-                log(f"  [level] -> {level:+g} dB at frame {state['frames']}")
-            target = state["frames"] + settle_frames
+                log(f"  [level] -> {level:+g} dB at update {state['updates']}")
+            target = state["updates"] + settle_updates
             ok = wait_for(target, f"{level:+g} dB", per_level_cap)
+            if ok is None:                      # control stopped: saves would
+                break                           # all repeat the same snapshot
             path = f"{out_base}_spec{level_tag(level)}.nc4"
             try:
                 if os.path.exists(path):
@@ -188,8 +220,8 @@ def run(xlsx, out_base, levels, settle_frames, per_level_cap, overall_cap):
                     env_name, RandomVibrationCommands.SAVE_CONTROL_DATA, path
                 )
                 time.sleep(3.0)      # let the write land before the next level
-                saved.append((level, path, state["frames"]))
-                log(f"  [save] {level:+g} dB at frame {state['frames']} -> "
+                saved.append((level, path, state["updates"]))
+                log(f"  [save] {level:+g} dB at update {state['updates']} -> "
                     f"{os.path.basename(path)}")
             except Exception:
                 log(f"  [save] FAILED at {level:+g} dB:\n" + traceback.format_exc())
@@ -205,11 +237,20 @@ def run(xlsx, out_base, levels, settle_frames, per_level_cap, overall_cap):
         except Exception:
             log("shutdown error:\n" + traceback.format_exc())
         log(f"saved {len(saved)} spectral files (frame count at each save):")
-        for level, path, frame in saved:
+        for level, path, update in saved:
             ok = os.path.exists(path)
             sz = os.path.getsize(path) / 1e3 if ok else 0
-            log(f"   {level:+g} dB  frame {frame:5d}  {'OK ' if ok else 'MISSING'}  "
-                f"{sz:8.1f} kB  {os.path.basename(path)}")
+            src = "?"
+            try:
+                import netCDF4 as nc4
+                with nc4.Dataset(path) as ds:
+                    grp = ds.groups[next(iter(ds.groups))]
+                    src = (f"{grp.spectral_data_source}/"
+                           f"{grp.spectral_data_frames} frames")
+            except Exception:
+                pass
+            log(f"   {level:+g} dB  update {update:5d}  {'OK ' if ok else 'MISSING'}  "
+                f"{sz:8.1f} kB  {src:20s}  {os.path.basename(path)}")
 
 
 if __name__ == "__main__":
@@ -222,8 +263,8 @@ if __name__ == "__main__":
     _, levels, _ = schedule()
     if "--levels" in opts:
         levels = [float(v) for v in opts["--levels"].split(",")]
-    #: 60 frames at frames_in_cpsd = 20 is three full CPSD refreshes a level
-    settle = int(opts.get("--settle-frames", 60))
+    #: 60 control updates at frames_in_cpsd = 20 is three full CPSD refreshes
+    settle = int(opts.get("--settle-updates", opts.get("--settle-frames", 60)))
     per_level = float(opts.get("--level-cap", 900))
     overall = float(opts.get("--overall-cap", 5400))
     run(xlsx, out_base, levels, settle, per_level, overall)
