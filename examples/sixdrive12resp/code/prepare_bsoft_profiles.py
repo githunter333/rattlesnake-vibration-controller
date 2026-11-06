@@ -50,22 +50,24 @@ START = 1.0                 # Start Environment
 
 
 def schedule():
-    """(events, save_times) -- events for the Test Profile sheet, and the time at
-    which each level's spectral data should be saved (end of its dwell)."""
-    events = [("0.0", "ENV", "Adjust Test Level", str(LEVELS[0]))]
-    saves = []
-    t = START
-    events.append((f"{t:g}", "ENV", "Start Environment", None))
-    events.append((f"{t:g}", "Global", "Start Streaming", None))
-    for i, level in enumerate(LEVELS):
-        dwell = FULL_HOLD if i == len(LEVELS) - 1 else STEP
-        saves.append((round(t + dwell - 2.0, 3), level))
-        t += dwell
-        if i < len(LEVELS) - 1:
-            events.append((f"{t:g}", "ENV", "Adjust Test Level", str(LEVELS[i + 1])))
-    events.append((f"{t:g}", "Global", "Stop Streaming", None))
-    events.append((f"{t + 4:g}", "Global", "Stop Hardware", None))
-    return events, saves, t + 4
+    """(events, levels) -- a START-ONLY event list, and the levels to walk.
+
+    The level steps are deliberately NOT profile events.  The nonlinear
+    integrator runs at roughly an eighth of real time (163,840 derivative
+    evaluations per second of data), so any schedule written in data-seconds
+    fires about eight times too early in wall clock: a 45 s-a-level profile
+    ramped through all five levels inside the first ~34 s of data and produced
+    five bit-identical saves.  That is why these runs were operator-paced.
+    run_headless_levels.py instead steps the level and saves when the
+    controller's own frame count has advanced, which is machine-speed
+    independent.  See results/notes/nonlinear_harness_2026-11-05.md.
+    """
+    events = [
+        ("0.0", "ENV", "Adjust Test Level", str(LEVELS[0])),
+        (f"{START:g}", "ENV", "Start Environment", None),
+        (f"{START:g}", "Global", "Start Streaming", None),
+    ]
+    return events, list(LEVELS), START
 
 
 def main():
@@ -73,10 +75,9 @@ def main():
     ap.add_argument("--write", action="store_true", help="apply the changes")
     a = ap.parse_args()
 
-    events, saves, end = schedule()
-    print(f"schedule: levels {list(LEVELS)}, {STEP:g} s a step, {FULL_HOLD:g} s at full "
-          f"level, ends {end:g} s")
-    print("  saves at: " + ", ".join(f"{t:g}s ({lv:+d} dB)" for t, lv in saves))
+    events, levels, _ = schedule()
+    print(f"start-only event list ({len(events)} events); levels {levels} are stepped "
+          f"by run_headless_levels.py on the controller's frame count")
     print()
 
     for stem, run in sorted(TARGETS.items(), key=lambda kv: kv[1]):

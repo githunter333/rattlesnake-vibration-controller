@@ -98,3 +98,57 @@ So a gap against 5.49-5.61 dB will not be attributable to the hardware port
 alone. To isolate the port, run the *historical* law from
 `control-law-development-2026-09` on the ported hardware and compare that to
 run 51; only then does a current-law number mean what it appears to.
+
+---
+
+## 6. Second blocker: "Save Spectral Data" now saves system-ID data, not control data
+
+The progress-paced harness works — it reads the controller's own frame count off
+`CONTROL_UPDATE`, steps the level with `ADJUST_TEST_LEVEL`, and saves at a fixed
+number of frames of data a level, machine-speed independent. A smoke test
+stepped −18 → −12 dB at frame 6 and saved at frames 6 and 13 as intended.
+
+The saved files are still **bit-identical** between levels, and so is the
+specification sum (1.000x where −18 → −12 dB should give 3.98x). The cause is
+not the harness:
+
+| version | `save_spectral_data` writes |
+|---|---|
+| old, `components/random_vibration_sys_id_environment.py` | `last_transfer_function`, `last_coherence`, `last_response_cpsd`, `last_reference_cpsd` — the **live control** spectra |
+| current, `process/random_vibration_sys_id_data_analysis.py` | `sysid_data.sysid_frf`, `sysid_coherence`, `sysid_response_cpsd` — the **system-ID** spectra |
+
+The system ID is measured once before control and never changes, so every save
+in a run is identical regardless of level, law or elapsed time. That is exactly
+what was observed, and it also explains why the first (wall-clock) attempt and
+the historical-law attempt produced the same response sum, ~55.0, despite being
+different laws.
+
+The historical files confirm the old behaviour and are self-consistent with the
+published scores:
+
+| file | response sum | rms_raw | published |
+|---|---|---|---|
+| `run51_..._spec_m18.nc4` | 7.739 | **5.607 dB** | 5.61 |
+| `run51_..._spec.nc4` (0 dB) | 11.361 | **5.493 dB** | 5.49 |
+| `run51_..._spec_p04.nc4` | 45.523 | **7.268 dB** | 7.27 |
+
+They vary with level and reproduce `moving_plant_scores.json` to two decimals,
+so `response_cpsd_real` in those files is unambiguously live control data.
+
+**This is a regression in the current controller, not an artifact of this
+exercise.** Anyone pressing "Save Spectral Data" during a random-vibration run
+today gets the pre-control system-ID spectra, with no indication that is what
+they are getting. It is also the remaining blocker for runs 53 and 54: the
+current code cannot produce the file content the historical scoring reads.
+
+The fix is small and local — the data analysis process already holds
+`self.last_response_cpsd`, `self.control_frf`, `self.control_coherence` and
+`self.last_drive_cpsd`, assigned in `run_control` from the spectral queue, which
+are the four fields the old code wrote. Writing those instead (falling back to
+the system-ID arrays before control starts, so a pre-control save still works)
+restores the old meaning. That touches shared controller code, so it is worth
+confirming as intended before it goes in.
+
+Historical file naming, for whoever wires up the scoring: `_spec_m18`,
+`_spec_m03`, `_spec_p04`, and a bare `_spec` for 0 dB — underscore before the
+level, `m`/`p` for sign.

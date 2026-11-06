@@ -5,12 +5,21 @@ and pressed "Save Spectral Data" at each one, which is why make_moving_plant_
 figures.py scores one file per level (``<base>_spec<level>.nc4``, reading
 ``response_cpsd_real`` / ``drive_cpsd_real``) rather than a streaming file.
 
-This drives the same sequence with no GUI.  The level schedule comes from the
-profile's Test Profile sheet (prepare_bsoft_profiles.py writes it); the only
-thing done here that a profile event cannot express is the per-level save, which
-goes through the same controller call the GUI button uses:
+This drives the same sequence with no GUI, and it is PACED BY DATA, not by the
+clock.  The nonlinear integrator runs at about an eighth of real time, so a
+wall-clock schedule written in data-seconds fires roughly eight times too early
+-- a 45 s-a-level profile ramped through all five levels inside the first ~34 s
+of data and saved five bit-identical files.  The level is therefore stepped, and
+the spectral data saved, only once the controller's OWN frame count has advanced
+by `--settle-frames` since the last change.  Both go through the same calls the
+GUI buttons use:
 
+    send_environment_command(env, RandomVibrationCommands.ADJUST_TEST_LEVEL, level)
     send_environment_command(env, RandomVibrationCommands.SAVE_CONTROL_DATA, path)
+
+The frame count arrives on the GUI update queue as the first element of each
+CONTROL_UPDATE payload, so progress is read from the controller rather than
+guessed.
 
 Adapted from the rattlesnake-band-average study's run_headless.py, which is the
 proven driver for this package layout.  Its gotchas still apply and are kept:
@@ -41,11 +50,25 @@ def log(*a):
     print(*a, flush=True)
 
 
-def drain(q, stop):
+def watch(q, stop, env_name, state):
+    """Drain the GUI update queue, recording control progress as it goes.
+
+    Draining is not optional: Rattlesnake's own trimmer dies on macOS at its
+    first Queue.qsize(), so nothing else empties this queue and every control
+    update -- the full response CPSD each cycle -- would accumulate in memory.
+    """
     while not stop.is_set():
         try:
-            q.get(timeout=0.25)
+            item = q.get(timeout=0.25)
         except queue.Empty:
+            continue
+        try:
+            name, (command, payload) = item
+            if name == env_name and getattr(command, "name", "") == "CONTROL_UPDATE":
+                state["updates"] += 1
+                if isinstance(payload, (tuple, list)) and payload:
+                    state["frames"] = int(payload[0])
+        except Exception:
             pass
 
 
@@ -55,7 +78,7 @@ def level_tag(level):
     return f"m{abs(lv)}" if lv < 0 else f"{lv}"
 
 
-def run(xlsx, out_base, wait_seconds, save_plan):
+def run(xlsx, out_base, levels, settle_frames, per_level_cap, overall_cap):
     import openpyxl
     from rattlesnake.engine import RattlesnakeController
     from rattlesnake.load_utilities import load_metadata_from_workbook
@@ -94,34 +117,19 @@ def run(xlsx, out_base, wait_seconds, save_plan):
         f"{len(profile_event_list)} profile events; hardware "
         f"type {getattr(hardware_metadata.hardware_type, 'name', '?')}"
     )
-    log("save plan: " + ", ".join(f"{t:g}s -> {lv:+g} dB" for t, lv in save_plan))
+    log(f"levels {levels}; settle = {settle_frames} frames of data a level; "
+        f"caps {per_level_cap:g} s a level, {overall_cap:g} s overall")
 
     rat = RattlesnakeController(threaded=False, timeout=600)
-    stop_drain = threading.Event()
+    stop_watch = threading.Event()
+    state = {"updates": 0, "frames": 0}
     threading.Thread(
-        target=drain, args=(rat.queue_container.gui_update_queue, stop_drain), daemon=True
+        target=watch,
+        args=(rat.queue_container.gui_update_queue, stop_watch, env_name, state),
+        daemon=True,
     ).start()
 
     saved = []
-
-    def saver(t0):
-        """Issue SAVE_CONTROL_DATA at each planned time, as the GUI button does."""
-        for t_at, level in sorted(save_plan):
-            delay = t_at - (time.time() - t0)
-            if delay > 0:
-                time.sleep(delay)
-            path = f"{out_base}_spec{level_tag(level)}.nc4"
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-                rat.send_environment_command(
-                    env_name, RandomVibrationCommands.SAVE_CONTROL_DATA, path
-                )
-                saved.append((level, path))
-                log(f"  [save] t={time.time()-t0:5.0f}s  {level:+g} dB -> "
-                    f"{os.path.basename(path)}")
-            except Exception:
-                log(f"  [save] FAILED at {level:+g} dB:\n" + traceback.format_exc())
 
     try:
         rat.initialize_hardware(hardware_metadata)
@@ -141,42 +149,81 @@ def run(xlsx, out_base, wait_seconds, save_plan):
         rat.clear_blocking()
         t0 = time.time()
         rat.start_profile(profile_event_list)
-        log("profile started")
-        threading.Thread(target=saver, args=(t0,), daemon=True).start()
+        log("profile started (start-only events; levels stepped from here)")
 
-        while time.time() - t0 < wait_seconds:
-            time.sleep(10)
-            sz = os.path.getsize(stream_nc4) / 1e6 if os.path.exists(stream_nc4) else 0
-            log(f"  t={time.time()-t0:5.0f}s  stream={sz:7.1f} MB  saved={len(saved)}")
+        def wait_for(target_frames, label, cap):
+            """Block until the controller's frame count reaches target_frames."""
+            t_level = time.time()
+            last_log = 0.0
+            while state["frames"] < target_frames:
+                if time.time() - t_level > cap:
+                    log(f"  [{label}] CAP {cap:g} s reached at frame "
+                        f"{state['frames']} of {target_frames} -- moving on")
+                    return False
+                if time.time() - t0 > overall_cap:
+                    log(f"  [{label}] overall cap reached -- stopping")
+                    return False
+                if time.time() - last_log > 20:
+                    rate = state["frames"] / max(time.time() - t0, 1e-9)
+                    log(f"  [{label}] frame {state['frames']}/{target_frames}  "
+                        f"updates={state['updates']}  {rate:.2f} frames/s wall  "
+                        f"t={time.time()-t0:5.0f}s")
+                    last_log = time.time()
+                time.sleep(1.0)
+            return True
+
+        for i, level in enumerate(levels):
+            if i > 0:
+                rat.send_environment_command(
+                    env_name, RandomVibrationCommands.ADJUST_TEST_LEVEL, float(level)
+                )
+                log(f"  [level] -> {level:+g} dB at frame {state['frames']}")
+            target = state["frames"] + settle_frames
+            ok = wait_for(target, f"{level:+g} dB", per_level_cap)
+            path = f"{out_base}_spec{level_tag(level)}.nc4"
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+                rat.send_environment_command(
+                    env_name, RandomVibrationCommands.SAVE_CONTROL_DATA, path
+                )
+                time.sleep(3.0)      # let the write land before the next level
+                saved.append((level, path, state["frames"]))
+                log(f"  [save] {level:+g} dB at frame {state['frames']} -> "
+                    f"{os.path.basename(path)}")
+            except Exception:
+                log(f"  [save] FAILED at {level:+g} dB:\n" + traceback.format_exc())
+            if not ok and time.time() - t0 > overall_cap:
+                break
     except Exception:
         log("ERROR:\n" + traceback.format_exc())
     finally:
         log("shutting down...")
-        stop_drain.set()
+        stop_watch.set()
         try:
             rat.shutdown()
         except Exception:
             log("shutdown error:\n" + traceback.format_exc())
-        log(f"saved {len(saved)} spectral files:")
-        for level, path in saved:
+        log(f"saved {len(saved)} spectral files (frame count at each save):")
+        for level, path, frame in saved:
             ok = os.path.exists(path)
             sz = os.path.getsize(path) / 1e3 if ok else 0
-            log(f"   {level:+g} dB  {'OK ' if ok else 'MISSING'}  {sz:8.1f} kB  {path}")
+            log(f"   {level:+g} dB  frame {frame:5d}  {'OK ' if ok else 'MISSING'}  "
+                f"{sz:8.1f} kB  {os.path.basename(path)}")
 
 
 if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     opts = {a.split("=")[0]: a.split("=", 1)[-1] for a in sys.argv[1:] if a.startswith("--")}
-    xlsx = args[0]
-    out_base = args[1]
-    wait = float(args[2]) if len(args) > 2 else 330.0
+    xlsx, out_base = args[0], args[1]
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from prepare_bsoft_profiles import schedule
 
-    _, saves, _ = schedule()
-    if "--saves" in opts:
-        saves = [
-            (float(p.split(":")[0]), float(p.split(":")[1]))
-            for p in opts["--saves"].split(",")
-        ]
-    run(xlsx, out_base, wait, saves)
+    _, levels, _ = schedule()
+    if "--levels" in opts:
+        levels = [float(v) for v in opts["--levels"].split(",")]
+    #: 60 frames at frames_in_cpsd = 20 is three full CPSD refreshes a level
+    settle = int(opts.get("--settle-frames", 60))
+    per_level = float(opts.get("--level-cap", 900))
+    overall = float(opts.get("--overall-cap", 5400))
+    run(xlsx, out_base, levels, settle, per_level, overall)
