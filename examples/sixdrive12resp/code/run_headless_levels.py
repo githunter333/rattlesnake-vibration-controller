@@ -72,10 +72,17 @@ def watch(q, stop, env_name, state):
             pass
 
 
-def level_tag(level):
-    """Match the historical file naming: -18 -> 'm18', 0 -> '0'."""
+def level_tag(level, occurrence=0):
+    """Match the historical file naming: -18 -> 'm18', 0 -> '0'.
+
+    A level listed more than once is a hold: the same level is saved again
+    after another settle, to show how the law converges at it rather than
+    asserting one snapshot is converged.  Those repeats get _2, _3, ... so
+    they do not overwrite each other.
+    """
     lv = int(round(float(level)))
-    return f"m{abs(lv)}" if lv < 0 else f"{lv}"
+    tag = f"m{abs(lv)}" if lv < 0 else f"{lv}"
+    return tag if occurrence == 0 else f"{tag}_{occurrence + 1}"
 
 
 def run(xlsx, out_base, levels, settle_updates, per_level_cap, overall_cap):
@@ -202,8 +209,11 @@ def run(xlsx, out_base, levels, settle_updates, per_level_cap, overall_cap):
                 time.sleep(1.0)
             return True
 
+        seen_levels = {}
         for i, level in enumerate(levels):
-            if i > 0:
+            occurrence = seen_levels.get(float(level), 0)
+            seen_levels[float(level)] = occurrence + 1
+            if i > 0 and float(level) != float(levels[i - 1]):
                 rat.send_environment_command(
                     env_name, RandomVibrationCommands.ADJUST_TEST_LEVEL, float(level)
                 )
@@ -212,7 +222,7 @@ def run(xlsx, out_base, levels, settle_updates, per_level_cap, overall_cap):
             ok = wait_for(target, f"{level:+g} dB", per_level_cap)
             if ok is None:                      # control stopped: saves would
                 break                           # all repeat the same snapshot
-            path = f"{out_base}_spec{level_tag(level)}.nc4"
+            path = f"{out_base}_spec{level_tag(level, occurrence)}.nc4"
             try:
                 if os.path.exists(path):
                     os.remove(path)
