@@ -261,3 +261,48 @@ So for the law comparison the settle has to be long enough that each level is
 converged on its own: **150 updates a level**, roughly 10 minutes a level and
 50 minutes a run at the measured 0.25 updates/s. Runs 53 and 54 are a trim-off /
 trim-on pair, so an unconverged level would be charged to the trim.
+
+## The -18 dB point converges, and to run 51's number
+
+`validate51j`: -18 dB held, saved every 60 control updates.
+
+| snapshot | updates | rms_coh | rms_raw | % out | level vs spec | median coh | drive |
+|---|---|---|---|---|---|---|---|
+| 1 | 61 | 8.82 | 11.17 | 84.7 | +14.03 | 0.492 | 128.5 |
+| 2 | 121 | 8.76 | 8.77 | 63.2 | +8.08 | 0.999 | 8.9 |
+| 3 | 181 | 6.18 | 6.18 | 37.5 | +1.84 | 0.999 | 8.8 |
+| 4 | 241 | 5.74 | 5.74 | 21.6 | +0.43 | 0.999 | 9.0 |
+| 5 | 301 | 5.79 | 5.79 | 21.9 | +0.41 | 0.999 | 9.0 |
+| 6 | 361 | **5.71** | **5.71** | **21.6** | +0.52 | 0.999 | 9.1 |
+| **run 51** | operator | -- | **5.61** | **19.2** | +0.31 | 0.997 | 8.8 |
+
+```
+validate51j snapshot 6    4.81  1.66  2.76  2.30  1.58  1.90  11.36  9.30
+run 51 at -18 dB          4.33  1.59  2.54  2.23  1.99  1.31  10.85  9.77
+```
+
+5.71 dB against 5.61, 21.6 % out against 19.2 %, +0.52 dB of level against
++0.31, and the drive, the coherence and the per-channel pattern all land on run
+51's. Snapshot 1 repeats validate51i's -18 dB signature exactly -- +14 dB over
+spec, coherence 0.49, drive 128 -- so that transient is reproducible and is what
+the earlier save caught, not a difference between this plant and the historical
+one. **Both ends of the level range now reproduce run 51: -18 dB to 0.10 dB and
+0 dB to 0.10 dB.** The port is validated.
+
+### The settle requirement, measured
+
+The run plateaus at snapshot 4 and holds there: 5.74, 5.79, 5.71, stable to
+0.04 dB over 120 further updates. So **a cold start needs about 240 control
+updates**, roughly 16 minutes of wall clock, and 60 is only enough once the law
+is already converged. That is the whole explanation of validate51i's shape --
+its five levels were five points along one convergence, and only the last was
+at the plateau.
+
+For runs 53 and 54, listing the first level twice at a 120-update settle gives
+the first level 240 updates and every later level 120, which is about 48 minutes
+a run. The repeat also keeps the convergence visible rather than assumed.
+
+Unrelated: `Warning! SDynPy integrator ran out of samples!` at shutdown is
+benign. The integrator fills a frame with zeros when the output queue is empty
+for longer than one frame time, which is what happens once output stops. It is
+not a limit on run length.
