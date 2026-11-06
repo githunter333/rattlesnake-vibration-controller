@@ -635,72 +635,75 @@ class RandomVibrationDataAnalysisProcess(SysIDAnalysisProcess):
         )
 
     def save_spectral_data(self, data):
+        """Save the spectral data for this environment to `data` (a filename).
+
+        Writes the LIVE CONTROL spectra once control has produced any, and the
+        system-identification spectra before that.  `spectral_data_source` on
+        the group says which, so a reader never has to guess.
+
+        This used to write the system-ID arrays unconditionally, which made
+        every save in a run identical regardless of test level, control law or
+        elapsed time -- the system ID is measured once, before control.  The
+        pre-reorganization code (components/random_vibration_sys_id_environment
+        .py) wrote last_response_cpsd / last_transfer_function / last_coherence
+        / last_reference_cpsd here, and the sixdrive12resp bounded-softening
+        files scored in results/notes/moving_plant_scores.json hold live control
+        data: their response spectra vary with level (sums 7.74 / 11.36 / 45.52)
+        and reproduce the published scores to two decimals.  Restoring that is
+        what this does.  See
+        examples/sixdrive12resp/results/notes/nonlinear_harness_2026-11-05.md.
+
+        The noise spectra have no control-time equivalent -- they are measured
+        with the drives quiet -- so they are always the system ID's.
+        """
         filename = data
+
+        live = self.last_response_cpsd is not None
+        frf = (
+            self.control_frf
+            if live and self.control_frf is not None
+            else self.sysid_data.sysid_frf
+        )
+        coherence = (
+            self.control_coherence
+            if live and self.control_coherence is not None
+            else self.sysid_data.sysid_coherence
+        )
+        response_cpsd = (
+            self.last_response_cpsd if live else self.sysid_data.sysid_response_cpsd
+        )
+        drive_cpsd = (
+            self.last_drive_cpsd
+            if live and self.last_drive_cpsd is not None
+            else self.sysid_data.sysid_reference_cpsd
+        )
+
         netcdf_dataset = nc4.Dataset(filename, "a", format="NETCDF4")
         netcdf_handle = netcdf_dataset.groups[self.environment_name]
-        netcdf_handle.createDimension(
-            "drive_channels", self.sysid_data.sysid_frf.shape[2]
-        )
-        var = netcdf_handle.createVariable(
-            "frf_data_real",
-            "f8",
-            ("fft_lines", "specification_channels", "drive_channels"),
-        )
-        var[...] = self.sysid_data.sysid_frf.real
-        var = netcdf_handle.createVariable(
-            "frf_data_imag",
-            "f8",
-            ("fft_lines", "specification_channels", "drive_channels"),
-        )
-        var[...] = self.sysid_data.sysid_frf.imag
-        var = netcdf_handle.createVariable(
-            "frf_coherence", "f8", ("fft_lines", "specification_channels")
-        )
-        var[...] = self.sysid_data.sysid_coherence.real
-        var = netcdf_handle.createVariable(
-            "response_cpsd_real",
-            "f8",
-            ("fft_lines", "specification_channels", "specification_channels"),
-        )
-        var[...] = self.sysid_data.sysid_response_cpsd.real
-        var = netcdf_handle.createVariable(
-            "response_cpsd_imag",
-            "f8",
-            ("fft_lines", "specification_channels", "specification_channels"),
-        )
-        var[...] = self.sysid_data.sysid_response_cpsd.imag
-        var = netcdf_handle.createVariable(
-            "drive_cpsd_real", "f8", ("fft_lines", "drive_channels", "drive_channels")
-        )
-        var[...] = self.sysid_data.sysid_reference_cpsd.real
-        var = netcdf_handle.createVariable(
-            "drive_cpsd_imag", "f8", ("fft_lines", "drive_channels", "drive_channels")
-        )
-        var[...] = self.sysid_data.sysid_reference_cpsd.imag
-        var = netcdf_handle.createVariable(
-            "response_noise_cpsd_real",
-            "f8",
-            ("fft_lines", "specification_channels", "specification_channels"),
-        )
-        var[...] = self.sysid_data.sysid_response_noise.real
-        var = netcdf_handle.createVariable(
-            "response_noise_cpsd_imag",
-            "f8",
-            ("fft_lines", "specification_channels", "specification_channels"),
-        )
-        var[...] = self.sysid_data.sysid_response_noise.imag
-        var = netcdf_handle.createVariable(
-            "drive_noise_cpsd_real",
-            "f8",
-            ("fft_lines", "drive_channels", "drive_channels"),
-        )
-        var[...] = self.sysid_data.sysid_reference_noise.real
-        var = netcdf_handle.createVariable(
-            "drive_noise_cpsd_imag",
-            "f8",
-            ("fft_lines", "drive_channels", "drive_channels"),
-        )
-        var[...] = self.sysid_data.sysid_reference_noise.imag
+        netcdf_handle.spectral_data_source = "control" if live else "system_id"
+        netcdf_handle.spectral_data_frames = int(self.frames) if live else 0
+        netcdf_handle.createDimension("drive_channels", frf.shape[2])
+
+        def put(name, dims, values):
+            netcdf_handle.createVariable(name, "f8", dims)[...] = values
+
+        spec_spec = ("fft_lines", "specification_channels", "specification_channels")
+        spec_drive = ("fft_lines", "specification_channels", "drive_channels")
+        drive_drive = ("fft_lines", "drive_channels", "drive_channels")
+        sysid = self.sysid_data
+
+        put("frf_data_real", spec_drive, frf.real)
+        put("frf_data_imag", spec_drive, frf.imag)
+        put("frf_coherence", ("fft_lines", "specification_channels"), coherence.real)
+        put("response_cpsd_real", spec_spec, response_cpsd.real)
+        put("response_cpsd_imag", spec_spec, response_cpsd.imag)
+        put("drive_cpsd_real", drive_drive, drive_cpsd.real)
+        put("drive_cpsd_imag", drive_drive, drive_cpsd.imag)
+        # Noise is a drives-quiet measurement; there is no control-time version.
+        put("response_noise_cpsd_real", spec_spec, sysid.sysid_response_noise.real)
+        put("response_noise_cpsd_imag", spec_spec, sysid.sysid_response_noise.imag)
+        put("drive_noise_cpsd_real", drive_drive, sysid.sysid_reference_noise.real)
+        put("drive_noise_cpsd_imag", drive_drive, sysid.sysid_reference_noise.imag)
 
         netcdf_dataset.close()
 
