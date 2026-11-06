@@ -434,6 +434,12 @@ class SDynPySystemAcquisition(HardwareAcquisition):
         tdofs_response = phi_response.shape[0]
         tdofs_input = phi_excitation.shape[0]
 
+        # Kept for subclasses that need the modal projection after setup; the
+        # nonlinear variant builds Phi^T M from it.  Nothing in this class uses
+        # these attributes.
+        self.phi_response = phi_response
+        self.ndofs = ndofs
+
         # Assembly the full state matrices
 
         # A = [[     0,     I],

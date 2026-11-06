@@ -46,3 +46,8 @@ coverage.xml
 documentation/_build/**
 _build/
 output.html
+# Rattlesnake run output: measurement data, often 10 MB to 30 GB per file.
+# Never commit it -- a "git add -A" swept 23 MB of it onto a public branch on 2026-11-04.
+# Upstream example data under src/rattlesnake/examples/ stays addable.
+*.nc4
+!src/rattlesnake/examples/**/*.nc4

@@ -102,6 +102,20 @@ for hardware_type in HardwareType:
             HARDWARE_METADATA[HardwareType.SDYNPY_SYSTEM] = SDynPySystemMetadata
             HARDWARE_ACQUISITION[HardwareType.SDYNPY_SYSTEM] = SDynPySystemAcquisition
             HARDWARE_OUTPUT[HardwareType.SDYNPY_SYSTEM] = SDynPySystemOutput
+        case HardwareType.SDYNPY_NONLINEAR:
+            from rattlesnake.hardware.sdynpy_nonlinear_system_virtual_hardware import (
+                SDynPyNonlinearSystemMetadata,
+                SDynPyNonlinearSystemAcquisition,
+                SDynPyNonlinearSystemOutput,
+            )
+
+            HARDWARE_METADATA[HardwareType.SDYNPY_NONLINEAR] = (
+                SDynPyNonlinearSystemMetadata
+            )
+            HARDWARE_ACQUISITION[HardwareType.SDYNPY_NONLINEAR] = (
+                SDynPyNonlinearSystemAcquisition
+            )
+            HARDWARE_OUTPUT[HardwareType.SDYNPY_NONLINEAR] = SDynPyNonlinearSystemOutput
         case HardwareType.SDYNPY_FRF:
             from rattlesnake.hardware.sdynpy_frf_virtual_hardware import (
                 SDynPyFRFMetadata,

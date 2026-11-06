@@ -12,6 +12,7 @@ class HardwareType(Enum):
     SDYNPY_SYSTEM = 6
     SDYNPY_FRF = 7
     SKELETON = 8
+    SDYNPY_NONLINEAR = 9
 
 
 class Channel:
