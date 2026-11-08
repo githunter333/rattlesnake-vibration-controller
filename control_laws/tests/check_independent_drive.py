@@ -7,6 +7,10 @@ context -- then exercises it on two plants:
      returned drive CPSD must have no off-diagonal terms at all
   2. the RC plate (48 control accelerometers, 12 drives) against the BARC
      specification, where the exact branch never fires
+  3. the 6 x 12 rig's frame plant, in three layouts -- the regression guard
+     for feasible-is-not-exact: on '6x8' five lines pass Smallwood's sign test
+     while missing the specification by 9 dB, so the exact branch must NOT
+     take them
 
 and checks the PSD property, the startup ceiling, the generator form against the
 function form, and nnls against the paper's literal clip-once rule.
@@ -98,3 +102,36 @@ achc = np.real(np.einsum('fmm->fm', H @ Xc @ H.conj().transpose(0, 2, 1)))
 okc = ib[:, None] & (tgt > 0) & (achc > 0)
 print(f"\npaper's clip-once rule: mean |dB| {np.abs(10*np.log10(achc[okc]/tgt[okc])).mean():.3f} "
       f"vs nnls {db.mean():.3f}")
+
+
+# ---------- 5. the 6 x 12 rig: non-negative is not the same as exact ----------
+# '6x8' is the rig as identified, 8 x controls on 6 x drives, rank 5 of 6.  It
+# is overdetermined, so lstsq returns an all-positive s_xx on five lines that
+# nonetheless miss the specification by 9 dB.  Returning the diagonal drive
+# there -- and skipping the explicit level set with it -- left those five lines
+# 1.94 dB low in trace.  Both counts are printed because the gap between them
+# IS the thing being guarded.
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from frame_plant import frame_plant                                 # noqa: E402
+
+print()
+for layout in ('6x8', '10x14', '10x14_rankdef'):
+    pl = frame_plant(layout)
+    Hf, Sf = pl['H'], pl['spec']
+    Xf, df_ = idc.independent_drive_solve(Sf, Hf, startup_test_level_cap_db=1e6,
+                                          return_diagnostics=True)
+    mb = df_['in_band']
+    tf = np.real(np.einsum('fmm->fm', Sf))
+    af = np.real(np.einsum('fmm->fm', Hf @ Xf @ Hf.conj().transpose(0, 2, 1)))
+    okf = mb[:, None] & (tf > 0) & (af > 0)
+    tr = 10*np.log10(af.sum(axis=1)[mb]/tf.sum(axis=1)[mb])
+    print(f'frame {layout:14s} {Hf.shape[1]:2d} controls x {Hf.shape[2]:2d} drives: '
+          f'n_feasible {df_["n_feasible"]:3d}, n_exact {df_["n_exact"]:3d} '
+          f'of {df_["n_in_band"]};  after coupling mean |dB| '
+          f'{np.abs(10*np.log10(af[okf]/tf[okf])).mean():.3f};  '
+          f'trace error max {np.abs(tr).max():.2e} dB')
+    assert df_['n_exact'] == 0, layout
+    assert np.abs(tr).max() < 1e-9, (layout, np.abs(tr).max())
+print('no overdetermined line was taken as exact, and every line holds its '
+      'trace: OK')

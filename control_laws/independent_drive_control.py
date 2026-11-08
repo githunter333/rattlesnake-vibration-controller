@@ -28,6 +28,16 @@ auto-spectra EXACTLY and the law is done: the drive CPSD is diag(s_xx), with no
 cross terms at all.  That is the best possible answer to an auto-spectrum-only
 specification, and no other law in this folder can return it.
 
+That last step holds only where the system is square and consistent, which the
+paper assumes and a real rig need not supply.  With more control channels than
+drives, s_yy = |H|^2 s_xx is OVERDETERMINED: a non-negative answer is then the
+best fit, not a solution, and it can be positive while missing the specified
+auto-spectra by many dB.  So the sign test and the specification test are two
+different tests, and this law applies both -- non-negativity to choose the
+branch nothing needs correcting, and the residual to confirm there is nothing
+to correct.  `_EXACT_RTOL` is that second threshold, and the 6 x 12 rig below
+is why it exists.
+
 If some s_xx are negative, the specification cannot be met with uncorrelated
 drives -- too much interaction is encoded in H.  Smallwood then clips the
 negatives to zero, forms the response those clipped independent drives DO
@@ -88,6 +98,31 @@ accelerometer) gave the same answer: 0 of 400 lines feasible either way.  The
 best achievable response from fully independent drives on that rig was a median
 2.53 mean |dB| error, worst line 12.71.
 
+The 6 x 12 rig's frame plant (control_laws/tests/frame_plant.py, whose
+accelerance reproduces examples/sixdrive12resp's stored analysis FRF to 2.8e-15)
+says the same in a smaller and more awkward way.  Its identified layout is 8 x
+controls on 6 x drives, rank 5 of 6 at every line, and it is where the two
+tests above were measured apart:
+
+  layout            n_feasible    n_exact    best independent    after coupling
+  6x8  (the rig)       5 / 181      0 / 181   4.31 median |dB|    2.94 mean |dB|
+  10x14 full rank 10   0 / 181      0 / 181   2.52                1.82
+  10x14_rankdef  9/10 12 / 181      0 / 181   2.90                1.83
+
+Note the first column against the second.  Five of the rig's lines pass
+Smallwood's sign test and none of them meets the specification -- they are in
+fact the five WORST lines in the band, 8.8 to 9.4 mean |dB|, all at the top
+edge, 980 to 1000 Hz.  Reading n_feasible as "independent drives work here"
+would have inverted the conclusion exactly where it mattered most.
+
+The rig is also the clearest case of what rank deficiency does to this law:
+with one of six drive directions structurally absent, the non-negative solve
+zeroes a median 4 of 6 drives and the answer comes back at 0.835 median
+pairwise drive coherence -- nearly fully correlated, from an algorithm whose
+premise is independence.  The full-rank 10x14 on the same model sits at 0.347.
+Rank, not channel count, is what governs how much coupling this law ends up
+issuing.
+
 So on that article the positive branch never fires and the clipping path IS the
 algorithm.  Do not assume the exact-independent case is reachable; check it
 with independent_drive_feasibility() first.  A rig with better-separated
@@ -113,6 +148,11 @@ package context) and exercised on 2026-11-08:
   -9 dB startup ceiling               predicted trace re spec exactly -9.00 dB
   generator form                      identical output to the function form
   nnls versus the paper's clip-once   2.035 against 2.192 mean |dB|
+  6 x 12 rig, three layouts           n_exact 0 of 181 on all three, trace
+                                      error at most 2.5e-11 dB on every
+                                      in-band line -- the regression guard
+                                      against taking an overdetermined line as
+                                      exact (check_independent_drive.py step 5)
 
 Two of those deserve attention before anyone runs this.  The non-negative solve
 is SPARSE -- it zeroes a median 7 of 12 drives -- so the response it builds is
@@ -223,6 +263,13 @@ _cap_drive_coherence = _cl._cap_drive_coherence
 _apply_startup_level_cap_from_trace = _cl._apply_startup_level_cap_from_trace
 _set_predicted_response_trace = _cl._set_predicted_response_trace
 
+# Relative residual below which the |H|^2 solve counts as having SOLVED the
+# line, not merely as having come out non-negative.  A consistent system
+# returns 1e-16 or so, an inconsistent one returns order 1, so anything in
+# between is a wide margin; it is deliberately tight because being wrong in
+# this direction returns a drive that does not meet the specification.
+_EXACT_RTOL = 1e-10
+
 
 def parse_independent_drive_parameters(extra_parameters):
     """'rcond, max_drive_coherence, startup_test_level_cap_db, weighted, nnls'"""
@@ -252,23 +299,40 @@ def _spec_diagonal(specification):
     return np.maximum(d, 0.0)
 
 
+def _residual(A, b, s):
+    """Relative residual of the fit, ||A s - b|| / ||b||."""
+    scale = float(np.linalg.norm(b))
+    if not np.isfinite(scale) or scale <= 0.0:
+        return np.inf
+    return float(np.linalg.norm(A @ s - b))/scale
+
+
 def _solve_line(A, b, use_nnls):
-    """Best non-negative s_xx for one line, and whether the UNCONSTRAINED solve
-    was already non-negative -- which is Smallwood's own feasibility test."""
+    """Best non-negative s_xx for one line, whether the UNCONSTRAINED solve was
+    already non-negative -- Smallwood's own feasibility test -- and the relative
+    residual of the fit.
+
+    Non-negativity and solving the system are the SAME question only when the
+    system is square and consistent.  With more controls than drives it is
+    overdetermined, so a non-negative least-squares answer can still miss the
+    specified auto-spectra badly; the caller needs the residual to tell the two
+    apart.  See the 6 x 12 rig entry under MEASURED in the module docstring.
+    """
     try:
         s_ls, *_ = np.linalg.lstsq(A, b, rcond=None)
     except np.linalg.LinAlgError:
-        return np.zeros(A.shape[1]), False
+        return np.zeros(A.shape[1]), False, np.inf
     feasible = bool(np.all(s_ls >= 0.0)) and np.all(np.isfinite(s_ls))
     if feasible:
-        return s_ls, True
+        return s_ls, True, _residual(A, b, s_ls)
     if use_nnls and _scipy_nnls is not None:
         try:
-            return _scipy_nnls(A, b)[0], False
+            s_nn = _scipy_nnls(A, b)[0]
+            return s_nn, False, _residual(A, b, s_nn)
         except Exception:
             pass
-    return np.maximum(np.nan_to_num(s_ls, nan=0.0, posinf=0.0, neginf=0.0),
-                      0.0), False
+    s_cl = np.maximum(np.nan_to_num(s_ls, nan=0.0, posinf=0.0, neginf=0.0), 0.0)
+    return s_cl, False, _residual(A, b, s_cl)
 
 
 def independent_drive_solve(specification, transfer_function, rcond=-0.05,
@@ -288,6 +352,7 @@ def independent_drive_solve(specification, transfer_function, rcond=-0.05,
 
     s_xx = np.zeros((n_f, n_drive))
     feasible = np.zeros(n_f, dtype=bool)
+    residual = np.full(n_f, np.inf)
     for f in np.nonzero(in_band)[0]:
         A, b = A_all[f], s_yy[f]
         if weighted:
@@ -296,7 +361,7 @@ def independent_drive_solve(specification, transfer_function, rcond=-0.05,
             w = np.zeros(n_resp)
             np.divide(1.0, b, out=w, where=b > 0)
             A, b = A*w[:, None], b*w
-        s_xx[f], feasible[f] = _solve_line(A, b, use_nnls)
+        s_xx[f], feasible[f], residual[f] = _solve_line(A, b, use_nnls)
 
     # Step 3.2: the response those independent drives actually produce.
     X_ind = np.zeros((n_f, n_drive, n_drive), dtype=complex)
@@ -320,7 +385,13 @@ def independent_drive_solve(specification, transfer_function, rcond=-0.05,
     # not need.
     tf_pinv = _mt_pinv(H, rcond)
     output = tf_pinv @ Syy_hat @ tf_pinv.conjugate().transpose(0, 2, 1)
-    exact = feasible & in_band
+    # Non-negative is NOT the same as exact once there are more controls than
+    # drives: the system is overdetermined, so lstsq can return an all-positive
+    # s_xx that still misses the specified auto-spectra.  Taking this branch on
+    # sign alone returns a diagonal drive that does not meet the spec AND skips
+    # the explicit level set below, which is how the 6 x 12 rig's five worst
+    # lines were made.  Require the fit as well.
+    exact = feasible & in_band & (residual <= _EXACT_RTOL)
     if exact.any():
         output[exact] = X_ind[exact]
 
@@ -340,10 +411,12 @@ def independent_drive_solve(specification, transfer_function, rcond=-0.05,
 
     if not return_diagnostics:
         return output
-    return output, _diagnostics(A_all, s_yy, s_xx, in_band, feasible, output)
+    return output, _diagnostics(A_all, s_yy, s_xx, in_band, feasible, residual,
+                                exact, output)
 
 
-def _diagnostics(A_all, s_yy, s_xx, in_band, feasible, output):
+def _diagnostics(A_all, s_yy, s_xx, in_band, feasible, residual, exact,
+                 output):
     """What the |H|^2 solve says about the plant and the specification."""
     achieved = np.einsum('fij,fj->fi', A_all, s_xx)
     with np.errstate(divide='ignore', invalid='ignore'):
@@ -367,9 +440,16 @@ def _diagnostics(A_all, s_yy, s_xx, in_band, feasible, output):
     off = ~np.eye(n_d, dtype=bool)
     return {
         'in_band': in_band,
+        # `feasible` is Smallwood's sign test: the unconstrained solve came out
+        # non-negative.  `exact` additionally requires it to SOLVE the system,
+        # which is a different question whenever there are more controls than
+        # drives.  Only `exact` lines get the uncorrelated drive returned.
         'feasible': feasible,
+        'exact': exact,
+        'residual': residual,
         'n_in_band': int(in_band.sum()),
         'n_feasible': int((feasible & in_band).sum()),
+        'n_exact': int((exact & in_band).sum()),
         'drives_zeroed': zeroed,
         'independent_error_db': db,
         # Per LINE, full length, NaN out of band -- every field in this dict
@@ -385,9 +465,15 @@ def independent_drive_feasibility(specification, transfer_function,
 
     Needs no run and no control law -- it is a property of the plant and the
     specification together.  Returns the diagnostics dictionary described in
-    _diagnostics; the headline fields are `n_feasible` out of `n_in_band`, and
-    `mean_abs_independent_error_db`, the best a fully uncorrelated drive could
-    do at each line.
+    _diagnostics.
+
+    Read `n_exact` out of `n_in_band`, not `n_feasible`.  `n_feasible` is
+    Smallwood's sign test, and it answers the specification only on a square,
+    consistent system; with more controls than drives a line can be
+    non-negative and still miss the spec by several dB, so the two counts
+    differ and only `n_exact` means "independent drives achieve this".  The
+    other field to read is `mean_abs_independent_error_db`, the best a fully
+    uncorrelated drive could do at each line.
     """
     _, diag = independent_drive_solve(
         specification, transfer_function, max_drive_coherence=1.0,
