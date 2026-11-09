@@ -51,3 +51,10 @@ output.html
 # Upstream example data under src/rattlesnake/examples/ stays addable.
 *.nc4
 !src/rattlesnake/examples/**/*.nc4
+
+# Collected law set (control_laws/tests/make_law_set.py).  These two come from
+# bzwink/rattlesnake-band-average, a PRIVATE repo holding an unreleased study.
+# They are built into the set locally so it is complete and runnable, and must
+# never reach this public fork.
+control_laws/law_set/random/band_average_2026_11_04.py
+control_laws/law_set/random/forcefinder_spr_control_law.py
