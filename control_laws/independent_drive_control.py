@@ -153,6 +153,14 @@ package context) and exercised on 2026-11-08:
                                       in-band line -- the regression guard
                                       against taking an overdetermined line as
                                       exact (check_independent_drive.py step 5)
+  ceiling gating, 2026-11-09          first command -5.04 dB on its worst
+                                      channel with the trace at exactly
+                                      -9.00; converged 2.937 mean |dB|, which
+                                      is +1.470 over the achievable floor.
+                                      Before the gate the law held the -9 dB
+                                      ceiling for the whole test and scored
+                                      10.471 -- see the comment in
+                                      independent_drive_solve
 
 Two of those deserve attention before anyone runs this.  The non-negative solve
 is SPARSE -- it zeroes a median 7 of 12 drives -- so the response it builds is
@@ -262,6 +270,7 @@ _mt_pinv = _cl._mt_pinv
 _cap_drive_coherence = _cl._cap_drive_coherence
 _apply_startup_level_cap_from_trace = _cl._apply_startup_level_cap_from_trace
 _set_predicted_response_trace = _cl._set_predicted_response_trace
+_apply_running_ceiling = _cl._apply_running_ceiling
 
 # Relative residual below which the |H|^2 solve counts as having SOLVED the
 # line, not merely as having come out non-negative.  A consistent system
@@ -272,8 +281,16 @@ _EXACT_RTOL = 1e-10
 
 
 def parse_independent_drive_parameters(extra_parameters):
-    """'rcond, max_drive_coherence, startup_test_level_cap_db, weighted, nnls'"""
+    """'rcond, max_drive_coherence, startup_test_level_cap_db, weighted, nnls,
+    running_ceiling_db'
+
+    running_ceiling_db defaults to 1e9, which is off, exactly as
+    control_laws._parse_open_loop_parameters defaults it for the other
+    open-loop laws.  It bounds every command AFTER the first; the startup
+    cap bounds the first.  See independent_drive_solve for why they differ.
+    """
     rcond, cap, startup_db, weighted, use_nnls = -0.05, 1.0, -9.0, True, True
+    running_db = 1e9
     if extra_parameters is not None and str(extra_parameters).strip() != '':
         parts = str(extra_parameters).split(',')
 
@@ -290,7 +307,8 @@ def parse_independent_drive_parameters(extra_parameters):
         startup_db = _get(2, startup_db)
         weighted = bool(_get(3, 1.0))
         use_nnls = bool(_get(4, 1.0))
-    return rcond, cap, startup_db, weighted, use_nnls
+        running_db = _get(5, running_db)
+    return rcond, cap, startup_db, weighted, use_nnls, running_db
 
 
 def _spec_diagonal(specification):
@@ -338,7 +356,9 @@ def _solve_line(A, b, use_nnls):
 def independent_drive_solve(specification, transfer_function, rcond=-0.05,
                             max_drive_coherence=1.0,
                             startup_test_level_cap_db=-9.0, weighted=True,
-                            use_nnls=True, return_diagnostics=False):
+                            use_nnls=True, return_diagnostics=False,
+                            apply_ceiling=True, running_ceiling_db=1e9,
+                            last_output_cpsd=None, last_response_cpsd=None):
     """The algorithm.  Returns the drive CPSD, and optionally the diagnostics.
 
     Pure function of the specification and the transfer function: no measured
@@ -405,8 +425,26 @@ def independent_drive_solve(specification, transfer_function, rcond=-0.05,
     if live.any():
         output[live] = _set_predicted_response_trace(
             output[live], H[live], target_trace[live].astype(complex))
-    output = _apply_startup_level_cap_from_trace(
-        output, target_trace, H, startup_test_level_cap_db)
+    #
+    # WHICH CEILING, AND WHY IT IS GATED (fixed 2026-11-09).  Until today the
+    # startup cap was applied on EVERY command, so the law held the response at
+    # the cap for the whole test instead of only at startup.  Measured on the
+    # 6x8 bed: 10.471 mean |dB| against 2.937 with the cap lifted after the
+    # first command, and the drive 9 dB low to match.  Every law in
+    # control_laws.py gates on `last_output_cpsd is None` and uses
+    # _apply_running_ceiling afterwards; this now does the same.
+    #
+    # Removing the cap instead would not do: uncapped, the first command
+    # measured +3.96 dB on its worst channel against the -3 dB the startup
+    # criterion asks for.  The first command needs the cap AND later commands
+    # need to reach level, which is what gating gives.
+    if apply_ceiling and last_output_cpsd is None:
+        output = _apply_startup_level_cap_from_trace(
+            output, target_trace, H, startup_test_level_cap_db)
+    elif apply_ceiling and np.ndim(specification) == 3:
+        output = _apply_running_ceiling(output, specification, H,
+                                        last_output_cpsd, last_response_cpsd,
+                                        running_ceiling_db)
     output[~in_band] = 0.0
 
     if not return_diagnostics:
@@ -501,19 +539,28 @@ def independent_drive_control(specification,            # Specifications
 
     THIS LAW IS OPEN LOOP.  last_response_cpsd is accepted and never read.
     """
-    (rcond, cap, startup_db, weighted,
-     use_nnls) = parse_independent_drive_parameters(extra_parameters)
+    (rcond, cap, startup_db, weighted, use_nnls,
+     running_db) = parse_independent_drive_parameters(extra_parameters)
     return independent_drive_solve(specification, transfer_function, rcond, cap,
-                                   startup_db, weighted, use_nnls)
+                                   startup_db, weighted, use_nnls,
+                                   running_ceiling_db=running_db,
+                                   last_output_cpsd=last_output_cpsd,
+                                   last_response_cpsd=last_response_cpsd)
 
 
 def independent_drive_generator():
     """Type 1 (generator) form of independent_drive_control.
 
     The solve is a per-line least-squares problem over the whole band, so it is
-    done ONCE and replayed.  Nothing downstream of the first command depends on
-    anything that changes, this law being open loop.
+    done ONCE and replayed, this law being open loop.
+
+    The CEILING, however, is applied per command and not cached with the solve.
+    Caching it was the 2026-11-09 bug in a second form: a drive cached WITH the
+    startup cap replays at the cap forever, which is how this law came to sit
+    9 dB low for a whole test.  So the cached solve is uncapped and each
+    command gets the startup cap or the running ceiling as appropriate.
     """
+    base = None
     output_cpsd = None
     while True:
         (specification, warning_levels, abort_levels, transfer_function,
@@ -521,9 +568,19 @@ def independent_drive_generator():
          sysid_reference_cpsd, multiple_coherence, frames, total_frames,
          extra_parameters, last_response_cpsd,
          last_output_cpsd) = yield output_cpsd
-        if output_cpsd is None:
-            (rcond, cap, startup_db, weighted,
-             use_nnls) = parse_independent_drive_parameters(extra_parameters)
-            output_cpsd = independent_drive_solve(
+        if base is None:
+            (rcond, cap, startup_db, weighted, use_nnls,
+             running_db) = parse_independent_drive_parameters(extra_parameters)
+            base = independent_drive_solve(
                 specification, transfer_function, rcond, cap, startup_db,
-                weighted, use_nnls)
+                weighted, use_nnls, apply_ceiling=False)
+            target_trace = _spec_diagonal(specification).sum(axis=1)
+        if last_output_cpsd is None:
+            output_cpsd = _apply_startup_level_cap_from_trace(
+                base, target_trace, transfer_function, startup_db)
+        elif np.ndim(specification) == 3:
+            output_cpsd = _apply_running_ceiling(
+                base, specification, transfer_function, last_output_cpsd,
+                last_response_cpsd, running_db)
+        else:
+            output_cpsd = base

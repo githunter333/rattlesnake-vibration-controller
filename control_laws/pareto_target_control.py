@@ -123,6 +123,14 @@ the RC plate at 48 accelerometers against the BARC specification.
   Eq. (9) refinement          input energy 5.70999 -> 5.70984 with the output
                               diagonal unchanged to 1.8e-15
   even-determined target      Z Y Z^H reproduces X to 1.1e-5
+  ceiling gating, 2026-11-09  first command -7.01 dB on its worst channel with
+                              the trace at exactly -9.00; converged 1.990 mean
+                              |dB| at lambda 0, which is +1.215 over the
+                              achievable floor -- the lowest of any law
+                              measured on the 6x8 bed, at 8 dB more drive than
+                              optimal diagonal.  Before the gate the law held
+                              the -9 dB ceiling for the whole test and scored
+                              10.263 -- see pareto_optimal_solve
 
 THREE RESULTS THAT SHOULD CHANGE HOW THIS IS USED.
 
@@ -283,6 +291,7 @@ _cl = _load_sibling('control_laws.py')
 _cap_drive_coherence = _cl._cap_drive_coherence
 _apply_startup_level_cap_from_trace = _cl._apply_startup_level_cap_from_trace
 _set_predicted_response_trace = _cl._set_predicted_response_trace
+_apply_running_ceiling = _cl._apply_running_ceiling
 
 # The paper's sparse grid, Section 3.1: {0, 1e-6, 1e-5, ..., 1e6}.
 DEFAULT_LAMBDAS = (0.0,) + tuple(10.0**np.arange(-6.0, 6.5, 1.0))
@@ -807,8 +816,16 @@ def pareto_curve(specification, transfer_function, lambdas=None,
 
 
 def parse_pareto_parameters(extra_parameters):
-    """lam, max_drive_coherence, startup_test_level_cap_db, weighted, set_trace"""
+    """lam, max_drive_coherence, startup_test_level_cap_db, weighted,
+    set_trace, running_ceiling_db
+
+    running_ceiling_db defaults to 1e9, which is off, as
+    control_laws._parse_open_loop_parameters defaults it for the other
+    open-loop laws.  It bounds every command after the first; the startup cap
+    bounds the first.  See pareto_optimal_solve.
+    """
     lam, cap, startup_db, weighted, set_trace = 0.0, 1.0, -9.0, False, False
+    running_db = 1e9
     fields = [p.strip() for p in str(extra_parameters or '').split(',')]
     fields = [p for p in fields if p != '']
     try:
@@ -822,17 +839,31 @@ def parse_pareto_parameters(extra_parameters):
             weighted = bool(float(fields[3]))
         if len(fields) > 4:
             set_trace = bool(float(fields[4]))
+        if len(fields) > 5:
+            running_db = float(fields[5])
     except ValueError:
         pass
-    return lam, cap, startup_db, weighted, set_trace
+    return lam, cap, startup_db, weighted, set_trace, running_db
 
 
 def pareto_optimal_solve(specification, transfer_function, lam=0.0,
                          max_drive_coherence=1.0,
                          startup_test_level_cap_db=-9.0, weighted=False,
-                         set_trace=False, solver=None):
+                         set_trace=False, solver=None, apply_ceiling=True,
+                         running_ceiling_db=1e9, last_output_cpsd=None,
+                         last_response_cpsd=None):
     """The open-loop drive, with this folder's guards applied in the required
-    order: solve, cap coherence, set level if asked, startup ceiling LAST."""
+    order: solve, cap coherence, set level if asked, ceiling LAST.
+
+    WHICH CEILING, AND WHY IT IS GATED (fixed 2026-11-09).  Until today the
+    startup cap was applied on every command, so the law held the response at
+    the cap for the whole test rather than only at startup.  Measured on the
+    6x8 bed at lambda 0: 10.263 mean |dB| against 1.990 with the cap lifted
+    after the first command.  Every law in control_laws.py gates on
+    `last_output_cpsd is None` and uses _apply_running_ceiling afterwards;
+    this now does the same.  Dropping the cap instead would not do -- uncapped,
+    the first command measured +0.00 dB on its worst channel against the -3 dB
+    a startup criterion asks for."""
     X, info = pareto_inputs(specification, transfer_function, lam, weighted,
                             True, None, solver)
     y = _spec_diagonal(specification)
@@ -845,8 +876,13 @@ def pareto_optimal_solve(specification, transfer_function, lam=0.0,
         X[in_band] = _set_predicted_response_trace(
             X[in_band], np.asarray(transfer_function)[in_band],
             target_trace[in_band].astype(complex))
-    X = _apply_startup_level_cap_from_trace(X, target_trace, transfer_function,
-                                            startup_test_level_cap_db)
+    if apply_ceiling and last_output_cpsd is None:
+        X = _apply_startup_level_cap_from_trace(
+            X, target_trace, transfer_function, startup_test_level_cap_db)
+    elif apply_ceiling and np.ndim(specification) == 3:
+        X = _apply_running_ceiling(X, specification, transfer_function,
+                                   last_output_cpsd, last_response_cpsd,
+                                   running_ceiling_db)
     X[~in_band] = 0.0
     return X
 
@@ -871,20 +907,28 @@ def pareto_optimal_control(specification,            # Specifications
 
     THIS LAW IS OPEN LOOP.  last_response_cpsd is accepted and never read.
     """
-    (lam, cap, startup_db, weighted,
-     set_trace) = parse_pareto_parameters(extra_parameters)
+    (lam, cap, startup_db, weighted, set_trace,
+     running_db) = parse_pareto_parameters(extra_parameters)
     return pareto_optimal_solve(specification, transfer_function, lam, cap,
-                                startup_db, weighted, set_trace)
+                                startup_db, weighted, set_trace,
+                                running_ceiling_db=running_db,
+                                last_output_cpsd=last_output_cpsd,
+                                last_response_cpsd=last_response_cpsd)
 
 
 def pareto_optimal_generator():
     """Type 1 (generator) form of pareto_optimal_control.
 
     The solve is a semidefinite program per line over the whole band, so it is
-    done ONCE and replayed.  Nothing downstream of the first command depends on
-    anything that changes, this law being open loop -- and re-solving every
-    cycle would cost seconds per cycle for no benefit.
+    done ONCE and replayed, this law being open loop -- re-solving every cycle
+    would cost seconds per cycle for no benefit.
+
+    The CEILING is applied per command and not cached with the solve.  A drive
+    cached WITH the startup cap replays at the cap forever, which is the second
+    form of the 2026-11-09 bug, so the cached solve is uncapped and each
+    command gets the startup cap or the running ceiling as appropriate.
     """
+    base = None
     output_cpsd = None
     while True:
         (specification, warning_levels, abort_levels, transfer_function,
@@ -892,9 +936,19 @@ def pareto_optimal_generator():
          sysid_reference_cpsd, multiple_coherence, frames, total_frames,
          extra_parameters, last_response_cpsd,
          last_output_cpsd) = yield output_cpsd
-        if output_cpsd is None:
-            (lam, cap, startup_db, weighted,
-             set_trace) = parse_pareto_parameters(extra_parameters)
-            output_cpsd = pareto_optimal_solve(
+        if base is None:
+            (lam, cap, startup_db, weighted, set_trace,
+             running_db) = parse_pareto_parameters(extra_parameters)
+            base = pareto_optimal_solve(
                 specification, transfer_function, lam, cap, startup_db,
-                weighted, set_trace)
+                weighted, set_trace, apply_ceiling=False)
+            target_trace = _spec_diagonal(specification).sum(axis=1)
+        if last_output_cpsd is None:
+            output_cpsd = _apply_startup_level_cap_from_trace(
+                base, target_trace, transfer_function, startup_db)
+        elif np.ndim(specification) == 3:
+            output_cpsd = _apply_running_ceiling(
+                base, specification, transfer_function, last_output_cpsd,
+                last_response_cpsd, running_db)
+        else:
+            output_cpsd = base
