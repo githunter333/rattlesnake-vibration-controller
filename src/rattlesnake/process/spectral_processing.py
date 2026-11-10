@@ -23,6 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 import multiprocessing as mp
+import queue as _queue
 import time
 from enum import Enum
 
@@ -228,6 +229,8 @@ class SpectralProcessingProcess(AbstractMessageProcess):
         self.reference_fft = None
         self.spectral_processing_parameters = None
         self.frames_computed = 0
+        self.dropped_spectral_updates = 0
+        self.superseded_spectral_updates = 0
 
     def initialize_parameters(self, data: SpectralProcessingMetadata):
         """Initializes the signal processing parameters from the environment.
@@ -707,17 +710,56 @@ class SpectralProcessingProcess(AbstractMessageProcess):
             * self.spectral_processing_parameters.frequency_spacing
         )
         self.log("Sending Updated Spectral Data")
-        self.data_out_queue.put(
-            (
-                frames,
-                frequencies,
-                frf,
-                coherence,
-                response_spectral_matrix,
-                reference_spectral_matrix,
-                frf_condition,
-            )
+        # Built once: this is put twice below, and the two must stay identical.
+        payload = (
+            frames,
+            frequencies,
+            frf,
+            coherence,
+            response_spectral_matrix,
+            reference_spectral_matrix,
+            frf_condition,
         )
+        try:
+            self.data_out_queue.put_nowait(payload)
+        except _queue.Full:
+            # The queue is full, which means the consumer has not taken the
+            # payload already sitting there.  That one is older than this one
+            # and the consumer keeps only the newest, so discard it and put
+            # this one in its place.  Queueing instead would let a producer
+            # that outruns the transport build a backlog, and then the age of
+            # what the law reads grows without limit however fast either end
+            # is.  Blocking would stall spectral processing and back-pressure
+            # into acquisition, which is a worse failure than a late estimate.
+            #
+            # An unbounded queue never raises Full, so environments that have
+            # not bounded this queue keep their previous behaviour exactly.
+            superseded = False
+            try:
+                self.data_out_queue.get_nowait()
+                superseded = True
+            except _queue.Empty:
+                # The consumer took it in the meantime, or the payload is
+                # still with the feeder thread and not yet readable.
+                pass
+            try:
+                self.data_out_queue.put_nowait(payload)
+                if superseded:
+                    self.superseded_spectral_updates += 1
+                    self.log(
+                        "Replaced an undelivered spectral update with this "
+                        f"newer one ({self.superseded_spectral_updates} "
+                        "superseded so far)"
+                    )
+            except _queue.Full:
+                # Could not make room.  Drop this one; the next update is
+                # already being computed from newer frames.
+                self.dropped_spectral_updates += 1
+                self.log(
+                    "Spectral data queue full: dropped this update in favour "
+                    f"of the newer one to come ({self.dropped_spectral_updates}"
+                    " dropped so far)"
+                )
         # Keep running
         self.command_queue.put(
             self.process_name,
@@ -736,6 +778,8 @@ class SpectralProcessingProcess(AbstractMessageProcess):
 
         """
         self.frames_computed = 0
+        self.dropped_spectral_updates = 0
+        self.superseded_spectral_updates = 0
         self.response_spectral_matrix = None
         self.reference_spectral_matrix = None
         self.response_reference_spectral_matrix = None

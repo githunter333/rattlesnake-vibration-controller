@@ -96,6 +96,18 @@ from rattlesnake.process.spectral_processing import (
 from rattlesnake.user_interface.ui_utilities import UICommands
 
 CONTROL_TYPE = EnvironmentType.RANDOM
+# Depth of the queue carrying each spectral update (FRF, coherence, response
+# CPSD, drive CPSD) from spectral processing to data analysis, where the
+# control laws read it.  The consumer flushes the queue and keeps only the
+# newest payload, so depth beyond 1 buys nothing but staleness: an unbounded
+# queue lets a producer that outruns the transport build a backlog, and the
+# age of what the law finally reads then grows without limit.  At 1 the
+# producer replaces an undelivered payload with its newer one (see
+# SpectralProcessingProcess.run_spectral_processing), so what the law reads is
+# the most recent estimate that finished before the law asked, rather than the
+# head of a queue.  Raise this only to deliberately trade freshness for fewer
+# discarded updates.
+SPECTRAL_QUEUE_DEPTH = 1
 DEFAULT_CONTROL_SCRIPT = "rattlesnake.environment.random_vibration_sys_id_control_law"
 DEFAULT_CONTROL_FUNCTION = "pseudoinverse_control"
 
@@ -1120,7 +1132,9 @@ class RandomVibrationQueues:
         self.data_in_queue = data_in_queue
         self.data_out_queue = data_out_queue
         self.data_for_spectral_computation_queue = mp.Queue()
-        self.updated_spectral_quantities_queue = mp.Queue()
+        self.updated_spectral_quantities_queue = mp.Queue(
+            maxsize=SPECTRAL_QUEUE_DEPTH
+        )
         self.cpsd_to_generate_queue = mp.Queue()
         self.log_file_queue = log_file_queue
 
