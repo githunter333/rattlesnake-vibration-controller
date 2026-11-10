@@ -1023,7 +1023,10 @@ class SysIDAnalysisProcess(AbstractMessageProcess):
                 )
             )
             self.ping_alive()
-        if auto_shutdown and self.parameters.sysid_noise_averages == self.frames:
+        # >= rather than ==: with exponential averaging the frame count
+        # climbs past the target, and a batch of frames can step over the
+        # exact value, which would leave the noise measurement running.
+        if auto_shutdown and self.frames >= self.parameters.sysid_noise_averages:
             self.environment_command_queue.put(
                 self.process_name,
                 (SysIdDataAnalysisCommands.START_SHUTDOWN, False),

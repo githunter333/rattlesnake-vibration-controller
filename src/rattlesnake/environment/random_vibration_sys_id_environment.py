@@ -1329,10 +1329,42 @@ class RandomVibrationEnvironment(SysIdEnvironment):
         )
 
     def get_spectral_processing_metadata(self):
-        """Gets the required metadata for the spectral processing process"""
-        averaging_type = AveragingTypes.LINEAR
+        """Gets the required metadata for the spectral processing process
+
+        The during-control spectral estimate follows the averaging type chosen
+        for system identification.  ``Linear`` is the historical behaviour and
+        remains the default: a rolling buffer of ``frames_in_cpsd`` frames,
+        recomputed in full on every update, which gives the newest frame a
+        weight of ``1 / frames_in_cpsd``.  ``Exponential`` instead updates the
+        running spectral matrices once per frame, giving the newest frame a
+        weight of the averaging coefficient.  That is the mode to use when a
+        control law has to see a plant change without waiting out a whole
+        buffer, and it is also cheaper, since it replaces a full recompute over
+        every buffered frame with one rank-one update.
+        """
+        sysid_metadata = self.environment_metadata.sysid_metadata
+        averaging_type = (
+            AveragingTypes.LINEAR
+            if sysid_metadata.sysid_averaging_type == "Linear"
+            else AveragingTypes.EXPONENTIAL
+        )
         averages = self.environment_metadata.frames_in_cpsd
-        exponential_averaging_coefficient = 0
+        exponential_averaging_coefficient = (
+            sysid_metadata.sysid_exponential_averaging_coefficient
+        )
+        if averaging_type is AveragingTypes.EXPONENTIAL and not (
+            0.0 < exponential_averaging_coefficient <= 1.0
+        ):
+            # The update is new = c * frame + (1 - c) * old, so c == 0 would
+            # freeze the estimate on its first frame for the whole test and
+            # every law would control against a spectrum that never moves.
+            # Fail here instead, while the operator can still fix the profile.
+            raise ValueError(
+                "Exponential averaging requires a coefficient in (0, 1], but "
+                f"the profile gives {exponential_averaging_coefficient}.  The "
+                "coefficient is the weight placed on the newest frame, so the "
+                "estimate remembers roughly 1/coefficient frames."
+            )
         if self.environment_metadata.sysid_metadata.sysid_estimator == "H1":
             frf_estimator = Estimator.H1
         elif self.environment_metadata.sysid_metadata.sysid_estimator == "H2":

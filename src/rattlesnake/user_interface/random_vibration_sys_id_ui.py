@@ -1815,7 +1815,7 @@ class RandomVibrationUI(SysIdEnvironmentUI):
                 self.system_id_widget.current_frames_spinbox.setValue(frames)
                 self.system_id_widget.total_frames_spinbox.setValue(total_frames)
                 self.system_id_widget.progressBar.setValue(
-                    int(frames / total_frames * 100)
+                    min(100, int(frames / total_frames * 100))
                 )
                 self.plot_data_items["sum_asds_control"].setData(
                     self.sysid_data.frequencies,

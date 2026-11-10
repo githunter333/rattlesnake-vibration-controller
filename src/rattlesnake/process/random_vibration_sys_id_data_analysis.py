@@ -485,9 +485,15 @@ class RandomVibrationDataAnalysisProcess(SysIDAnalysisProcess):
                         > lines_out
                     ):
                         warning_channels.append(i)
+            # The frame count must be >=, not ==, so that the abort stays
+            # armed for the whole run.  With linear averaging the count
+            # saturates at frames_in_cpsd, so == held forever and >= is
+            # identical.  With exponential averaging the count keeps climbing,
+            # so == would arm the abort for a single update and then disable it
+            # for the rest of the test.
             if (
                 len(abort_channels) > 0
-                and self.frames == self.environment_metadata.frames_in_cpsd
+                and self.frames >= self.environment_metadata.frames_in_cpsd
                 and self.environment_metadata.allow_automatic_aborts
             ):
                 print(f"Aborting due to channel indices {abort_channels}")
