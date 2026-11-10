@@ -44,6 +44,8 @@ class SpectralProcessingCommands(Enum):
     STOP_SPECTRAL_PROCESSING = 3
     SENT_SPECTRAL_DATA = 4
     SHUTDOWN_ACHIEVED = 5
+    SEND_FULL_RESPONSE_CPSD = 6
+    SET_RESPONSE_CPSD_DIAGONAL_ONLY = 7
 
 
 class AveragingTypes(Enum):
@@ -80,6 +82,7 @@ class SpectralProcessingMetadata:
         compute_frf=True,
         compute_coherence=True,
         compute_apsd=True,
+        response_cpsd_diagonal_only=False,
     ):
         self.averaging_type = averaging_type
         self.averages = averages
@@ -94,6 +97,11 @@ class SpectralProcessingMetadata:
         self.compute_frf = compute_frf
         self.compute_coherence = compute_coherence
         self.compute_apsd = compute_apsd
+        # When True the response CPSD leaves this process as its diagonal
+        # only.  The full matrix is still accumulated here, and is still
+        # available on request (SEND_FULL_RESPONSE_CPSD); this controls what
+        # rides on the per-update payload.  See run_spectral_processing.
+        self.response_cpsd_diagonal_only = response_cpsd_diagonal_only
 
     def __eq__(self, other):
         try:
@@ -213,6 +221,14 @@ class SpectralProcessingProcess(AbstractMessageProcess):
             self.clear_spectral_processing,
         )
         self.map_command(
+            SpectralProcessingCommands.SEND_FULL_RESPONSE_CPSD,
+            self.send_full_response_cpsd,
+        )
+        self.map_command(
+            SpectralProcessingCommands.SET_RESPONSE_CPSD_DIAGONAL_ONLY,
+            self.set_response_cpsd_diagonal_only,
+        )
+        self.map_command(
             SpectralProcessingCommands.STOP_SPECTRAL_PROCESSING,
             self.stop_spectral_processing,
         )
@@ -231,6 +247,38 @@ class SpectralProcessingProcess(AbstractMessageProcess):
         self.frames_computed = 0
         self.dropped_spectral_updates = 0
         self.superseded_spectral_updates = 0
+        # Set by SEND_FULL_RESPONSE_CPSD: makes the next payload carry the
+        # full response CPSD even in diagonal-only mode, then clears itself.
+        self.send_full_response_once = False
+
+    def send_full_response_cpsd(self, data):  # pylint: disable=unused-argument
+        """Requests that the next payload carry the full response CPSD.
+
+        In diagonal-only mode the per-update payload holds just the diagonal
+        of the response CPSD.  Consumers that genuinely need the off-diagonals
+        -- the .nc4 save, and the plot windows that show a chosen row/column
+        pair -- call this and read the next payload, which arrives within one
+        spectral update.  The full matrix is never recomputed: it is the same
+        accumulated matrix that diagonal-only mode was already slicing.
+        """
+        self.send_full_response_once = True
+        self.log("Full response CPSD requested for the next payload")
+
+    def set_response_cpsd_diagonal_only(self, data):
+        """Turns diagonal-only transport of the response CPSD on or off.
+
+        The GUI uses this to hold the full matrix on the payload for as long
+        as a cross-spectrum plot window is open, since those windows update on
+        every spectral update and a one-shot request would leave them stale.
+        """
+        if self.spectral_processing_parameters is None:
+            self.log(
+                "Ignoring diagonal-only request: spectral processing is not "
+                "initialized yet"
+            )
+            return
+        self.spectral_processing_parameters.response_cpsd_diagonal_only = bool(data)
+        self.log(f"Response CPSD diagonal-only transport set to {bool(data)}")
 
     def initialize_parameters(self, data: SpectralProcessingMetadata):
         """Initializes the signal processing parameters from the environment.
@@ -683,6 +731,23 @@ class SpectralProcessingProcess(AbstractMessageProcess):
                 / self.spectral_processing_parameters.sample_rate**2
             )
             reference_spectral_matrix[1:-1] *= 2
+            if (
+                self.spectral_processing_parameters.response_cpsd_diagonal_only
+                and not self.send_full_response_once
+            ):
+                # Every control law reads only the diagonal or the trace of
+                # this matrix, but the full matrix is the largest thing in the
+                # payload by far -- for 47 responses at 8193 lines it is 288 MB
+                # of the 381 MB, and it is pickled on every update.  Send the
+                # diagonal and let the consumer put it back on the diagonal of
+                # a reused buffer, which costs 6 MB on the wire instead.  The
+                # off-diagonals are not lost, only not transported: the full
+                # matrix stays accumulated here and a SEND_FULL_RESPONSE_CPSD
+                # request puts it on the very next payload, which is how the
+                # .nc4 save and the cross-spectrum plot windows still get it.
+                response_spectral_matrix = np.einsum(
+                    "fii->fi", response_spectral_matrix
+                ).copy()
             self.log(f"Computed CPSDs in {time.time() - cpsd_time:0.2f} seconds")
         elif self.spectral_processing_parameters.compute_apsd:
             apsd_time = time.time()
@@ -710,6 +775,10 @@ class SpectralProcessingProcess(AbstractMessageProcess):
             * self.spectral_processing_parameters.frequency_spacing
         )
         self.log("Sending Updated Spectral Data")
+        # The request is satisfied by the payload built below, so clear it now
+        # that the matrices are chosen.  Clearing earlier would drop the
+        # request; clearing later would serve it twice.
+        self.send_full_response_once = False
         # Built once: this is put twice below, and the two must stay identical.
         payload = (
             frames,

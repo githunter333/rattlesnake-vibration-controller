@@ -58,6 +58,9 @@ class RandomVibrationDataAnalysisCommands(Enum):
     STOP_CONTROL = 4
     SAVE_CONTROL_DATA = 5
     SET_TEST_LEVEL_DB = 6
+    # Sent to the environment, which owns the spectral command queue, to ask
+    # spectral processing to put the full response CPSD on the next payload.
+    REQUEST_FULL_RESPONSE_CPSD = 7
 
 
 class RandomVibrationDataAnalysisUICommands(Enum):
@@ -138,6 +141,12 @@ class RandomVibrationDataAnalysisProcess(SysIDAnalysisProcess):
         self.control_coherence = None
         self.control_frf_condition = None
         self.last_response_cpsd = None
+        # True when last_response_cpsd carries real off-diagonals.  In
+        # diagonal-only transport the off-diagonals arrive as zeros, and the
+        # .nc4 save must not write those as though they were measured.
+        self.last_response_cpsd_is_full = False
+        # Filename of a save waiting for a full response CPSD to arrive.
+        self.pending_spectral_save = None
         self.last_drive_cpsd = None
         self.startup = True
         self.has_sent_interactive_control_transfer_function_results = False
@@ -400,6 +409,39 @@ class RandomVibrationDataAnalysisProcess(SysIDAnalysisProcess):
         if self.environment_metadata.control_python_function_type == 3:
             self.has_sent_interactive_control_transfer_function_results = False
 
+    @staticmethod
+    def _expand_response_cpsd(response):
+        """Puts a transported response CPSD diagonal back into a full matrix.
+
+        Spectral processing may send only the diagonal of the response CPSD,
+        which is all any control law reads.  The laws are still handed a full
+        (lines, channels, channels) matrix, because that is the published
+        interface -- they slice it themselves with ``einsum('fmm->fm')``,
+        ``np.diagonal`` or ``[:, i, i]`` -- so the diagonal goes back onto a
+        full matrix here.  The off-diagonals are zero, not measured.
+
+        A fresh array is allocated on every update rather than one buffer
+        being reused, because laws are allowed to keep the array they are
+        given: control_laws.py stores it in ``runtime_symbols`` and reads it on
+        a later call, and a reused buffer would change under it.  That costs
+        about 27 ms for a 47-channel, 8193-line matrix -- writing a diagonal
+        touches one element per page, so the whole allocation does get faulted
+        in -- against roughly 3.1 s saved by not moving the full matrix
+        between processes.  Reusing a buffer would save that 27 ms and risk
+        corrupting a law that kept its array, which is the wrong trade.
+        """
+        if response is None or response.ndim == 3:
+            return response
+        num_lines, num_channels = response.shape
+        full = np.zeros(
+            (num_lines, num_channels, num_channels), dtype=response.dtype
+        )
+        # Writable strided view of the diagonals; einsum would return a copy.
+        full.reshape(num_lines, num_channels * num_channels)[
+            :, :: num_channels + 1
+        ] = response
+        return full
+
     def run_control(self, data):  # pylint: disable=unused-argument
         """Runs the control law to generate new output CPSDs"""
         if self.startup:
@@ -419,23 +461,16 @@ class RandomVibrationDataAnalysisProcess(SysIDAnalysisProcess):
                 self.last_drive_cpsd,
                 self.control_frf_condition,
             ) = spectral_data[-1]
-            self.gui_update_queue.put(
-                (
-                    self.environment_name,
-                    (
-                        RandomVibrationDataAnalysisUICommands.CONTROL_UPDATE,
-                        (
-                            self.frames,
-                            self.environment_metadata.frames_in_cpsd,
-                            self.frequencies,
-                            self.control_frf,
-                            self.control_coherence,
-                            self.last_response_cpsd,
-                            self.last_drive_cpsd,
-                            self.control_frf_condition,
-                        ),
-                    ),
-                )
+            # What arrived: the full matrix, or just its diagonal.  The
+            # compact form is what goes to the GUI; the laws get the expanded
+            # one.  Keep both so neither pays for the other.
+            transported_response_cpsd = self.last_response_cpsd
+            self.last_response_cpsd_is_full = (
+                self.last_response_cpsd is not None
+                and self.last_response_cpsd.ndim == 3
+            )
+            self.last_response_cpsd = self._expand_response_cpsd(
+                self.last_response_cpsd
             )
             # Check to see if there are any aborts or warnings
             warning_channels = []
@@ -588,6 +623,38 @@ class RandomVibrationDataAnalysisProcess(SysIDAnalysisProcess):
             )
             self.data_out_queue.put([output_cpsd])
             self.log("Finished Controlling")
+            # Sent after the drive, not before the law.  This payload is the
+            # largest message the process forwards, and pickling it ahead of
+            # the law put its whole cost on the path between a new spectral
+            # estimate and the drive computed from it.  The GUI is a display
+            # and does not care about the few milliseconds; the shaker does.
+            self.gui_update_queue.put(
+                (
+                    self.environment_name,
+                    (
+                        RandomVibrationDataAnalysisUICommands.CONTROL_UPDATE,
+                        (
+                            self.frames,
+                            self.environment_metadata.frames_in_cpsd,
+                            self.frequencies,
+                            self.control_frf,
+                            self.control_coherence,
+                            transported_response_cpsd,
+                            self.last_drive_cpsd,
+                            self.control_frf_condition,
+                        ),
+                    ),
+                )
+            )
+            # A save may be waiting for off-diagonals to arrive.
+            if (
+                self.pending_spectral_save is not None
+                and self.last_response_cpsd_is_full
+            ):
+                filename = self.pending_spectral_save
+                self.pending_spectral_save = None
+                self.log("Full response CPSD arrived; completing deferred save")
+                self._write_spectral_data(filename)
             rms_voltages = rms_csd(
                 output_cpsd, self.environment_metadata.frequency_spacing
             )
@@ -630,17 +697,53 @@ class RandomVibrationDataAnalysisProcess(SysIDAnalysisProcess):
             if not instruction[0] in [RandomVibrationDataAnalysisCommands.RUN_CONTROL]:
                 self.command_queue.put(self.process_name, instruction)
         flush_queue(self.data_out_queue)
+        # A save still waiting on off-diagonals would wait forever once the
+        # payloads stop, so write it now with what is in hand.  The file
+        # records which it got.
+        if self.pending_spectral_save is not None:
+            filename = self.pending_spectral_save
+            self.pending_spectral_save = None
+            self.log("Control stopping with a save pending; writing it now")
+            self._write_spectral_data(filename)
         self.startup = True
         self.control_frf = None
         self.control_coherence = None
         self.control_frf_condition = None
         self.last_response_cpsd = None
+        self.last_response_cpsd_is_full = False
         self.last_drive_cpsd = None
         self.environment_command_queue.put(
             self.process_name, (SysIdDataAnalysisCommands.SHUTDOWN_ACHIEVED, None)
         )
 
     def save_spectral_data(self, data):
+        """Saves the spectral data, fetching off-diagonals first if needed.
+
+        Under diagonal-only transport the live response CPSD held here has
+        zeros off its diagonal, and this file records the full matrix.  So ask
+        spectral processing for the full matrix and let the save complete when
+        the next payload brings it, which is within one spectral update.  A
+        save requested while control is not running cannot wait for a payload
+        that will never come, so it writes immediately and the file records
+        that the off-diagonals were not transported.
+        """
+        live = self.last_response_cpsd is not None
+        if live and not self.last_response_cpsd_is_full and not self.startup:
+            self.pending_spectral_save = data
+            self.environment_command_queue.put(
+                self.process_name,
+                (
+                    RandomVibrationDataAnalysisCommands.REQUEST_FULL_RESPONSE_CPSD,
+                    None,
+                ),
+            )
+            self.log(
+                "Deferring the save until the full response CPSD arrives"
+            )
+            return
+        self._write_spectral_data(data)
+
+    def _write_spectral_data(self, data):
         """Save the spectral data for this environment to `data` (a filename).
 
         Writes the LIVE CONTROL spectra once control has produced any, and the
@@ -687,6 +790,14 @@ class RandomVibrationDataAnalysisProcess(SysIDAnalysisProcess):
         netcdf_dataset = nc4.Dataset(filename, "a", format="NETCDF4")
         netcdf_handle = netcdf_dataset.groups[self.environment_name]
         netcdf_handle.spectral_data_source = "control" if live else "system_id"
+        # Says whether the response CPSD off-diagonals in this file were
+        # measured or are zeros left by diagonal-only transport, so a reader
+        # never mistakes one for the other.
+        netcdf_handle.response_cpsd_off_diagonals = (
+            "measured"
+            if (not live or self.last_response_cpsd_is_full)
+            else "not_transported"
+        )
         netcdf_handle.spectral_data_frames = int(self.frames) if live else 0
         netcdf_handle.createDimension("drive_channels", frf.shape[2])
 

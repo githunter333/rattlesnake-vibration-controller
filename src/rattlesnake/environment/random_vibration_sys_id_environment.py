@@ -121,6 +121,9 @@ class RandomVibrationCommands(EnvironmentCommands):
     RECOMPUTE_PREDICTION = 2
     CHANGE_SPECIFICATION = 3
     SAVE_CONTROL_DATA = 4
+    # Runtime only, from the GUI: not a profile command, since it follows
+    # whether a cross-spectrum plot window happens to be open.
+    SET_RESPONSE_CPSD_DIAGONAL_ONLY = 5
 
     VALID_PROFILE_COMMANDS = (
         ADJUST_TEST_LEVEL,
@@ -1199,6 +1202,14 @@ class RandomVibrationEnvironment(SysIdEnvironment):
             RandomVibrationDataAnalysisCommands.STOP_CONTROL, self.stop_environment
         )
         self.map_command(
+            RandomVibrationDataAnalysisCommands.REQUEST_FULL_RESPONSE_CPSD,
+            self.request_full_response_cpsd,
+        )
+        self.map_command(
+            RandomVibrationCommands.SET_RESPONSE_CPSD_DIAGONAL_ONLY,
+            self.set_response_cpsd_diagonal_only,
+        )
+        self.map_command(
             RandomVibrationCommands.ADJUST_TEST_LEVEL, self.adjust_test_level
         )
         self.map_command(
@@ -1406,11 +1417,45 @@ class RandomVibrationEnvironment(SysIdEnvironment):
             frequency_spacing,
             sample_rate,
             num_frequency_lines,
+            # Control phase only.  Every law reads just the diagonal or trace
+            # of the response CPSD, so only the diagonal is transported on
+            # each update; the off-diagonals are fetched on request for the
+            # .nc4 save and held on the payload while a cross-spectrum plot
+            # window is open.  The system-ID phase keeps the full matrix,
+            # which is what sizes the drives and is saved as measured.
+            response_cpsd_diagonal_only=True,
         )
 
     # endregion
 
     # region Commands
+    def request_full_response_cpsd(self, data):  # pylint: disable=unused-argument
+        """Forwards a request for the full response CPSD to spectral processing.
+
+        Data analysis cannot reach spectral processing directly -- only the
+        environment holds that command queue -- so a deferred save asks here.
+        """
+        self.queue_container.spectral_command_queue.put(
+            self.environment_name,
+            (SpectralProcessingCommands.SEND_FULL_RESPONSE_CPSD, None),
+        )
+
+    def set_response_cpsd_diagonal_only(self, data):
+        """Turns diagonal-only transport of the response CPSD on or off.
+
+        The GUI sends this when the operator opens or closes a plot window
+        showing a response cross-spectrum, since those windows read the
+        off-diagonals on every update and cannot be served by a one-shot
+        request.
+        """
+        self.queue_container.spectral_command_queue.put(
+            self.environment_name,
+            (
+                SpectralProcessingCommands.SET_RESPONSE_CPSD_DIAGONAL_ONLY,
+                bool(data),
+            ),
+        )
+
     def adjust_test_level(self, data):
         """Adjusts the test level of the environment to the specified level"""
         self.queue_container.signal_generation_command_queue.put(

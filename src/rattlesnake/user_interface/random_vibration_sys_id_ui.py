@@ -125,6 +125,10 @@ class RandomVibrationUI(SysIdEnvironmentUI):
 
         self.plot_data_items = {}
         self.plot_windows = []
+        # Whether the environment has been told to keep the response CPSD
+        # off-diagonals on the payload.  Starts False: control begins in
+        # diagonal-only transport with no windows open.
+        self._response_cpsd_off_diagonals_requested = False
         self.run_start_time = None
         self.run_level_start_time = None
         self.run_timer = QTimer()
@@ -1447,6 +1451,30 @@ class RandomVibrationUI(SysIdEnvironmentUI):
             ),
         )
 
+    def _sync_response_cpsd_transport(self):
+        """Keeps the response CPSD off-diagonals flowing while a window needs them.
+
+        The response CPSD is transported as its diagonal only during control,
+        because that is all any control law reads and the full matrix is the
+        bulk of the payload.  A plot window showing a cross-spectrum -- any
+        window whose row and column differ, and any window plotting coherence
+        between two channels -- reads the off-diagonals on every update, so
+        while one is open the full matrix has to stay on the payload.  Called
+        after any change to self.plot_windows.
+        """
+        needs_off_diagonals = any(
+            window.row != window.column or window.datatype == 1
+            for window in self.plot_windows
+        )
+        if needs_off_diagonals == self._response_cpsd_off_diagonals_requested:
+            return
+        self._response_cpsd_off_diagonals_requested = needs_off_diagonals
+        self.rattlesnake.send_environment_command(
+            self.environment_name,
+            RandomVibrationCommands.SET_RESPONSE_CPSD_DIAGONAL_ONLY,
+            not needs_off_diagonals,
+        )
+
     def recompute_prediction(self):
         """Sends a message to the environment process to recompute the prediction"""
         self.rattlesnake.send_environment_command(
@@ -1591,6 +1619,9 @@ class RandomVibrationUI(SysIdEnvironmentUI):
                 self.initialized_control_unit(column_index),
             )
         )
+        # A cross-spectrum window needs the off-diagonals on the payload, so
+        # ask now rather than letting the next control update notice.
+        self._sync_response_cpsd_transport()
 
     def show_all_asds(self):
         """Creates a subwindow for each ASD in the CPSD matrix"""
@@ -1627,6 +1658,7 @@ class RandomVibrationUI(SysIdEnvironmentUI):
                     raise ValueError("Invalid situation.  How did you get here?!")
                 self.create_window(None, i, j, datatype_index)
         self.tile_windows()
+        self._sync_response_cpsd_transport()
 
     def tile_windows(self):
         """Tile subwindow equally across the screen"""
@@ -1635,6 +1667,7 @@ class RandomVibrationUI(SysIdEnvironmentUI):
         self.plot_windows = [
             window for window in self.plot_windows if window.isVisible()
         ]
+        self._sync_response_cpsd_transport()
         num_windows = len(self.plot_windows)
         ncols = int(np.ceil(np.sqrt(num_windows)))
         nrows = int(np.ceil(num_windows / ncols))
@@ -1817,16 +1850,42 @@ class RandomVibrationUI(SysIdEnvironmentUI):
                 self.system_id_widget.progressBar.setValue(
                     min(100, int(frames / total_frames * 100))
                 )
+                # During control the response CPSD may arrive as just its
+                # diagonal, in which case the sum of the ASDs is the sum over
+                # that diagonal rather than a trace.
+                response_cpsd = self.sysid_data.sysid_response_cpsd
                 self.plot_data_items["sum_asds_control"].setData(
                     self.sysid_data.frequencies,
-                    np.einsum("ijj", self.sysid_data.sysid_response_cpsd).real,
+                    (
+                        np.einsum("ijj", response_cpsd).real
+                        if response_cpsd.ndim == 3
+                        else response_cpsd.sum(axis=-1).real
+                    ),
                 )
                 # Go through and remove any closed windows
                 self.plot_windows = [
                     window for window in self.plot_windows if window.isVisible()
                 ]
-                for window in self.plot_windows:
-                    window.update_plot(self.sysid_data.sysid_response_cpsd)
+                self._sync_response_cpsd_transport()
+                if response_cpsd.ndim == 3:
+                    for window in self.plot_windows:
+                        window.update_plot(response_cpsd)
+                else:
+                    # Diagonal-only payload: an autospectrum window is still
+                    # exactly representable, so feed those and leave any
+                    # cross-spectrum window to the next full payload, which
+                    # _sync_response_cpsd_transport has just asked for.
+                    num_channels = response_cpsd.shape[-1]
+                    diagonal_matrix = np.zeros(
+                        (response_cpsd.shape[0], num_channels, num_channels),
+                        dtype=response_cpsd.dtype,
+                    )
+                    diagonal_matrix.reshape(
+                        response_cpsd.shape[0], num_channels * num_channels
+                    )[:, :: num_channels + 1] = response_cpsd
+                    for window in self.plot_windows:
+                        if window.row == window.column and window.datatype != 1:
+                            window.update_plot(diagonal_matrix)
             case RandomVibrationDataAnalysisUICommands.INTERACTIVE_CONTROL_SYSID_UPDATE:
                 if self.interactive_control_law_widget is not None:
                     self.interactive_control_law_widget.update_ui_sysid(*data)
