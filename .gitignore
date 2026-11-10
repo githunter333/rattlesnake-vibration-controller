@@ -52,9 +52,7 @@ output.html
 *.nc4
 !src/rattlesnake/examples/**/*.nc4
 
-# Collected law set (control_laws/tests/make_law_set.py).  These two come from
-# bzwink/rattlesnake-band-average, a PRIVATE repo holding an unreleased study.
-# They are built into the set locally so it is complete and runnable, and must
-# never reach this public fork.
-control_laws/law_set/random/band_average_2026_11_04.py
-control_laws/law_set/random/forcefinder_spr_control_law.py
+# Collected law set (control_laws/tests/make_law_set.py).  Two of these laws
+# came from bzwink/rattlesnake-band-average and were held back from this public
+# fork until 2026-11-10, when their author approved publishing them; they are
+# now tracked like the rest of the set.
