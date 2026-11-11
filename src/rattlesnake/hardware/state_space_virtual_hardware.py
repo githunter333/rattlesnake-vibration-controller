@@ -3,6 +3,22 @@
 Synthetic "hardware" that allows the responses to be simulated by integrating
 linear equations of motion using state space matrices, A, B, C, and D.
 
+Optionally, the modes can soften with response level. If the state space file
+also holds ``softening_displacement_states`` and ``softening_velocity_states``
+(the state indices of each softening mode's modal displacement and velocity,
+with A in the modal form [[0, 1], [-w**2, -2*zeta*w]] for those states),
+``softening_reference_rms`` (each mode's modal displacement RMS at the
+reference level) and ``softening_fraction`` (the largest fractional frequency
+drop), each mode's natural frequency after every read is
+
+    w = w0 * (1 - fraction * r**2 / (1 + r**2)),   r = rms / reference_rms
+
+where rms is the mode's running RMS modal displacement, smoothed from read to
+read with ``softening_smoothing`` (default 0.25, the weight of the newest read).
+Damping ratios are held. The rows of C must be accelerations (or zero) for the
+softening states, so C is rescaled with A. The frequencies of every read are
+appended to ``<state space file stem>_softening.csv`` next to the file.
+
 Rattlesnake Vibration Control Software
 Copyright (C) 2021  National Technology & Engineering Solutions of Sandia, LLC
 (NTESS). Under the terms of Contract DE-NA0003525 with NTESS, the U.S.
@@ -391,9 +407,85 @@ class StateSpaceAcquisition(HardwareAcquisition):
         self.system = signal.StateSpace(data["A"], data["B"], data["C"], data["D"])
         self.times = None
         self.state = np.zeros(data["A"].shape[0])
+        self.softening = None
+        if "softening_fraction" in data:
+            self.load_softening(data, test_data.hardware_file)
+        # optional white measurement noise (RMS in response units) on the response channels only
+        self.response_noise = (np.ravel(data["response_noise_rms"]).astype(float)
+                               if "response_noise_rms" in data else None)
+        self.rng = np.random.default_rng()
 
         self.create_response_channels(test_data.channel_list)
         self.set_parameters(test_data)
+
+    def load_softening(self, data, hardware_file):
+        """Reads the softening parameters and checks the modal form they rely on"""
+        q = np.ravel(data["softening_displacement_states"]).astype(int)
+        v = np.ravel(data["softening_velocity_states"]).astype(int)
+        a_matrix = np.array(data["A"], dtype=float)
+        c_matrix = np.array(data["C"], dtype=float)
+        omega0 = np.sqrt(-a_matrix[v, q])
+        zeta = -a_matrix[v, v] / (2 * omega0)
+        if not np.allclose(a_matrix[q, v], 1.0) or np.any(~np.isfinite(omega0)):
+            raise RattlesnakeError("Softening states are not in modal form in A")
+        for i, j, w, z in zip(q, v, omega0, zeta):
+            rows = c_matrix[:, j] != 0
+            if not np.allclose(c_matrix[rows, i], c_matrix[rows, j] * w / (2 * z)):
+                raise RattlesnakeError("C rows for the softening states are not accelerations")
+        smoothing = float(np.ravel(data["softening_smoothing"])[0]) if "softening_smoothing" in data else 0.25
+        self.softening = {
+            "q": q,
+            "v": v,
+            "omega0": omega0,
+            "zeta": zeta,
+            "reference_rms": np.ravel(data["softening_reference_rms"]).astype(float),
+            "fraction": np.broadcast_to(np.ravel(data["softening_fraction"]).astype(float), q.shape),
+            "smoothing": smoothing,
+            "A": a_matrix,
+            "C": c_matrix,
+            "log": os.path.splitext(str(hardware_file))[0] + "_softening.csv",
+        }
+        self.reset_softening()
+
+    def reset_softening(self):
+        """Returns the softening modes to their reference frequencies and restarts the log"""
+        sft = self.softening
+        sft["mean_square"] = np.zeros(sft["q"].size)
+        sft["reads"] = 0
+        self.set_softened_frequencies(sft["omega0"])
+        with open(sft["log"], "w", encoding="utf-8") as log:
+            log.write("time_s," + ",".join(f"f{k}_hz" for k in range(sft["q"].size)) + "\n")
+
+    def set_softened_frequencies(self, omega):
+        """Rebuilds A and C for the given natural frequencies of the softening modes"""
+        sft = self.softening
+        q, v, ratio = sft["q"], sft["v"], omega / sft["omega0"]
+        a_matrix = sft["A"].copy()
+        c_matrix = sft["C"].copy()
+        a_matrix[v, q] = -(omega**2)
+        a_matrix[v, v] = -2 * sft["zeta"] * omega
+        c_matrix[:, q] *= ratio**2
+        c_matrix[:, v] *= ratio
+        self.system = signal.StateSpace(a_matrix, self.system.B, c_matrix, self.system.D)
+        sft["omega"] = omega
+
+    def soften(self, x_out):
+        """Updates the softening modes' frequencies from the states of the last read"""
+        sft = self.softening
+        block_mean_square = np.mean(x_out[:-1, sft["q"]] ** 2, axis=0)
+        if sft["reads"] == 0:
+            sft["mean_square"] = block_mean_square
+        else:
+            sft["mean_square"] += sft["smoothing"] * (block_mean_square - sft["mean_square"])
+        sft["reads"] += 1
+        r2 = sft["mean_square"] / sft["reference_rms"] ** 2
+        self.set_softened_frequencies(sft["omega0"] * (1 - sft["fraction"] * r2 / (1 + r2)))
+        with open(sft["log"], "a", encoding="utf-8") as log:
+            log.write(
+                f"{sft['reads'] * self.frame_time:.3f},"
+                + ",".join(f"{w / (2 * np.pi):.4f}" for w in sft["omega"])
+                + "\n"
+            )
 
     def create_response_channels(self, channel_data: List[Channel]):
         """Method to set up response channels
@@ -446,6 +538,8 @@ class StateSpaceAcquisition(HardwareAcquisition):
 
         For the synthetic case, it simply initializes the state of the system to zero"""
         self.state[:] = 0
+        if self.softening is not None:
+            self.reset_softening()
 
     def get_acquisition_delay(self) -> int:
         """
@@ -498,6 +592,8 @@ class StateSpaceAcquisition(HardwareAcquisition):
         _, sys_out, x_out = signal.lsim(self.system, this_force, self.times, self.state)
 
         self.state[:] = x_out[-1]
+        if self.softening is not None:
+            self.soften(x_out)
 
         integration_time = time.time() - start_time
         remaining_time = self.frame_time - integration_time
@@ -506,7 +602,11 @@ class StateSpaceAcquisition(HardwareAcquisition):
 
         # We don't want to return the last sample because it
         # will be the initial state for the next sample
-        return sys_out.T[..., : -1 : self.integration_oversample]
+        out = sys_out.T[..., : -1 : self.integration_oversample].copy()
+        if self.response_noise is not None:
+            n = out[self.response_channels].shape
+            out[self.response_channels] += self.response_noise[:, None] * self.rng.standard_normal(n)
+        return out
 
     def read_remaining(self):
         """Method to read the rest of the data on the acquisition
@@ -554,12 +654,16 @@ class StateSpaceOutput(HardwareOutput):
 
         """
         self.queue = queue
+        self.output_rate = None
+        self.time_per_write = None
+        self.started = None
+        self.written = 0.0
 
     def initialize_hardware(self, test_data: StateSpaceMetadata):
         """
         Initialize the hardware and set up sources and sampling properties
 
-        This does nothing for the synthetic hardware
+        This stores the output rate, which paces the writes (``ready_for_new_output``)
 
         Parameters
         ----------
@@ -574,11 +678,15 @@ class StateSpaceOutput(HardwareOutput):
         None.
 
         """
+        self.output_rate = test_data.sample_rate * test_data.output_oversample
+        self.time_per_write = test_data.time_per_write
 
     def start(self):
         """Method to start acquiring data
 
-        Does nothing for synthetic hardware."""
+        Restarts the clock the writes are paced to."""
+        self.started = None
+        self.written = 0.0
 
     def write(self, data: np.ndarray):
         """Method to write a frame of data
@@ -592,6 +700,10 @@ class StateSpaceOutput(HardwareOutput):
             Data to write to the output.
 
         """
+        if self.started is None:
+            self.started = time.time()
+        if self.output_rate is not None:
+            self.written += data.shape[-1] / self.output_rate
         self.queue.put(data)
 
     def stop(self):
@@ -608,9 +720,16 @@ class StateSpaceOutput(HardwareOutput):
     def ready_for_new_output(self):
         """Signals that the hardware is ready for new output
 
-        Returns ``True`` if the data-passing queue is empty.
+        Returns ``True`` if the data-passing queue is empty and the output written so far is no more
+        than one write ahead of real time. ``Queue.empty()`` alone reads True while a large write is still
+        being fed into the pipe, so under load the output kept writing and queued minutes of zeros and
+        stale drive ahead of the integration (16384 Hz, 4x oversampled: 3 MB per write).
         """
-        return self.queue.empty()
+        if not self.queue.empty():
+            return False
+        if self.started is None or self.output_rate is None:
+            return True
+        return self.written - (time.time() - self.started) <= self.time_per_write
 
 
 # endregion
