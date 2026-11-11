@@ -33,6 +33,14 @@ from rattlesnake.process.abstract_message_process import AbstractMessageProcess
 from rattlesnake.utilities import GlobalCommands, VerboseMessageQueue, flush_queue
 
 WAIT_TIME = 0.05
+# How long the producer may wait for an undelivered spectral payload to start
+# arriving before it gives up on replacing it (seconds).  Only reached when the
+# update queue is bounded and full, which in practice means system
+# identification; see run_spectral_processing.  This bounds the wait for the
+# FIRST byte, not the whole read: once the feeder has begun writing, the get
+# runs to the end of that message, so the worst-case stall is this value plus
+# the time to read one payload.
+SPECTRAL_REPLACE_WAIT = 0.25
 
 
 class SpectralProcessingCommands(Enum):
@@ -801,15 +809,38 @@ class SpectralProcessingProcess(AbstractMessageProcess):
             # is.  Blocking would stall spectral processing and back-pressure
             # into acquisition, which is a worse failure than a late estimate.
             #
+            # The get is allowed to wait, because mp.Queue counts an item as
+            # queued the moment it is handed to the feeder thread, while the
+            # item cannot be read until that thread has pickled it and
+            # written it into the pipe.  A get_nowait issued inside that
+            # window raises Empty even though the slot is occupied, and the
+            # replacement is then lost.
+            #
+            # Measured on the 47-channel plate profile over 260 s, where this
+            # matters less than it looks.  Every Full seen in a real run --
+            # 13 of them -- fell inside system identification, where the
+            # payload is the full response CPSD matrix (hundreds of MB) and
+            # pickling it outlasts any wait worth taking here, so those all
+            # still take the drop below.  That costs nothing: the running
+            # estimate lives in THIS process, so an intermediate system-ID
+            # payload that never lands is simply superseded by the next one,
+            # and the law does not read during system ID anyway.  The control
+            # phase never filled the queue at all -- 0 Full events against
+            # 121 sends -- so neither path was taken where the law is
+            # listening.  The wait is kept because it is nearly free and does
+            # make the replacement work whenever the slot is merely locked or
+            # briefly unwritten, which is what a smaller payload or a faster
+            # system ID would produce.
+            #
             # An unbounded queue never raises Full, so environments that have
             # not bounded this queue keep their previous behaviour exactly.
             superseded = False
             try:
-                self.data_out_queue.get_nowait()
+                self.data_out_queue.get(timeout=SPECTRAL_REPLACE_WAIT)
                 superseded = True
             except _queue.Empty:
-                # The consumer took it in the meantime, or the payload is
-                # still with the feeder thread and not yet readable.
+                # The consumer took it in the meantime, or the feeder is
+                # still writing a payload too large for the wait allowed.
                 pass
             try:
                 self.data_out_queue.put_nowait(payload)

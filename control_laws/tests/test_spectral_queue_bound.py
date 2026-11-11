@@ -14,12 +14,14 @@ import multiprocessing as mp
 import pathlib
 import queue as _queue
 import sys
+import threading
 import time
 
 import numpy as np
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'src'))
 
+from rattlesnake.process import spectral_processing  # noqa: E402
 from rattlesnake.process.spectral_processing import (  # noqa: E402
     AveragingTypes, Estimator, SpectralProcessingMetadata,
     SpectralProcessingProcess)
@@ -179,6 +181,80 @@ for ratio in (1, 5, 20, 60):
           f'{ratio - ib[-1][0]:5d} update(s)')
     assert ratio - ib[-1][0] <= 1, 'bounded age grew with the ratio'
     release(qu, qb)
+
+print()
+print('5. The replacement survives a consumer holding the read lock')
+# Checks 1-4 cannot tell the two behaviours apart.  They have no concurrent
+# consumer, so the producer's get always succeeds and the newest payload
+# always wins whether the get waits or not -- a 55 MB payload supersedes
+# perfectly well with nothing else touching the queue.
+#
+# mp.Queue.get_nowait is "acquire _rlock without blocking, then poll", so it
+# reports Empty on a slot that is plainly occupied whenever the consumer holds
+# the read lock, or whenever the feeder thread has not yet written the pickle
+# into the pipe.  The replacement is lost in either case and the OLDER payload
+# is the one delivered, which is the opposite of what the bound is for.  Here
+# a thread holds the lock for 150 ms to stand in for the consumer, and the
+# check runs twice: once with the wait set to zero, which is what get_nowait
+# amounted to, and once as shipped.
+#
+# What this does NOT claim is that the live controller takes this path.  It
+# does not: over 260 s of the 47-channel plate profile every Full fell inside
+# system identification, where the payload is hundreds of megabytes and
+# pickling outlasts the wait, so those still drop -- harmlessly, since the
+# running estimate lives in the spectral process and the law is not reading
+# yet.  The control phase filled the queue zero times.  The wait is a
+# robustness fix for the lockable and smaller-payload cases, not a measured
+# improvement to the live FRF path.
+PRE, HOLD = 1, 0.15
+
+
+def replacement_under_lock(wait):
+    """One update against an occupied slot while the read lock is held."""
+    spectral_processing.SPECTRAL_REPLACE_WAIT = wait
+    q = mp.Queue(maxsize=1)
+    proc = make_process(q)
+    proc.initialize_parameters(SpectralProcessingMetadata(
+        AveragingTypes.EXPONENTIAL, 8, 0.25, Estimator.H1,
+        NRESP, NREF, 1.0, 2.0 * NL, NL))
+    rng = np.random.default_rng(12)
+    produce(proc, rng, PRE)          # fills the single slot
+    holder = threading.Thread(
+        target=lambda: (q._rlock.acquire(), time.sleep(HOLD),
+                        q._rlock.release()))
+    holder.start()
+    time.sleep(0.02)                 # let the thread take the lock first
+    produce(proc, rng, 1)            # the update that must replace the slot
+    holder.join()
+    time.sleep(0.3)
+    items = drain(q)
+    release(q)
+    return (proc.dropped_spectral_updates, proc.superseded_spectral_updates,
+            items[-1][0] if items else None)
+
+
+shipped_wait = spectral_processing.SPECTRAL_REPLACE_WAIT
+try:
+    old_drop, old_sup, old_frames = replacement_under_lock(0.0)
+    new_drop, new_sup, new_frames = replacement_under_lock(shipped_wait)
+finally:
+    spectral_processing.SPECTRAL_REPLACE_WAIT = shipped_wait
+
+print(f'   lock held for        : {HOLD * 1e3:.0f} ms')
+print(f'   wait=0  (get_nowait) : dropped {old_drop}, superseded {old_sup}, '
+      f'law reads frames {old_frames} of {PRE + 1}')
+print(f'   wait={shipped_wait:<4g} (shipped) : dropped {new_drop}, '
+      f'superseded {new_sup}, law reads frames {new_frames} of {PRE + 1}')
+assert old_drop == 1 and old_sup == 0, (
+    'the old behaviour no longer loses the replacement, so this check no '
+    f'longer proves anything: dropped {old_drop}, superseded {old_sup}')
+assert old_frames == PRE, (
+    f'expected the stale payload under wait=0, got frames {old_frames}')
+assert new_drop == 0 and new_sup == 1, (
+    f'the replacement still failed: dropped {new_drop}, superseded {new_sup}')
+assert new_frames == PRE + 1, (
+    f'the law did not get the newest payload: frames {new_frames}')
+print('   -> waiting for the lock is what keeps the newest payload')
 
 print()
 print('ALL CHECKS PASSED')
