@@ -1,0 +1,49 @@
+channel,node_number,node_direction,channel_type,role
+1,7,X+,Accel,control
+2,7,Y+,Accel,control
+3,8,X+,Accel,control
+4,8,Y+,Accel,control
+5,9,X+,Accel,control
+6,9,Y+,Accel,control
+7,10,X+,Accel,control
+8,10,Y+,Accel,control
+9,11,X+,Accel,control
+10,11,Y+,Accel,control
+11,12,X+,Accel,control
+12,12,Y+,Accel,control
+13,13,X+,Accel,control
+14,13,Y+,Accel,control
+15,14,X+,Accel,control
+16,14,Y+,Accel,control
+17,15,X+,Accel,control
+18,15,Y+,Accel,control
+19,16,X+,Accel,control
+20,16,Y+,Accel,control
+21,17,X+,Accel,control
+22,17,Y+,Accel,control
+23,18,X+,Accel,control
+24,18,Y+,Accel,control
+25,19,X+,Accel,response only
+26,19,Y+,Accel,response only
+27,20,X+,Accel,response only
+28,20,Y+,Accel,response only
+29,21,X+,Accel,response only
+30,21,Y+,Accel,response only
+31,22,X+,Accel,response only
+32,22,Y+,Accel,response only
+33,23,X+,Accel,response only
+34,23,Y+,Accel,response only
+35,24,X+,Accel,response only
+36,24,Y+,Accel,response only
+37,1,X+,Force,drive
+38,1,Y+,Force,drive
+39,2,X+,Force,drive
+40,2,Y+,Force,drive
+41,3,X+,Force,drive
+42,3,Y+,Force,drive
+43,4,X+,Force,drive
+44,4,Y+,Force,drive
+45,5,X+,Force,drive
+46,5,Y+,Force,drive
+47,6,X+,Force,drive
+48,6,Y+,Force,drive
