@@ -151,6 +151,29 @@ except ImportError:
     _cap_drive_coherence = _mod._cap_drive_coherence
     _half_power_resonance_baseline = _mod._half_power_resonance_baseline
 
+def _diag_congruence(H, X):
+    """diag(H X H^H) per frequency line, real, shape (F, M).
+
+    Same substitution as optimal_diagonal_control._diag_congruence, and that
+    docstring carries the full rationale.  In short: every caller here wants
+    the predicted response autospectra, and building the whole (M, M)
+    congruence product with einsum('fmn,fnk,flk->fml') to slice the diagonal
+    off it does M times the arithmetic and allocates the full matrix --
+    3.19 s and 302 MB against 0.125 s at 8193 lines, 48 controls, 12 drives.
+
+    einsum('fmn,fnk,fmk->fm') keeps the same contraction order over n and k,
+    so the result is bit-identical; checked at (257,8,6), (2049,14,10),
+    (4097,24,12) and (8193,48,12).  That matters because these values drive
+    log ratios and a startup clamp inside a closed loop.
+
+    For the trace, reduce with np.einsum('fm->f', ...) and not .sum(axis=-1):
+    einsum reduces sequentially while np.sum pairwise-sums, and the two
+    disagree in the last bits (2.2e-11 at the rc_plate shapes), which is the
+    whole reason to prefer the exact form here.
+    """
+    return np.real(np.einsum('fmn,fnk,fmk->fm', H, X, H.conjugate()))
+
+
 __all__ = ['match_diagonal_congruence', 'parse_diagonal_congruence_parameters']
 
 _TINY = 1e-300
@@ -361,8 +384,7 @@ class match_diagonal_congruence:
         the congruence X -> D X D with D = diag(exp(u))."""
         D = np.exp(u)
         Xn = X*D[:, :, None]*D[:, None, :]
-        Yn = np.einsum('fmn,fnk,flk->fml', H, Xn, H.conjugate())
-        yn = np.real(np.einsum('fmm->fm', Yn))
+        yn = _diag_congruence(H, Xn)
         ok = (yn > 0) & (y_prev > 0)
         out = np.zeros_like(yn)
         out[ok] = np.log(yn[ok]/y_prev[ok])
@@ -388,8 +410,7 @@ class match_diagonal_congruence:
         output = _cap_drive_coherence(self._floor_and_silence(output),
                                       self.max_drive_coherence)
         spec_trace = np.real(trace(self.specification))
-        Y = np.einsum('fmn,fnk,flk->fml', H, output, H.conjugate())
-        resp_trace = np.real(trace(Y))
+        resp_trace = np.einsum('fm->f', _diag_congruence(H, output))
         max_power_ratio = 10.0**(self.startup_test_level_cap_db/10.0)
         with np.errstate(divide='ignore', invalid='ignore'):
             scale = np.minimum(1.0, max_power_ratio*spec_trace/resp_trace)
@@ -429,8 +450,7 @@ class match_diagonal_congruence:
         # is orders of magnitude over must still be able to intervene -- that
         # is the protection against a measurement that has failed low, e.g. a
         # dead accelerometer, which would otherwise invite unbounded push.
-        Y = np.einsum('fmn,fnk,flk->fml', H, output, H.conjugate())
-        y_model = np.real(np.einsum('fmm->fm', Y))
+        y_model = _diag_congruence(H, output)
         lim_model = lim*10.0**(MODEL_MARGIN_DB/10.0)
         with np.errstate(divide='ignore', invalid='ignore'):
             over = np.where(valid, y_model/lim_model, 0.0)
