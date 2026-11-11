@@ -226,6 +226,38 @@ _FRF_DIVERGENCE_LIMIT = 10.0
 _DEADLOCK_ESCAPE_DB = 20.0
 _DEADLOCK_ESCAPE_CALLS = 10
 
+
+def _diag_congruence(H, X):
+    """diag(H X H^H) per frequency line, real, shape (F, M).
+
+    Every caller here wants the predicted response AUTOSPECTRA.  Building the
+    whole (M, M) congruence product with einsum('fmn,fnk,flk->fml') and then
+    slicing einsum('fmm->fm') off it does M times the needed arithmetic and
+    allocates the full matrix on the way: at the rc_plate shapes (F=8193,
+    M=48, N=12) that is a 302 MB temporary and 3.19 s, against 0.035 s for
+    this form, which returns BIT-IDENTICAL answers -- the contraction order
+    over n and k is the same, only the discarded off-diagonals are gone.
+
+    Bit-identical is a requirement here, not a bonus.  _err_db feeds
+    np.argsort to choose which lines to solve, so a last-bit change reorders
+    near-tied lines, a different set gets solved, and the closed loop
+    amplifies it: a matmul-plus-row-dot form (0.035 s, agreeing to 3e-12)
+    moved the drive CPSD by up to 15% by the end of a run and failed 27 of
+    the 45 golden_optdiag scenarios.  Do not "optimize" this further with
+    optimize=True or an H @ X matmul without re-recording the references.
+
+    This mattered because the whole-band version ran three times per control
+    call (_err_db twice, over complementary index sets, plus
+    _escape_deadlock_if_starved and _self_predicted_rms), which measured
+    ~6.8 s of every call spent outside solving and set the rate at which the
+    law could accept a new FRF -- 9.1 s against the 2.4 s the spectral
+    process was producing them.  _irls_weights has always used the
+    equivalent single-line form einsum('mn,nk,mk->m').
+
+    H is (F, M, N), X is (F, N, N).  An empty leading axis is fine.
+    """
+    return np.real(np.einsum('fmn,fnk,fmk->fm', H, X, H.conj()))
+
 # RESPONSE-ERROR TRIM FREEZE.  Everything this law sees is referred to full level
 # (components/data_collector.py divides every frame by the CURRENT test level): level-
 # consistent in steady state, but a frame that spans a level change is normalized by the
@@ -781,9 +813,8 @@ class optimal_diagonal_control:
     def _err_db(self, H_clean, indices):
         """Per-bin max-over-channel dB diagonal error for the given bin
         indices, using the CURRENT output_cpsd -- shared by steps 2 and 3."""
-        Y = np.einsum('fmn,fnk,flk->fml', H_clean[indices], self.output_cpsd[indices],
-                       H_clean[indices].conj())
-        achieved = np.maximum(np.real(np.einsum('fmm->fm', Y)), 1e-30)
+        achieved = np.maximum(
+            _diag_congruence(H_clean[indices], self.output_cpsd[indices]), 1e-30)
         target = np.maximum(self._eff_target(indices), 1e-30)
         return np.max(np.abs(10 * np.log10(achieved / target)), axis=1)
 
@@ -898,9 +929,8 @@ class optimal_diagonal_control:
         in_band = self.y_diag_target.max(axis=1) > 0
         if not in_band.any():
             return
-        Y = np.einsum('fmn,fnk,flk->fml', H_clean[in_band],
-                      self.output_cpsd[in_band], H_clean[in_band].conj())
-        achieved = float(np.sum(np.maximum(np.real(np.einsum('fmm->fm', Y)), 0.0)))
+        achieved = float(np.sum(np.maximum(
+            _diag_congruence(H_clean[in_band], self.output_cpsd[in_band]), 0.0)))
         target = float(np.sum(self.y_diag_target[in_band]))
         if target <= 0:
             return
@@ -1150,9 +1180,8 @@ class optimal_diagonal_control:
         # SDP/scheduling logic, which would be self-consistent by construction.
         in_band = np.any(self.y_diag_target > 0, axis=1)
         if np.any(in_band):
-            Y_all = np.einsum('fmn,fnk,flk->fml', H_clean[in_band], self.output_cpsd[in_band],
-                               H_clean[in_band].conj())
-            achieved_all = np.maximum(np.real(np.einsum('fmm->fm', Y_all)), 1e-30)
+            achieved_all = np.maximum(
+                _diag_congruence(H_clean[in_band], self.output_cpsd[in_band]), 1e-30)
             target_all = np.maximum(self._eff_target(in_band), 1e-30)
             err_db_all = 10 * np.log10(achieved_all / target_all)
             return np.sqrt(np.mean(err_db_all ** 2, axis=0))
@@ -1268,8 +1297,7 @@ class optimal_diagonal_control:
             self._p_commanded = None
             self._target_commanded = None
             return
-        Y = np.einsum('fmn,fnk,flk->fml', H, output, H.conj())
-        self._p_commanded = np.maximum(np.real(np.einsum('fmm->fm', Y)), 0.0)
+        self._p_commanded = np.maximum(_diag_congruence(H, output), 0.0)
         self._target_commanded = (self.y_diag_target.copy() if self.y_trim is None
                                   else self.y_diag_target * self.y_trim)
 
