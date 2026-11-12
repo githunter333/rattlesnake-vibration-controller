@@ -234,9 +234,11 @@ def _diag_congruence(H, X):
     whole (M, M) congruence product with einsum('fmn,fnk,flk->fml') and then
     slicing einsum('fmm->fm') off it does M times the needed arithmetic and
     allocates the full matrix on the way: at the rc_plate shapes (F=8193,
-    M=48, N=12) that is a 302 MB temporary and 3.19 s, against 0.035 s for
+    M=48, N=12) that is a 302 MB temporary and 3.19 s, against 0.125 s for
     this form, which returns BIT-IDENTICAL answers -- the contraction order
     over n and k is the same, only the discarded off-diagonals are gone.
+    (0.125 s, not the 0.035 s this line used to claim: 0.035 s is the matmul
+    form rejected two paragraphs down, which is NOT bit-identical.)
 
     Bit-identical is a requirement here, not a bonus.  _err_db feeds
     np.argsort to choose which lines to solve, so a last-bit change reorders
