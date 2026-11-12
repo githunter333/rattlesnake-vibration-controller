@@ -99,6 +99,25 @@ _DB = 10.0 / np.log(10.0)          # natural-log error -> dB
 _TINY = 1e-300
 
 
+def _diag_congruence(H, X):
+    """diag(H X H^H) per frequency line, real, shape (F, M).
+
+    Same substitution, and the same reasoning, as the helper of this name in
+    optimal_diagonal_control.py -- see that docstring for the full argument.
+    In short: building the whole (M, M) congruence product with
+    einsum('fmn,fnk,flk->fml') and then slicing einsum('fmm->fm') off it does M
+    times the needed arithmetic and allocates the full matrix on the way (302 MB
+    and 3.19 s at F=8193, M=48, N=12), while this form returns BIT-IDENTICAL
+    answers because the contraction order over n and k is unchanged.  Verified
+    bit-equal at every shape these laws see, full-band and per-band.
+
+    Do not "optimize" it further with optimize=True or an H @ X matmul: those
+    agree only to ~3e-12, and every caller's output feeds a dB error that gets
+    compared against a threshold or sorted.
+    """
+    return np.real(np.einsum('fmn,fnk,fmk->fm', H, X, H.conj()))
+
+
 # ----------------------------------------------------------------------
 # packing helpers: complex L (N,K) <-> real parameter vector
 # ----------------------------------------------------------------------
@@ -403,8 +422,7 @@ def evaluate_drive(transfer_function, drive_cpsd, y_target):
     X = np.asarray(drive_cpsd)
     y = np.asarray(y_target, dtype=float)
     F, M, N = H.shape
-    Y = np.einsum('fmn,fnk,flk->fml', H, X, H.conj())
-    a = np.maximum(np.real(np.einsum('fmm->fm', Y)), _TINY)
+    a = np.maximum(_diag_congruence(H, X), _TINY)
     with np.errstate(divide='ignore', invalid='ignore'):
         e = 10.0 * np.log10(a / np.maximum(y, _TINY))
     bad = ~np.all(np.isfinite(y), axis=1) | (np.max(y, axis=1) <= 0)

@@ -123,6 +123,11 @@ optimal_diagonal_control = _base_module.optimal_diagonal_control
 Param = _base_module.Param
 _as_int = _base_module._as_int
 
+# diag(H X H^H) without building the full (M, M) product -- the base module's
+# helper, reused rather than re-vendored so there is one copy of the argument
+# for why the exact einsum form matters.  See its docstring.
+_diag_congruence = _base_module._diag_congruence
+
 _OCTAVE_PARAMS = [
     Param('frequency_spacing', None, float, 5,
           'Hz per FFT line (sample_rate / samples_per_frame); REQUIRED for octave mode to engage',
@@ -400,9 +405,8 @@ class octave_band_switching_control(optimal_diagonal_control):
               flush=True)
 
     def _err_db_oct(self, H_band_clean, indices):
-        Y = np.einsum('fmn,fnk,flk->fml', H_band_clean[indices], self._oct_output_cpsd[indices],
-                       H_band_clean[indices].conj())
-        achieved = np.maximum(np.real(np.einsum('fmm->fm', Y)), 1e-30)
+        achieved = np.maximum(_diag_congruence(
+            H_band_clean[indices], self._oct_output_cpsd[indices]), 1e-30)
         target = np.maximum(self._oct_y_target[indices], 1e-30)
         return np.max(np.abs(10 * np.log10(achieved / target)), axis=1)
 
