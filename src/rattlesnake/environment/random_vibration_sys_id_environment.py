@@ -96,6 +96,12 @@ from rattlesnake.process.spectral_processing import (
 from rattlesnake.user_interface.ui_utilities import UICommands
 
 CONTROL_TYPE = EnvironmentType.RANDOM
+# Row 35/36 labels for the control-phase averaging settings.  The reader
+# recognises the layout by the row 35 label, so these strings are part of the
+# profile format: changing them makes existing profiles read as the old
+# layout, which silently puts the transformation matrices back at row 35.
+CONTROL_AVERAGING_LABEL = "Control Averaging:"
+CONTROL_AVERAGING_COEFFICIENT_LABEL = "Control Exponential Averaging Coefficient:"
 # Depth of the queue carrying each spectral update (FRF, coherence, response
 # CPSD, drive CPSD) from spectral processing to data analysis, where the
 # control laws read it.  The consumer flushes the queue and keeps only the
@@ -181,6 +187,8 @@ class RandomVibrationMetadata(SysIdEnvironmentMetadata):
         specification_abort_matrix,
         response_transformation_matrix,
         output_transformation_matrix,
+        control_averaging_type=None,
+        control_exponential_averaging_coefficient=None,
         sysid_metadata=None,
     ):
         super().__init__(
@@ -202,6 +210,17 @@ class RandomVibrationMetadata(SysIdEnvironmentMetadata):
         self.sigma_clip = sigma_clip
         self.frames_in_cpsd = frames_in_cpsd
         self.cpsd_window = cpsd_window
+        # Averaging for the DURING-CONTROL spectral estimate, held separately
+        # from the system identification settings because the two phases want
+        # opposite things: system ID measures a plant that is not moving and
+        # wants every one of its averages, while control has to see the plant
+        # change and wants the newest frames weighted most.  ``None`` means
+        # "follow system identification", which is how every profile written
+        # before these fields existed behaves.
+        self.control_averaging_type = control_averaging_type
+        self.control_exponential_averaging_coefficient = (
+            control_exponential_averaging_coefficient
+        )
         self.response_transformation_matrix = response_transformation_matrix
         self.reference_transformation_matrix = output_transformation_matrix
         self.control_python_script = control_python_script
@@ -558,6 +577,12 @@ class RandomVibrationMetadata(SysIdEnvironmentMetadata):
         netcdf_group_handle.cola_window_exponent = self.cola_window_exponent
         netcdf_group_handle.frames_in_cpsd = self.frames_in_cpsd
         netcdf_group_handle.cpsd_window = self.cpsd_window
+        if self.control_averaging_type is not None:
+            netcdf_group_handle.control_averaging_type = self.control_averaging_type
+        if self.control_exponential_averaging_coefficient is not None:
+            netcdf_group_handle.control_exponential_averaging_coefficient = (
+                self.control_exponential_averaging_coefficient
+            )
         netcdf_group_handle.control_python_script = self.control_python_script
         netcdf_group_handle.control_python_function = self.control_python_function
         netcdf_group_handle.control_python_function_type = (
@@ -690,6 +715,12 @@ class RandomVibrationMetadata(SysIdEnvironmentMetadata):
             netcdf_group_handle.control_python_function_parameters
         )
         allow_automatic_aborts = bool(netcdf_group_handle.allow_automatic_aborts)
+        control_averaging_type = getattr(
+            netcdf_group_handle, "control_averaging_type", None
+        )
+        control_exponential_averaging_coefficient = getattr(
+            netcdf_group_handle, "control_exponential_averaging_coefficient", None
+        )
 
         control_channel_indices = netcdf_group_handle.variables[
             "control_channel_indices"
@@ -737,6 +768,10 @@ class RandomVibrationMetadata(SysIdEnvironmentMetadata):
             cola_window_exponent=cola_window_exponent,
             sigma_clip=5,
             update_tf_during_control=update_tf_during_control,
+            control_averaging_type=control_averaging_type,
+            control_exponential_averaging_coefficient=(
+                control_exponential_averaging_coefficient
+            ),
             frames_in_cpsd=frames_in_cpsd,
             cpsd_window=cpsd_window,
             cpsd_overlap=cpsd_overlap,
@@ -878,12 +913,66 @@ class RandomVibrationMetadata(SysIdEnvironmentMetadata):
         self.sysid_metadata.save_metadata_to_worksheet(worksheet, start_row=18)
         if self.specification_file:
             worksheet.cell(34, 2, str(self.specification_file))
+        # Rows 35 and 36 carry the control-phase averaging, and the
+        # transformation matrices follow at 37.  The matrix block is
+        # variable length -- a response matrix grows downward and the output
+        # matrix follows it -- so there is no fixed row after it that a new
+        # field could occupy.  The reader keys on the row 35 label, so a
+        # profile written before these fields existed, with its matrices
+        # still at 35, is still read correctly.
+        worksheet.cell(35, 1, CONTROL_AVERAGING_LABEL)
+        worksheet.cell(
+            35,
+            2,
+            self.control_averaging_type
+            if self.control_averaging_type is not None
+            else "",
+        )
+        worksheet.cell(36, 1, CONTROL_AVERAGING_COEFFICIENT_LABEL)
+        worksheet.cell(
+            36,
+            2,
+            self.control_exponential_averaging_coefficient
+            if self.control_exponential_averaging_coefficient is not None
+            else "",
+        )
         self.save_sysid_matrix_to_worksheet(
             worksheet,
             self.response_transformation_matrix,
             self.reference_transformation_matrix,
-            start_row=35,
+            start_row=37,
         )
+
+    @classmethod
+    def load_control_averaging_from_worksheet(cls, worksheet, start_row=35):
+        """Reads the control-phase averaging settings, if the profile has them.
+
+        Returns ``(averaging_type, coefficient, matrix_start_row)``.  A profile
+        written before these fields existed has its transformation matrices at
+        ``start_row`` instead, and is reported as ``(None, None, start_row)``,
+        which the environment reads as "follow the system identification
+        settings" -- the behaviour that profile already had.
+        """
+        label = worksheet.cell(start_row, 1).value
+        if (
+            not isinstance(label, str)
+            or label.strip().rstrip(":").lower()
+            != CONTROL_AVERAGING_LABEL.strip().rstrip(":").lower()
+        ):
+            return None, None, start_row
+
+        def _blank(value):
+            return value is None or (
+                isinstance(value, str) and value.strip() == ""
+            )
+
+        averaging_cell = worksheet.cell(start_row, 2).value
+        averaging_type = None if _blank(averaging_cell) else str(averaging_cell).strip()
+
+        coefficient_cell = worksheet.cell(start_row + 1, 2).value
+        coefficient = None if _blank(coefficient_cell) else float(coefficient_cell)
+
+        return averaging_type, coefficient, start_row + 2
 
     @classmethod
     def load_metadata_from_worksheet(
@@ -960,8 +1049,20 @@ class RandomVibrationMetadata(SysIdEnvironmentMetadata):
             worksheet, hardware_metadata, 18
         )
 
+        # Row 35 is either the control-averaging label (new layout, matrices
+        # at 37) or the first row of the transformation matrix block (old
+        # layout, matrices at 35).  Deciding on the label rather than on a
+        # version number means an old profile needs no migration.
+        (
+            control_averaging_type,
+            control_exponential_averaging_coefficient,
+            matrix_start_row,
+        ) = cls.load_control_averaging_from_worksheet(worksheet, start_row=35)
+
         response_transformation_matrix, output_transformation_matrix = (
-            cls.load_sysid_matrix_from_worksheet(worksheet, start_row=35)
+            cls.load_sysid_matrix_from_worksheet(
+                worksheet, start_row=matrix_start_row
+            )
         )
 
         # Find python module type
@@ -1009,6 +1110,10 @@ class RandomVibrationMetadata(SysIdEnvironmentMetadata):
             cola_window_exponent=cola_window_exponent,
             sigma_clip=sigma_clip,
             update_tf_during_control=update_tf_during_control,
+            control_averaging_type=control_averaging_type,
+            control_exponential_averaging_coefficient=(
+                control_exponential_averaging_coefficient
+            ),
             frames_in_cpsd=frames_in_cpsd,
             cpsd_window=cpsd_window,
             cpsd_overlap=cpsd_overlap,
@@ -1356,8 +1461,15 @@ class RandomVibrationEnvironment(SysIdEnvironment):
     def get_spectral_processing_metadata(self):
         """Gets the required metadata for the spectral processing process
 
-        The during-control spectral estimate follows the averaging type chosen
-        for system identification.  ``Linear`` is the historical behaviour and
+        The during-control spectral estimate takes its averaging from the
+        profile's own control-phase fields, falling back to the system
+        identification settings when they are blank -- which is what every
+        profile written before those fields existed does.  Keeping them apart
+        matters because the two phases want opposite things: system ID
+        measures a plant that is not moving and wants every one of its
+        averages, while control has to track a plant that is changing.
+
+        ``Linear`` is the historical behaviour and
         remains the default: a rolling buffer of ``frames_in_cpsd`` frames,
         recomputed in full on every update, which gives the newest frame a
         weight of ``1 / frames_in_cpsd``.  ``Exponential`` instead updates the
@@ -1368,15 +1480,22 @@ class RandomVibrationEnvironment(SysIdEnvironment):
         every buffered frame with one rank-one update.
         """
         sysid_metadata = self.environment_metadata.sysid_metadata
+        averaging_name = self.environment_metadata.control_averaging_type
+        if averaging_name is None or str(averaging_name).strip() == "":
+            averaging_name = sysid_metadata.sysid_averaging_type
         averaging_type = (
             AveragingTypes.LINEAR
-            if sysid_metadata.sysid_averaging_type == "Linear"
+            if averaging_name == "Linear"
             else AveragingTypes.EXPONENTIAL
         )
         averages = self.environment_metadata.frames_in_cpsd
         exponential_averaging_coefficient = (
-            sysid_metadata.sysid_exponential_averaging_coefficient
+            self.environment_metadata.control_exponential_averaging_coefficient
         )
+        if exponential_averaging_coefficient is None:
+            exponential_averaging_coefficient = (
+                sysid_metadata.sysid_exponential_averaging_coefficient
+            )
         if averaging_type is AveragingTypes.EXPONENTIAL and not (
             0.0 < exponential_averaging_coefficient <= 1.0
         ):
