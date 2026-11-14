@@ -166,6 +166,48 @@ def _jac(v, Hb, y_log, N, K):
 
 
 # ----------------------------------------------------------------------
+# objective 1b: the same least squares with a DRIVE-POWER ridge
+# ----------------------------------------------------------------------
+# X = L L^H, so trace(X) = ||L||_F^2 = ||v||^2 exactly, v being the packed
+# real/imag vector.  Appending w*v to the residual vector therefore adds
+# w**2 * trace(X) to the sum of squares -- a true Tikhonov ridge on drive
+# POWER, not a surrogate.  The Jacobian block is w*I, so it stays a cheap
+# linear-least-squares augmentation and the problem remains smooth.
+#
+# Used to answer "best achievable AT THE DRIVE THE LAW ACTUALLY SPENT".
+# This and restrict_rcond answer different questions and are needed
+# TOGETHER, not as alternatives.  restrict_rcond says which drive directions
+# the shakers physically have; the ridge says how much drive may be spent in
+# the ones they do.  A ridge alone is not a substitute: when the budget is
+# loose the weight comes out small, a direction that is really measurement
+# noise becomes affordable, and the floor drops below the restricted floor
+# it is supposed to bound.  Measured on this frame 2026-11-14: 9 of 51 runs
+# did exactly that, by up to 1.5 dB, until both were applied.
+# The ridge is applied in whatever space the bin is solved in; under
+# restrict_rcond that is the reduced space, where trace(X_r) == trace(X)
+# because V_r has orthonormal columns, so the meaning is unchanged.
+def _resid_jac_pen(v, Hb, y_log, N, K, w):
+    d, J = _resid_jac(v, Hb, y_log, N, K)
+    n, m = v.size, d.size
+    # Build the augmented Jacobian in place: np.eye + np.vstack here costs
+    # two extra (M+2NK, 2NK) allocations per function evaluation, and
+    # least_squares asks for hundreds per frequency bin.
+    out = np.zeros((m + n, n))
+    out[:m] = J
+    i = np.arange(n)
+    out[m + i, i] = w
+    return np.concatenate([d, w * v]), out
+
+
+def _resid_pen(v, Hb, y_log, N, K, w):
+    return _resid_jac_pen(v, Hb, y_log, N, K, w)[0]
+
+
+def _jac_pen(v, Hb, y_log, N, K, w):
+    return _resid_jac_pen(v, Hb, y_log, N, K, w)[1]
+
+
+# ----------------------------------------------------------------------
 # objective 2: smooth minimax (log-sum-exp) -> best peak error
 # ----------------------------------------------------------------------
 def _softmax_obj(v, Hb, y_log, N, K, beta):
@@ -208,7 +250,7 @@ def _init_random(N, K, scale, rng):
 # single-bin solve
 # ----------------------------------------------------------------------
 def _solve_bin(Hb, y, K, n_restarts, rng, rcond, do_minimax,
-               max_nfev, betas):
+               max_nfev, betas, drive_weight=0.0):
     """Best achievable diag(H X H^H) for one frequency line.
 
     Returns (best_L, rms_db, minimax_db, spread_db)."""
@@ -234,10 +276,18 @@ def _solve_bin(Hb, y, K, n_restarts, rng, rcond, do_minimax,
             # residuals, and Levenberg-Marquardt refuses m < n.  The excess
             # parameters are pure gauge freedom (L and L U give the same X for
             # any unitary U), which trf handles without complaint.
-            sol = least_squares(_resid, _pack(L0), jac=_jac, method='trf',
-                                args=(Hb, y_log, N, K), max_nfev=max_nfev)
+            if drive_weight > 0.0:
+                sol = least_squares(
+                    _resid_pen, _pack(L0), jac=_jac_pen, method='trf',
+                    args=(Hb, y_log, N, K, drive_weight), max_nfev=max_nfev)
+            else:
+                sol = least_squares(
+                    _resid, _pack(L0), jac=_jac, method='trf',
+                    args=(Hb, y_log, N, K), max_nfev=max_nfev)
         except Exception:
             continue
+        # _resid, NOT _resid_pen: the restart choice and the reported
+        # rms are the ERROR, never the penalised objective.
         d = _resid(sol.x, Hb, y_log, N, K)
         rms = np.sqrt(np.mean(d**2)) * _DB
         rms_values.append(rms)
@@ -279,7 +329,8 @@ def achievable_diagonal(transfer_function, y_target, line_indices=None,
                         restrict_rcond=None,
                         compute_minimax=True, exact_tol_db=0.01,
                         max_nfev=400, betas=(10.0, 40.0, 160.0),
-                        return_drives=False, progress=None):
+                        return_drives=False, progress=None,
+                        drive_weight=0.0):
     """Best achievable response auto-spectra, per frequency line.
 
     Parameters
@@ -327,6 +378,26 @@ def achievable_diagonal(transfer_function, y_target, line_indices=None,
         singular vectors, X = V_r X_r V_r^H, so the problem is re-solved in the
         reduced drive space and lifted back.  trace(X) is unchanged by the
         lift since V_r has orthonormal columns.  Default None = unrestricted.
+    drive_weight : float
+        Ridge weight w on drive POWER, added as w**2 * trace(X) to the least
+        squares objective (exact, since trace(X) = ||L||_F^2).  Default 0 =
+        no budget, the unconstrained floor.
+
+        This is the honest way to ask "how well could any controller do on
+        the drive this law actually spent".  Without it the floor is free to
+        reach through directions that cost enormous drive for almost no
+        response, and on this frame it does: the unconstrained floor wants
+        +25 to +28 dB more drive than the laws use, so the headroom it
+        reports is not headroom any real controller could claim.
+
+        w is a Lagrange multiplier, not a budget, so sweep it to hit a
+        target trace rather than setting it directly -- the mapping depends
+        on the FRF and the spec level.  Larger w buys less drive and more
+        error; w -> 0 recovers the unconstrained floor.
+
+        The reported best_rms_db and achieved are always the unpenalised
+        ERROR of the solution found under the ridge, so they remain directly
+        comparable with a run's measured response.
     exact_tol_db : float
         Threshold below which a line is reported as exactly achievable.
 
@@ -387,7 +458,8 @@ def achievable_diagonal(transfer_function, y_target, line_indices=None,
             Vr, r_keep, Hs = None, N, Hb
         Ks = min(K, Hs.shape[1])
         vv, rms_db, mm_db, spread = _solve_bin(
-            Hs, yf, Ks, n_restarts, rng, rcond, compute_minimax, max_nfev, betas)
+            Hs, yf, Ks, n_restarts, rng, rcond, compute_minimax, max_nfev,
+            betas, drive_weight)
         if vv is None:
             continue
         v_rms, v_mm = vv
