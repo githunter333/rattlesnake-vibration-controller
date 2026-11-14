@@ -103,7 +103,8 @@ of the true response against spec.  Defaults unless noted.
     drive relying on inter-drive cancellation.  The simulator realises the
     drive exactly, so it flatters that choice.  Not validated on hardware.
 
-extra_parameters: the nine match_diagonal_congruence fields, then
+extra_parameters: the eight match_diagonal_congruence fields (indices
+    0-7; the Broyden fields below start at 8), then
     broyden_gain        0.6   g above; 0 freezes S at the model seed
                               (0.3 until 2026-10-23; the phase columns need
                               faster learning, and 0.6 is no worse for the
@@ -130,6 +131,15 @@ extra_parameters: the nine match_diagonal_congruence fields, then
     phase_steering      1     1 = also steer each drive's PHASE (see below);
                               0 = magnitudes only, as before 2026-10-23
     max_phase_step_deg  15    most any drive's phase may move in one cycle
+    effective_averages   0    the number of averages the response estimate
+                              really carries, for the 2/n noise term below.
+                              0 (default) trusts the controller's reported
+                              frame count, which is right under LINEAR
+                              averaging.  Under EXPONENTIAL averaging the
+                              controller reports a running total instead, so
+                              2/n falls to zero and the shrinkage switches
+                              itself off; set this to 2/alpha - 1 (19 at
+                              alpha = 0.1) to keep it honest.
 
 PHASE STEERING (added 2026-10-23)
 ---------------------------------
@@ -227,7 +237,8 @@ def _parse_broyden_fields(extra_parameters):
     def _get(i, default):
         return nums[i] if len(nums) > i and nums[i] is not None else default
     return (_get(8, 0.6), _get(9, 1.0), _get(10, 0.05), _get(11, 0.05), _get(12, 0.0),
-            _get(13, 1.0), _get(14, 1.0), _get(15, 3.0), _get(16, 1.0), _get(17, 15.0))
+            _get(13, 1.0), _get(14, 1.0), _get(15, 3.0), _get(16, 1.0), _get(17, 15.0),
+            _get(18, 0.0))
 
 
 def _model_sensitivity(H, X, with_phase=False):
@@ -258,7 +269,8 @@ class match_diagonal_congruence_broyden(match_diagonal_congruence):
                          *args, **kwargs)
         (self.broyden_gain, self.coherence_power, self.model_anchor,
          self.min_du_db, self.dither_db, split, base_cmd,
-         self.realize_tol_db, phase, self.max_phase_step_deg) = \
+         self.realize_tol_db, phase, self.max_phase_step_deg,
+         self.effective_averages) = \
             _parse_broyden_fields(extra_parameters)
         self.split_level = split != 0
         self.base_on_command = base_cmd != 0
@@ -492,8 +504,14 @@ class match_diagonal_congruence_broyden(match_diagonal_congruence):
             return
         pred = np.einsum('fmi,fi->fm', self.S_hat, du)           # expected (S du)
         innov = np.where(rows_ok, dy - pred, 0.0)
-        # signal-to-noise shrinkage: var(dy) ~ 2/frames for log autospectra
+        # signal-to-noise shrinkage: var(dy) ~ 2/frames for log autospectra.
+        # `frames` means "averages in the estimate" only under LINEAR
+        # averaging; under EXPONENTIAL the controller reports a running
+        # total, which would drive noise_var to zero and silently disable
+        # this shrinkage.  effective_averages caps it when set.
         n = float(frames) if frames is not None and np.isfinite(frames) and frames > 0 else 1.0
+        if self.effective_averages > 0:
+            n = min(n, float(self.effective_averages))
         noise_var = 2.0/n
         w = pred**2/(pred**2 + noise_var)
         innov = innov*w
