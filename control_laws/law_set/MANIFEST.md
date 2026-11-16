@@ -17,14 +17,14 @@ that information instead.
 | file | loop | laws | source | last commit | blob | in git |
 |---|---|---|---|---|---|---|
 | `control_laws.py` | both, in one file | match_trace_pseudoinverse, match_trace_pseudoinverse_pi, buzz_feedback, match_trace_pi_resolve, match_trace_resolve (closed); pseudoinverse_control, buzz_control + _generator + _class (open) | rattlesnake-vibration-controller `HEAD` `control_laws/control_laws.py` | 2026-11-02 8daaa0a2 nhunter | `6465d530b8` | yes |
-| `optimal_diagonal_control.py` | one parameter away from closed | optimal_diagonal_control -- closed with response_trim_gain > 0 | rattlesnake-vibration-controller `HEAD` `control_laws/optimal_diagonal_control.py` | 2026-11-03 ef08cd87 nhunter | `b75593ae5f` | yes |
+| `optimal_diagonal_control.py` | one parameter away from closed | optimal_diagonal_control -- closed with response_trim_gain > 0 | rattlesnake-vibration-controller `HEAD` `control_laws/optimal_diagonal_control.py` | 2026-11-11 692e571e nhunter | `4a17bfc309` | yes |
 | `optimal_diagonal_control_fast.py` | one parameter away from closed | optimal_diagonal_control_fast -- inherits the trim gain | rattlesnake-vibration-controller `HEAD` `control_laws/optimal_diagonal_control_fast.py` | 2026-11-04 7bfe2877 nhunter | `12cf7ee0e5` | yes |
-| `octave_band_switching_control.py` | one parameter away from closed | octave_band_switching_control -- inherits the trim gain | rattlesnake-vibration-controller `HEAD` `control_laws/octave_band_switching_control.py` | 2026-11-02 70ff25e0 nhunter | `6a85ddf602` | yes |
-| `diagonal_congruence_control.py` | closed loop as shipped | match_diagonal_congruence | rattlesnake-vibration-controller `HEAD` `control_laws/diagonal_congruence_control.py` | 2026-10-22 853d4f2d nhunter | `bccdb711d7` | yes |
-| `broyden_congruence_control.py` | closed loop as shipped | match_diagonal_congruence_broyden | rattlesnake-vibration-controller `HEAD` `control_laws/broyden_congruence_control.py` | 2026-10-23 3f00f54c Claude | `1e2cefb3e4` | yes |
+| `octave_band_switching_control.py` | one parameter away from closed | octave_band_switching_control -- inherits the trim gain | rattlesnake-vibration-controller `HEAD` `control_laws/octave_band_switching_control.py` | 2026-11-11 7d746a58 nhunter | `d6e2a7869a` | yes |
+| `diagonal_congruence_control.py` | closed loop as shipped | match_diagonal_congruence | rattlesnake-vibration-controller `HEAD` `control_laws/diagonal_congruence_control.py` | 2026-11-11 21107ddc nhunter | `872692bbe2` | yes |
+| `broyden_congruence_control.py` | closed loop as shipped | match_diagonal_congruence_broyden | rattlesnake-vibration-controller `HEAD` `control_laws/broyden_congruence_control.py` | 2026-11-14 856293d6 nhunter | `831c9a9f53` | yes |
 | `independent_drive_control.py` | open loop, no switch | independent_drive_control, independent_drive_generator -- Smallwood, the startup solve of a closed-loop law | rattlesnake-vibration-controller `HEAD` `control_laws/independent_drive_control.py` | 2026-11-09 fda099dc nhunter | `8e632d86f0` | yes |
 | `pareto_target_control.py` | open loop, no switch | pareto_optimal_control, pareto_optimal_generator -- Coletti et al., target definition rather than a control law | rattlesnake-vibration-controller `HEAD` `control_laws/pareto_target_control.py` | 2026-11-09 fda099dc nhunter | `f41d503c90` | yes |
-| `achievable_response.py` | not a law | not a law -- the reachable-target floor, and the scoring denominator | rattlesnake-vibration-controller `HEAD` `control_laws/achievable_response.py` | 2026-10-22 853d4f2d nhunter | `77c743392b` | yes |
+| `achievable_response.py` | not a law | not a law -- the reachable-target floor, and the scoring denominator | rattlesnake-vibration-controller `HEAD` `control_laws/achievable_response.py` | 2026-11-14 89dbabed nhunter | `143bf3fdf2` | yes |
 | `random_vibration_sys_id_control_law.py` | both, in one file | Rattlesnake's built-ins: match_trace_pseudoinverse (closed); pseudoinverse_control, buzz_control + _generator + _class (open, no caps) | rattlesnake-vibration-controller `HEAD` `src/rattlesnake/environment/random_vibration_sys_id_control_law.py` | 2026-10-15 dbbf70d2 CodyLangston34135 | `9d29544609` | yes |
 | `spr_random_control_law.py` | one parameter away from closed | RandomControlSourcePathReceiver -- Carter's SPR law, closed with match_trace: True (default False). Needs the forcefinder package | forcefinder `main` `src/forcefinder/rattlesnake_control_laws/spr_random_control_law.py` | 2026-07-21 3c63a7f CodyLangston34135 | `9d8c6afff1` | yes |
 | `forcefinder_spr_control_law.py` | one parameter away from closed | spr_random_generator -- the Rattlesnake adapter the study runs. PRIVATE SOURCE, not committed | rattlesnake-band-average `origin/band-average-study` `control_laws/forcefinder_spr_control_law.py` | 2026-11-04 7304c35 Brandon Zwink | `bd31985ecc` | NO -- private source |
@@ -34,7 +34,7 @@ that information instead.
 
 | file | loop | laws | source | last commit | blob | in git |
 |---|---|---|---|---|---|---|
-| `hertzforge_drive_prediction.py` | open loop, no switch | predict_drives, regularized_inverse -- open-loop pre-test prediction, not a Rattlesnake law and it does not iterate. MIT, Brandon Zwink and Kevin Cross | Hertzforge `main` `src/hertzforge/core/drive_prediction.py` | 2026-11-01 ad5c642 Brandon Zwink | `4b2266aba0` | yes |
+| `hertzforge_drive_prediction.py` | open loop, no switch | predict_drives, regularized_inverse -- open-loop pre-test prediction, not a Rattlesnake law and it does not iterate. MIT, Brandon Zwink and Kevin Cross | Hertzforge `main` `src/hertzforge/core/drive_prediction.py` | 2026-11-07 12467dec Brandon Zwink | `c5e1afa582` | yes |
 
 ## Not committed
 
