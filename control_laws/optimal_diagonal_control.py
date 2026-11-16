@@ -607,6 +607,14 @@ class optimal_diagonal_control:
         self._sdp_W_params = None
         self._sdp_y_param = None
         self._sdp_shape = None       # (M, N) the cached problem was built for
+        # A second, non-dimensionalised copy of the same problem, used only to retry a bin
+        # the main solve could not do (see _retry_scaled).  Built lazily, like the first.
+        self._sdp_retry_prob = None
+        self._sdp_retry_X = None
+        self._sdp_retry_W = None
+        self._sdp_retry_y = None
+        self._sdp_retry_shape = None
+        self.sdp_retry_reg = 1e-2    # regularizer for the retry, RELATIVE to the bin's own scale
 
     def _init_trim_state(self):
         # Response-error trim state.  y_trim stays None while the trim is
@@ -643,6 +651,7 @@ class optimal_diagonal_control:
         self.n_stale_refinements = 0 # diagnostic: already-refined bins re-solved due to stale predicted error
         self.n_stale_deferred = 0    # diagnostic: stale already-refined bins still above threshold, awaiting budget
         self.n_solver_failures = 0   # diagnostic: SDP solves that fell back to pinv
+        self.n_sdp_retries = 0       # diagnostic: SDP solves rescued by the scaled retry
         self._n_calls = 0            # diagnostic: total system_id_update()/control() calls
 
     def _log_construction(self, transfer_function, sysid_response_cpsd):
@@ -696,7 +705,7 @@ class optimal_diagonal_control:
     # ------------------------------------------------------------------
     # SDP refinement for a single bin
     # ------------------------------------------------------------------
-    def _build_sdp_problem(self, M, N):
+    def _build_sdp_problem(self, M, N, reg=None):
         """Build the per-bin SDP ONCE (shape is fixed for the life of a run)
         and reuse it across every bin via cp.Parameter, instead of paying
         DCP canonicalization on every solve. H can't be a Parameter directly
@@ -722,7 +731,8 @@ class optimal_diagonal_control:
         # multiplying this expression is parameter-times-parameter and cvxpy
         # rejects it as non-DPP ("SDP problem is not DPP-compliant").
         objective = cp.Minimize(
-            cp.sum_squares(diagY - y_target_param) + self.reg * cp.sum_squares(cp.abs(X))
+            cp.sum_squares(diagY - y_target_param)
+            + (self.reg if reg is None else reg) * cp.sum_squares(cp.abs(X))
         )
         constraints = [X >> 0]
         if self.max_drive_coherence < 1.0:
@@ -795,22 +805,73 @@ class optimal_diagonal_control:
                 X_try = self._sdp_X.value
                 if X_try is None:
                     print(f"[optimal_diagonal_control] SDP solve returned no value, "
-                          f"status={self._sdp_prob.status!r} -- falling back to pinv", flush=True)
+                          f"status={self._sdp_prob.status!r} -- retrying scaled", flush=True)
                     break
             except Exception as e:
                 print(f"[optimal_diagonal_control] SDP solve raised {type(e).__name__}: {e} "
-                      f"-- falling back to pinv", flush=True)
+                      f"-- retrying scaled", flush=True)
                 break
             Xf = X_try
             if self.error_domain != 'db':
                 break
             w = self._irls_weights(H, Xf, y_target)
         if Xf is None:
+            Xf = self._retry_scaled(H, y_target, w)
+        if Xf is None:
             self.n_solver_failures += 1
             Hpinv = np.linalg.pinv(H, rcond=1e-15)
             Yspec = np.diag(y_target).astype(complex)
             Xf = Hpinv @ Yspec @ Hpinv.conj().T
         return Xf
+
+    def _retry_scaled(self, H, y_target, w):
+        """Re-solve a bin the main SDP could not, with the problem non-dimensionalised.
+
+        `self.reg` is an absolute number, but X's natural scale is y/sigma_1(H)**2, and
+        across a broadband specification that moves by several orders of magnitude from
+        line to line -- so how much regularization is actually applied is arbitrary, and
+        on the lines where H is worst conditioned it is far too little to keep an
+        interior-point solver on its feet.  Scaling H by sigma_1 and y by its mean puts
+        X at O(1) everywhere, so `sdp_retry_reg` means the same thing at every line:
+
+            Hs = H/a,  ys = y/b   =>   X = Xs * b/a**2
+
+        The coherence cap and X >> 0 are both scale-invariant, so only the objective
+        changes.  The IRLS weights cancel and are passed through unaltered.
+
+        This is a RETRY, not a replacement.  Measured on the RC plate (48 responses,
+        12 drives), using this regularizer on every bin fixes every solver status but
+        costs about 3 dB of median fit, because at this strength it is a real ridge and
+        not merely a numerical nicety.  Reaching for it only on the bins that would
+        otherwise fall through to the pseudoinverse keeps the fit as it was (0.38 vs
+        0.37 dB median) and takes 34 dB off the drive those bins ask for, because
+        pinv(H, rcond=1e-15) on an FRF whose condition number reaches 1e7 inverts the
+        near-null drive directions.
+        """
+        a = np.linalg.norm(H, 2)
+        b = float(np.mean(y_target))
+        if not (np.isfinite(a) and a > 0 and np.isfinite(b) and b > 0):
+            return None
+        M, N = H.shape
+        if self._sdp_retry_prob is None or self._sdp_retry_shape != (M, N):
+            (self._sdp_retry_prob, self._sdp_retry_X, self._sdp_retry_W,
+             self._sdp_retry_y) = self._build_sdp_problem(M, N, reg=self.sdp_retry_reg)
+            self._sdp_retry_shape = (M, N)
+        Hs = H/a
+        for m in range(M):
+            self._sdp_retry_W[m].value = w[m]*np.outer(Hs[m, :], Hs[m, :].conj())
+        self._sdp_retry_y.value = w*y_target/b
+        try:
+            self._sdp_retry_prob.solve(solver=cp.CLARABEL, warm_start=True)
+            Xs = self._sdp_retry_X.value
+        except Exception as e:
+            print(f"[optimal_diagonal_control] scaled retry also raised {type(e).__name__}: "
+                  f"{e} -- falling back to pinv", flush=True)
+            return None
+        if Xs is None:
+            return None
+        self.n_sdp_retries += 1
+        return Xs*(b/a**2)
 
     def _err_db(self, H_clean, indices):
         """Per-bin max-over-channel dB diagonal error for the given bin
@@ -1221,7 +1282,8 @@ class optimal_diagonal_control:
               f"stale_resolved={n_stale}, n_stale_deferred={self.n_stale_deferred}, "
               f"cum_sdp_refinements={self.n_sdp_refinements}, cum_frf_updates={self.n_frf_updates}, "
               f"cum_stale_refinements={self.n_stale_refinements}, "
-              f"cum_solver_failures={self.n_solver_failures}, n_refined_total={int(np.sum(self.sdp_refined))}/{self.F}, "
+              f"cum_solver_failures={self.n_solver_failures}, "
+              f"cum_sdp_retries={self.n_sdp_retries}, n_refined_total={int(np.sum(self.sdp_refined))}/{self.F}, "
               f"solves_this_call={self._solves_this_call} ({1e3*self._solve_s_this_call:.0f} ms solving, "
               f"{1e3*(time.perf_counter() - t0 - self._solve_s_this_call):.0f} ms other)"
               f"{' (time limit ' + format(self.max_solve_ms_per_update, 'g') + ' ms reached)' if self._stopped_by_time else ''}, "
