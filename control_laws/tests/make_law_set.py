@@ -22,13 +22,18 @@ loop status of each law is recorded in the manifest instead.
 `random_not_closed_loop/` holds only the law that cannot close in any
 configuration AND has no sibling to lose.
 
-WHAT IS NOT COMMITTED
----------------------
-`bzwink/rattlesnake-band-average` is a PRIVATE repo (GitHub API returns 404
-unauthenticated, checked 2026-11-09) and its band-average study is unreleased.
-The two files sourced from it are written into the folder so the set is
-complete and runnable here, and are listed in .gitignore so they cannot be
-pushed to this public fork.  `private=True` below is what drives that.
+THE TWO LAWS FROM THE BAND-AVERAGE STUDY
+----------------------------------------
+`forcefinder_spr_control_law.py` and `band_average_2026_11_04.py` come from
+`bzwink/rattlesnake-band-average`, a PRIVATE repo (GitHub API returned 404
+unauthenticated, checked 2026-11-09) holding an unreleased study.  They were
+kept out of this public fork by .gitignore until 2026-11-10, when their author
+approved publishing them.  They have been tracked like the rest of the set
+since 732d2f7b and the .gitignore entry is gone, so nothing here is held back.
+
+`private=True` below is what held a file back: it gitignores the file and marks
+it absent from version control in the manifest.  No file carries it now.  Set
+it again only for a source that may not be published from this fork.
 """
 import argparse
 import os
@@ -86,12 +91,12 @@ LAWS = [
      'match_trace: True (default False). Needs the forcefinder package', False),
     ('random', 'forcefinder_spr_control_law.py', BAND_AVERAGE, 'origin/band-average-study',
      'control_laws/forcefinder_spr_control_law.py',
-     'param', 'spr_random_generator -- the Rattlesnake adapter the study runs. '
-     'PRIVATE SOURCE, not committed', True),
+     'param', 'spr_random_generator -- the Rattlesnake adapter the '
+     'band-average study runs', False),
     ('random', 'band_average_2026_11_04.py', BAND_AVERAGE, 'origin/band-average-study',
      'control_laws/band_average_2026_11_04.py',
      'closed', 'band_average, band_average_generator -- open with '
-     'gain_correction: False. PRIVATE SOURCE, not committed', True),
+     'gain_correction: False', False),
     ('random_not_closed_loop', 'hertzforge_drive_prediction.py', HERTZFORGE, 'main',
      'src/hertzforge/core/drive_prediction.py',
      'open', 'predict_drives, regularized_inverse -- open-loop pre-test '

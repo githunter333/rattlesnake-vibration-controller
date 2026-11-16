@@ -27,24 +27,14 @@ that information instead.
 | `achievable_response.py` | not a law | not a law -- the reachable-target floor, and the scoring denominator | rattlesnake-vibration-controller `HEAD` `control_laws/achievable_response.py` | 2026-11-14 89dbabed nhunter | `143bf3fdf2` | yes |
 | `random_vibration_sys_id_control_law.py` | both, in one file | Rattlesnake's built-ins: match_trace_pseudoinverse (closed); pseudoinverse_control, buzz_control + _generator + _class (open, no caps) | rattlesnake-vibration-controller `HEAD` `src/rattlesnake/environment/random_vibration_sys_id_control_law.py` | 2026-10-15 dbbf70d2 CodyLangston34135 | `9d29544609` | yes |
 | `spr_random_control_law.py` | one parameter away from closed | RandomControlSourcePathReceiver -- Carter's SPR law, closed with match_trace: True (default False). Needs the forcefinder package | forcefinder `main` `src/forcefinder/rattlesnake_control_laws/spr_random_control_law.py` | 2026-07-21 3c63a7f CodyLangston34135 | `9d8c6afff1` | yes |
-| `forcefinder_spr_control_law.py` | one parameter away from closed | spr_random_generator -- the Rattlesnake adapter the study runs. PRIVATE SOURCE, not committed | rattlesnake-band-average `origin/band-average-study` `control_laws/forcefinder_spr_control_law.py` | 2026-11-04 7304c35 Brandon Zwink | `bd31985ecc` | NO -- private source |
-| `band_average_2026_11_04.py` | closed loop as shipped | band_average, band_average_generator -- open with gain_correction: False. PRIVATE SOURCE, not committed | rattlesnake-band-average `origin/band-average-study` `control_laws/band_average_2026_11_04.py` | 2026-11-04 81ac4e6 Brandon Zwink | `a89384bb44` | NO -- private source |
+| `forcefinder_spr_control_law.py` | one parameter away from closed | spr_random_generator -- the Rattlesnake adapter the band-average study runs | rattlesnake-band-average `origin/band-average-study` `control_laws/forcefinder_spr_control_law.py` | 2026-11-04 7304c35 Brandon Zwink | `bd31985ecc` | yes |
+| `band_average_2026_11_04.py` | closed loop as shipped | band_average, band_average_generator -- open with gain_correction: False | rattlesnake-band-average `origin/band-average-study` `control_laws/band_average_2026_11_04.py` | 2026-11-04 81ac4e6 Brandon Zwink | `a89384bb44` | yes |
 
 ## `random_not_closed_loop/` -- 1 files
 
 | file | loop | laws | source | last commit | blob | in git |
 |---|---|---|---|---|---|---|
 | `hertzforge_drive_prediction.py` | open loop, no switch | predict_drives, regularized_inverse -- open-loop pre-test prediction, not a Rattlesnake law and it does not iterate. MIT, Brandon Zwink and Kevin Cross | Hertzforge `main` `src/hertzforge/core/drive_prediction.py` | 2026-11-07 12467dec Brandon Zwink | `c5e1afa582` | yes |
-
-## Not committed
-
-These come from `bzwink/rattlesnake-band-average`, which is a private
-repo and holds an unreleased study. They are written here so the set is
-complete and runnable on this machine, and are listed in `.gitignore` so
-they cannot reach this public fork:
-
-- `forcefinder_spr_control_law.py`
-- `band_average_2026_11_04.py`
 
 ## Cannot run from this folder alone
 
