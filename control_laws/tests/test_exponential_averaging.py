@@ -167,8 +167,15 @@ from rattlesnake.environment.random_vibration_sys_id_environment import (
 from rattlesnake.process.spectral_processing import AveragingTypes, Estimator
 
 
-def call(averaging_type, coefficient, frames_in_cpsd=20):
-    """Call the real method with only the attributes it reads."""
+def call(averaging_type, coefficient, frames_in_cpsd=20,
+         control_averaging_type=None, control_coefficient=None):
+    """Call the real method with only the attributes it reads.
+
+    Since 8f42d08c the control phase carries its own averaging settings and
+    falls back to the system-ID ones when they are unset, so the stub must
+    offer both.  control_averaging_type / control_coefficient left at None is
+    the fallback case, which is what checks 6-9 exercise.
+    """
     stub = SimpleNamespace(
         environment_metadata=SimpleNamespace(
             frames_in_cpsd=frames_in_cpsd,
@@ -177,6 +184,8 @@ def call(averaging_type, coefficient, frames_in_cpsd=20):
             frequency_spacing=5.0,
             sample_rate=2048.0,
             fft_lines=257,
+            control_averaging_type=control_averaging_type,
+            control_exponential_averaging_coefficient=control_coefficient,
             sysid_metadata=SimpleNamespace(
                 sysid_estimator='H1',
                 sysid_averaging_type=averaging_type,
@@ -219,6 +228,28 @@ for bad in (0.0, -0.1, 1.5):
 m = call('Exponential', 1.0)
 print('   coefficient   1.0 -> accepted (no averaging, newest frame only)')
 assert m.exponential_averaging_coefficient == 1.0
+
+print()
+print('10. The control phase overrides system ID, and falls back when unset')
+# unset -> the system-ID settings are used (the case checks 6-9 rely on)
+m = call('Exponential', 0.25)
+assert m.averaging_type is AveragingTypes.EXPONENTIAL
+assert m.exponential_averaging_coefficient == 0.25
+m = call('Exponential', 0.25, control_averaging_type='')
+assert m.averaging_type is AveragingTypes.EXPONENTIAL, 'blank must fall back too'
+print('   unset and blank both fall back to system ID')
+# set -> control wins, in both directions
+m = call('Exponential', 0.25, control_averaging_type='Linear')
+assert m.averaging_type is AveragingTypes.LINEAR
+m = call('Linear', 0.0, control_averaging_type='Exponential',
+         control_coefficient=0.4)
+assert m.averaging_type is AveragingTypes.EXPONENTIAL
+assert m.exponential_averaging_coefficient == 0.4
+print('   control settings win over system ID when given')
+# the coefficient falls back on its own, independently of the type
+m = call('Linear', 0.1, control_averaging_type='Exponential')
+assert m.exponential_averaging_coefficient == 0.1
+print('   the coefficient falls back on its own')
 
 print()
 print('ALL CHECKS PASSED')
