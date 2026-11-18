@@ -55,9 +55,17 @@ extra_parameters: same values as optimal_diagonal_control -- the 6th is
 this subclass's own, the 7th is parsed by the base class, so ONE string
 works for both laws:
     "reg,frf_update_threshold,max_bins_per_update,error_threshold_db,max_drive_coherence,bm_rank,startup_test_level_cap_db"
-    bm_rank - factorization rank r for the fast solve (default 4; the SDP's
-              own constrained solutions rarely need rank >3-4 for 99% of
-              their energy, and the unconstrained solve needs even less)
+    bm_rank - factorization rank r for the fast solve.  0 (the default since
+              2026-11-17) = AUTOMATIC: r = k, every drive direction the
+              subspace restriction kept for this line (see _restricted_basis;
+              the full drive count N when no restriction applies), so the
+              factorization is never the binding limit and r follows the
+              plant's structural rank with no tuning.  A positive value caps
+              the rank: r = min(bm_rank, k).  The old default was a fixed 4
+              (the SDP's own constrained solutions rarely need rank >3-4 for
+              99% of their energy); on the 6x8 frame the automatic floor keeps
+              k >= 4, so 4 was binding on every line there.  Negative values
+              are read as 0.
     startup_test_level_cap_db - ceiling on the FIRST control command only,
               in dB re the specification trace (default -9.0). Handled
               entirely in the base class; see its docstring, including the
@@ -211,8 +219,9 @@ _as_int, _magnitude = _base_module._as_int, _base_module._magnitude
 _non_negative = _base_module._non_negative
 
 _FAST_PARAMS = [
-    Param('bm_rank', 4, _as_int, 5,
-          "factorization rank of the fast solve; the SDP's constrained solutions rarely need rank above 3-4"),
+    Param('bm_rank', 0, lambda s: max(0, _as_int(s)), 5,
+          "factorization rank of the fast solve (0 = auto: every kept drive direction, r = k; "
+          "n > 0 caps it at min(n, k); was a fixed 4 before 2026-11-17)"),
     Param('svd_select', 0, _as_int, 15,
           '0 = one singular-value cut for the whole band, 1 = each line picks its own'),
     Param('svd_gap_min', 3.0, lambda s: max(1.0, float(s)), 16,
@@ -268,7 +277,7 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
         self.n_safe_solves = 0
         self._h_changed_this_call = False
 
-        print(f"[optimal_diagonal_control_fast] bm_rank={self.bm_rank} "
+        print(f"[optimal_diagonal_control_fast] bm_rank={self.bm_rank if self.bm_rank > 0 else 'auto (= k)'} "
               f"svd_select={self.svd_select} ({'per line' if self.svd_select == 1 else 'band'}) "
               f"svd_gap_min={self.svd_gap_min:g} svd_floor={self.svd_floor:g} "
               f"svd_weak_max={self.svd_weak_max:g} "
@@ -463,7 +472,11 @@ class optimal_diagonal_control_fast(optimal_diagonal_control):
 
     def _bm_solve(self, H, y_target, X_warm=None):
         M, N = H.shape
-        r = min(self.bm_rank, N)
+        # AUTOMATIC RANK (bm_rank 0, the default).  H here is already restricted to the k
+        # kept drive directions (_solve_one_bin passes H @ V_k), so N IS k: the factor gets
+        # every direction the subspace selection kept, and the rank follows the plant's
+        # structural rank line by line instead of a fixed number.  A positive bm_rank caps it.
+        r = N if self.bm_rank <= 0 else min(self.bm_rank, N)
         L0 = self._buzz_seeded_L(H, y_target, r)
         # WARM START (field 24, 0 = off).  Start from this line's CURRENT drive when that scores
         # better than the buzz seed: restarting every re-solve from the buzz eigenvectors throws

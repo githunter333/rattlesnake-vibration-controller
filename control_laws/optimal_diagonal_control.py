@@ -126,7 +126,8 @@ Notes on the parameters (comma-separated form, 1-based):
                              gamma^2 0.9025; 1.0 disables the cap)
     bm_rank               - read only by optimal_diagonal_control_fast; this
                              class parses past it so a single parameter
-                             string works for both (default 4 there)
+                             string works for both (default 0 there =
+                             automatic rank, r = k kept drive directions)
     startup_test_level_cap_db
                           - ceiling on the VERY FIRST control command, in dB
                              relative to the specification's own trace

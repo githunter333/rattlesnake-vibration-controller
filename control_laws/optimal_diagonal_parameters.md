@@ -96,7 +96,7 @@ called coherence squared (gamma^2); a cap of 0.95 is gamma^2 = 0.9025.
 
 | name | field | default | meaning |
 | --- | --- | --- | --- |
-| `bm_rank` | 6 | `4` | factorization rank of the fast solve; the SDP's constrained solutions rarely need rank above 3-4 |
+| `bm_rank` | 6 | `0` | factorization rank of the fast solve (0 = auto: every kept drive direction, r = k; n > 0 caps it at min(n, k); was a fixed 4 before 2026-11-17) |
 | `svd_select` | 16 | `0` | 0 = one singular-value cut for the whole band, 1 = each line picks its own |
 | `svd_gap_min` | 17 | `3.0` | per-line selection: smallest ratio between adjacent sigmas that marks a line's structural floor |
 | `svd_floor` | 18 | `1e-06` | sigma/sigma_1 below this is never kept and never counted as a gap |
